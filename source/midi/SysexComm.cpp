@@ -32,6 +32,11 @@ SysexComm::SysexComm() {
     output = NULL;
     inputOutput = false;
     commandFifo = NULL;
+    avSendPackets = std::make_unique<AVSendPacket[]>(AVSendQueueSize);
+    for (size_t index = 0; index < AVSendQueueSize; ++index)
+        avSendPackets[index].sequence.store(index, std::memory_order_relaxed);
+    avSendBatch.ensureSize(65536);
+    startTimerHz(30);
 
 #ifdef IMPLEMENT_MidiMonitor
     inActivity = false;
@@ -44,12 +49,7 @@ String SysexComm::getInput() {
 }
 
 bool SysexComm::setInput(String target) {
-#ifndef IMPLEMENT_MidiMonitor
-    if ( JUCEApplication::isStandaloneApp() )
-        return true;
-#endif
-
-    if ( target == inputName )
+    if (target == inputName && input != nullptr)
         return true;
 
     if ( input != NULL ) {
@@ -57,41 +57,26 @@ bool SysexComm::setInput(String target) {
         input = NULL;
     }
     inputOutput = false;
+    inputName.clear();
     
     if ( listener == NULL )
-        return true;
+        return target.isEmpty() || target == "None";
 
     if ( target == "None" || target == "" ) {
         return true;
     }
 
 
-    // TODO: refactor this since JUCE 8
-    // StringArray devices = MidiInput::getDevices();
-    // int idx = devices.indexOf(target);
-    //
-    // if ( idx == -1 ) {
-    //     TRACE("device %s not found", target.toRawUTF8());
-    //     inputName = "";
-    //     if ( target == "None" || target == "" )
-    //         return true;
-    //     return false;
-    // }
-    //
-    // input = MidiInput::openDevice(idx, listener);
-    // if ( input == NULL ) {
-    //     TRACE("unable to open %s", target.toRawUTF8());
-    //     return false;
-    // }
-    //
-    // inputName = target;
-    // TRACE("sysex %s opened", target.toRawUTF8());
-    // input->start();
-    //
-    // if ( output )
-    //     inputOutput = true;
-    //
-    return true;
+    for (const auto& device : MidiInput::getAvailableDevices()) {
+        if (device.name != target && device.identifier != target) continue;
+        input = MidiInput::openDevice(device.identifier, listener);
+        if (input == nullptr) return false;
+        inputName = device.name;
+        input->start();
+        inputOutput = output != nullptr;
+        return true;
+    }
+    return false;
 }
 
 String SysexComm::getOutput() {
@@ -99,51 +84,35 @@ String SysexComm::getOutput() {
 }
 
 bool SysexComm::setOutput(String target) {
+    if (target == outputName && output != nullptr)
+        return true;
     if ( output != NULL ) {
         output = NULL;
     }
     inputOutput = false;
+    outputName.clear();
 
     if ( target == "None" || target == "" ) {
         return true;
     }
 
-    if ( target == outputName )
+    for (const auto& device : MidiOutput::getAvailableDevices()) {
+        if (device.name != target && device.identifier != target) continue;
+        output = MidiOutput::openDevice(device.identifier);
+        if (output == nullptr) return false;
+        outputName = device.name;
+        inputOutput = input != nullptr;
         return true;
-
-    // TODO: refactor this since JUCE 8
-    // StringArray devices = MidiOutput::getDevices();
-    // int idx = devices.indexOf(target);
-    //
-    // if ( idx == -1 ) {
-    //     TRACE("device %s not found", target.toRawUTF8());
-    //     outputName = "";
-    //     if ( target == "None" || target == "" )
-    //         return true;
-    //     return false;
-    // }
-    //
-    // output = MidiOutput::openDevice(idx);
-    // if ( output == NULL ) {
-    //     TRACE("unable to open %s", target.toRawUTF8());
-    //     return false;
-    // }
-    //
-    // outputName = target;
-    //
-    // if ( input )
-    //     inputOutput = true;
-    //
-    // TRACE("sysex %s opened", target.toRawUTF8());
-    return true;
+    }
+    return false;
 }
 
 bool SysexComm::isInputActive() {
-    return true;
+    return commandFifo != nullptr;
 }
 
 bool SysexComm::isOutputActive() {
-    return true;
+    return avProcessor != nullptr;
 }
 
 int SysexComm::getChl() {
@@ -151,75 +120,62 @@ int SysexComm::getChl() {
 }
 
 void SysexComm::setChl(int chl) {
-    sysexChl = chl;
+    sysexChl = juce::jlimit(0, 15, chl);
 }
 
 void SysexComm::setCommandFifo(CommandFifo<DexedAudioProcessor> *fifo) {
     commandFifo = fifo;
 }
 
-// Textual description of the DX7 sysex header, as documented in doc/sysex-format.txt:
-//   F0 43 <0sssnnnn> <format/group> ...
-// where s is the sub-status and n the channel number.
-static const char *sysexSubstatusName(int substatus) {
-    switch ( substatus ) {
-        case 0  : return "BULK DATA";
-        case 1  : return "PARAMETER CHANGE";
-        default : return "UNKNOWN";
-    }
-}
-
-// For a bulk dump (sub-status 0) the 4th byte is the format number; for a
-// parameter change (sub-status 1) it carries the parameter group instead.
-static String sysexFormatName(int substatus, int formatByte) {
-    if ( substatus == 0 ) {
-        switch ( formatByte ) {
-            case 0 : return "1 VOICE (155 bytes)";
-            case 9 : return "32 VOICES (4096 bytes)";
-        }
-        return String("UNKNOWN FORMAT ") + String(formatByte);
-    }
-
-    if ( substatus == 1 ) {
-        // 0gggggpp: g = parameter group, pp = high bits of the parameter number
-        int group = formatByte >> 2;
-        switch ( group ) {
-            case 0 : return "VOICE PARAMETER";
-            case 2 : return "FUNCTION PARAMETER";
-        }
-        return String("UNKNOWN GROUP ") + String(group);
-    }
-
-    return String("UNKNOWN ") + String(formatByte);
-}
-
-int SysexComm::send(const MidiMessage &message) {
-#ifdef IMPLEMENT_MidiMonitor
-    outActivity = true; // indicate to MidiMonitor that a MIDI message is going to be sent
-#endif // IMPLEMENT_MidiMonitor
-
-    if ( message.isSysEx() ) {
-        const uint8 *buf = message.getRawData();
-
-        if ( message.getRawDataSize() > 3 && buf[1] == 0x43 ) {
-            const int substatus = buf[2] >> 4;
-            const int chl = (buf[2] & 0x0f) + 1;
-            const int formatByte = buf[3];
-
-            DXLOG("Sending sysex message: CHL=%d SUBSTATUS=%d (%s) FORMAT=%d (%s)", chl,
-                  substatus, sysexSubstatusName(substatus),
-                  formatByte, sysexFormatName(substatus, formatByte).toRawUTF8());
+int SysexComm::send(const MidiMessage& message) {
+    const int size = message.getRawDataSize();
+    if (size <= 0 || size > AVSendPacketBytes) return -1;
+    size_t position = avSendWrite.load(std::memory_order_relaxed);
+    AVSendPacket* selected = nullptr;
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        auto& packet = avSendPackets[position % AVSendQueueSize];
+        const auto sequence = packet.sequence.load(std::memory_order_acquire);
+        const auto difference = static_cast<intptr_t>(sequence) - static_cast<intptr_t>(position);
+        if (difference == 0) {
+            if (avSendWrite.compare_exchange_weak(position, position + 1, std::memory_order_relaxed)) {
+                selected = &packet;
+                break;
+            }
+        } else if (difference < 0) {
+            break;
         } else {
-            DXLOG("Sending non-DX7 sysex message: %d bytes", message.getRawDataSize());
+            position = avSendWrite.load(std::memory_order_relaxed);
         }
-    } else {
-        DXLOG("Sending midi message: CHL=%d", message.getChannel());
     }
-
-    commandFifo->push([message](DexedAudioProcessor &proc) {
-        proc.queueOutputMidiMessage(message);
-    });
+    if (selected == nullptr) {
+        avDroppedOutput.fetch_add(1, std::memory_order_relaxed);
+        return -1;
+    }
+    std::memcpy(selected->bytes.data(), message.getRawData(), static_cast<size_t>(size));
+    selected->size = size;
+    selected->sequence.store(position + 1, std::memory_order_release);
     return 0;
+}
+
+void SysexComm::timerCallback() {
+    avSendBatch.clear();
+    int count = 0;
+    while (count < AVSendQueueSize) {
+        auto& packet = avSendPackets[avSendRead % AVSendQueueSize];
+        if (packet.sequence.load(std::memory_order_acquire) != avSendRead + 1) break;
+        if (avSendBatch.data.size() + packet.size + 8 > 65536) {
+            if (avProcessor != nullptr) avProcessor->queueAVMidiOutputBatch(avSendBatch);
+            avSendBatch.clear();
+        }
+        const MidiMessage message(packet.bytes.data(), packet.size);
+        if (output != nullptr) output->sendMessageNow(message);
+        avSendBatch.addEvent(message, 0);
+        packet.sequence.store(avSendRead + AVSendQueueSize, std::memory_order_release);
+        ++avSendRead;
+        ++count;
+    }
+    if (!avSendBatch.isEmpty() && avProcessor != nullptr)
+        avProcessor->queueAVMidiOutputBatch(avSendBatch);
 }
 
 void SysexComm::playBuffer(MidiBuffer &keyboardEvents, int numSamples ) {

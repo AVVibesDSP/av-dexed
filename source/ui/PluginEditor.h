@@ -28,14 +28,57 @@
 #include "DXLookNFeel.h"
 #include "window/CartManager.h"
 #include "component/ParameterObserver.h"
+#include "AVDexedPlayView.h"
+#include "AVDexedKeyboard.h"
+#include "AVDexedResizeGrip.h"
+#include "AVDexedWheel.h"
+#include "AVDexedPeakMeter.h"
+
+class AVDexedPanicButton final : public juce::TextButton {
+public:
+    AVDexedPanicButton();
+    void setLabel(const juce::String& text);
+    void paintButton(juce::Graphics& g, bool isMouseOverButton, bool isButtonDown) override;
+
+private:
+    std::unique_ptr<juce::Drawable> icon;
+    juce::String label;
+};
 
 //==============================================================================
 /**
 */
 class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox::Listener, public Timer,
-                                   public FileDragAndDropTarget, public KeyListener {
+                                   public FileDragAndDropTarget, public KeyListener,
+                                   private ChangeListener {
+    // Declared first so all child components/dialogs release their LAF before it dies.
+    SharedResourcePointer<DXLookNFeel> lookAndFeel;
     Component frameComponent;
-    MidiKeyboardComponent midiKeyboard;
+    Component classicView;
+    AVDexedKeyboardComponent midiKeyboard;
+    AVDexedResizeGrip resizeGrip;
+    AVDexedPlayView playView;
+    Label brandLabel;
+    std::unique_ptr<juce::Drawable> AVBrandSymbol;
+    AVDexedWheel AVPitchWheel, AVModWheel;
+    Label AVPitchLabel, AVModLabel, AVOctaveLabel;
+    static constexpr int AVKeyboardAnchor = 24;
+    Label AVHelpLabel, AVCpuLabel, AVVoicesLabel;
+    AVDexedPeakMeter AVOutputMeter;
+    double AVLastMeterUpdate = 0.0;
+    DrawableButton AVSettingsButton { "AVSettings", DrawableButton::ImageFitted };
+    std::unique_ptr<Drawable> AVInfoSymbol;
+    void AVUpdateFooter();
+    void AVLayoutFrame();
+    void AVUpdateKeyboardRange();
+    Label identityLabel;
+    Label activePresetLabel;
+    Label modifiedLabel;
+    TextButton playTabButton { "Play" };
+    TextButton advancedTabButton { "Advanced" };
+    DrawableButton saveButton { "Save", DrawableButton::ImageFitted };
+    TextButton languageButton { "ES" };
+    AVDexedPanicButton panicButton;
 
     GlobalEditor global;
     std::unique_ptr<OperatorEditor> operators[6];
@@ -46,13 +89,28 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     // This cover is used to disable main window when cart manager is shown
     Component cartManagerCover;
 
-    SharedResourcePointer<DXLookNFeel> lookAndFeel;
-    std::unique_ptr<juce::DialogWindow> dexedParameterDialog;
+    std::unique_ptr<juce::Component> AVSettingsOverlay;
     std::unique_ptr<FileChooser> fileChooser;
+    int labelRefreshTicks = 0;
+    int AVStatusTicks = 0;
+    bool AVOperatorsSilent = false;
+    float AVLastGlobalVu = -1.0f;
+    int viewTransitionGeneration = 0;
+    int resizeSaveCountdown = 0;
+    float resizeFactorAtStart = 1.0f;
     void resetSize();
+    void resized() override;
+    void showAVDexedPlayView(bool showPlay, bool animate = true);
+    void refreshPresetHeader();
+    void applyLanguage();
+    void changeListenerCallback(ChangeBroadcaster*) override;
+    void requestPresetReplacement(std::function<void()> replacement);
+    void commitCart(Cartridge cart, const File& file);
     void applyCart(Cartridge cart, File file);
     void storeProgramShowDialog(Cartridge destSysex, File externalFile);
     void storeProgramResponse(AlertWindow *dialog, int response, Cartridge destSysex, File externalFile, bool hasExternalFile);
+    void saveNativePreset(bool saveAs, std::function<void(bool)> completion = {});
+    void loadNativePreset(const File& file);
 public:
     DexedAudioProcessor *processor;
 
@@ -81,10 +139,21 @@ public:
 
     bool keyPressed(const KeyPress& key, Component* originatingComponent) override;
 
-    static const int WINDOW_SIZE_X = 866;
-    static const int WINDOW_SIZE_Y = 674;
+    /** A mouse click hides focus rings until the next keyboard navigation. */
+    struct AVFocusModality final : public MouseListener {
+        void mouseDown(const MouseEvent& event) override;
+    } focusModality;
+
+    static constexpr float AVTopBarAxis = 47.0f;  // shared centre line of the top bar
+    static const int WINDOW_SIZE_X = 1440;
+    static const int WINDOW_SIZE_Y = 940;
+
+#if defined(AVDEXED_TESTING)
+    friend bool AVRenderUIEvidence(const juce::File& directory);
+#endif
 
 private:
+    friend class CartManager;
 #ifdef DEXED_EVENT_DEBUG
     FocusLogger focusLogger;
 #endif

@@ -166,6 +166,43 @@ juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout() {
     params.add(std::make_unique<ParameterDx>(IDs::pitchRangeDown, 48));
     params.add(std::make_unique<ParameterDx>(IDs::pitchStep, 12));
 
+    // Appended after the original parameter layout so existing host IDs and
+    // ordering remain unchanged.
+    params.add(std::make_unique<juce::AudioParameterFloat>(
+        IDs::masterVolume.parameter(), IDs::masterVolume.displayName(),
+        juce::NormalisableRange<float>(0.0f, DexedAudioProcessor::AVMasterMaximumGain, 0.0001f, 0.25f), 1.0f));
+    params.add(std::make_unique<juce::AudioParameterFloat>(
+        IDs::pan.parameter(), IDs::pan.displayName(),
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.5f));
+
+    // DEXED effects are deliberately neutral by default so older sessions keep
+    // their dry sound after the new parameters are introduced.
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::reverbAmount.parameter(), "Reverb Amount", juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::reverbSize.parameter(), "Reverb Size", juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), AVDexedReverb::defaultDecay));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::reverbPreDelay.parameter(), "Reverb Pre-delay", juce::NormalisableRange<float>(0.0f, AVDexedReverb::maxPredelayMs, 0.1f), AVDexedReverb::defaultPredelay * AVDexedReverb::maxPredelayMs));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::reverbDamping.parameter(), "Reverb Damping", juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), AVDexedReverb::defaultDamp));
+
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::delayAmount.parameter(), "Delay Amount", juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
+    params.add(std::make_unique<juce::AudioParameterBool>(IDs::delaySync.parameter(), "Delay Sync", false));
+    const juce::StringArray delayDivisions { "1/16", "1/8", "1/8D", "1/8T", "1/4", "1/4D", "1/4T", "1/2" };
+    params.add(std::make_unique<juce::AudioParameterChoice>(IDs::delayDivisionLeft.parameter(), "Delay Left Division", delayDivisions, 4));
+    params.add(std::make_unique<juce::AudioParameterChoice>(IDs::delayDivisionRight.parameter(), "Delay Right Division", delayDivisions, 4));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::delayTimeLeft.parameter(), "Delay Left Time", juce::NormalisableRange<float>(AVDexedDelay::minTimeMs, AVDexedDelay::maxTimeMs, 0.1f), 500.0f));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::delayTimeRight.parameter(), "Delay Right Time", juce::NormalisableRange<float>(AVDexedDelay::minTimeMs, AVDexedDelay::maxTimeMs, 0.1f), 500.0f));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::delayFeedback.parameter(), "Delay Feedback", juce::NormalisableRange<float>(0.0f, 0.90f, 0.001f), 0.35f));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::delayDamping.parameter(), "Delay Damping", juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.30f));
+
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::chorusAmount.parameter(), "Chorus Amount", juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
+    const juce::StringArray chorusModes { "I", "II", "I + II" };
+    params.add(std::make_unique<juce::AudioParameterChoice>(IDs::chorusMode.parameter(), "Chorus Mode", chorusModes, 0));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::chorusRate.parameter(), "Chorus Rate", juce::NormalisableRange<float>(AVDexedChorus::minRateHz, AVDexedChorus::maxRateHz, 0.001f), AVDexedChorus::defaultRateHz));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::chorusDepth.parameter(), "Chorus Depth", juce::NormalisableRange<float>(AVDexedChorus::minDepthMs, AVDexedChorus::maxDepthMs, 0.01f), AVDexedChorus::defaultDepthMs));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::chorusSpread.parameter(), "Chorus Spread", juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), AVDexedChorus::defaultSpread));
+    params.add(std::make_unique<juce::AudioParameterFloat>(IDs::avDelayTempo.parameter(), "Delay Local Tempo", juce::NormalisableRange<float>(20.0f, 999.0f, 0.1f), 120.0f));
+    params.add(std::make_unique<juce::AudioParameterBool>(IDs::avReverbBypass.parameter(), "Reverb Bypass", false));
+    params.add(std::make_unique<juce::AudioParameterBool>(IDs::avDelayBypass.parameter(), "Delay Bypass", false));
+    params.add(std::make_unique<juce::AudioParameterBool>(IDs::avChorusBypass.parameter(), "Chorus Bypass", false));
+
     return params;
 }
 
@@ -181,6 +218,8 @@ DexedApvts::DexedApvts(juce::AudioProcessor& processorToConnectTo, juce::UndoMan
     profile.addChild(midiCCMappings, -1, nullptr);
 
     rootVt.addChild(profile, -1, nullptr);
+    for (int op = 0; op < 6; ++op)
+        avOperatorSwitchParameters[static_cast<size_t>(op)] = getParameter(IDs::on.op(op).name);
 }
 
 void DexedApvts::mapTo(juce::String paramId, const std::function<void(float)> &func) {

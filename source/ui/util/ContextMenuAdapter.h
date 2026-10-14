@@ -3,6 +3,7 @@
 #include "ui/PluginEditor.h"
 #include "midi/MidiCCHandler.h"
 #include "../window/MidiCCListenerStatus.h"
+#include "../AVDexedLanguage.h"
 
 class ContextMenuAdapter : public juce::MouseListener {
 protected:
@@ -20,36 +21,42 @@ public:
 
         PopupMenu popup;
         juce::Component *source = event.eventComponent;
+        const auto safeSource = juce::Component::SafePointer<juce::Component>(source);
+        auto& language = AVDexedLanguageService::getInstance();
+        auto* processorPtr = &processor;
         juce::RangedAudioParameter *parameter = processor.parameters.getParameter(source->getName());
 
         if ( parameter != nullptr ) {
             int idx = processor.midiCCMapper->getMapping(source->getName());
             if ( idx != -1 ) {
-                popup.addItem("Remove parameter [" + source->getTitle() + "] to CC:" + juce::String(idx), [this, idx] {
-                    this->processor.midiCCMapper->removeMapping(idx);
+                popup.addItem(language.format("removeMidiMapping", {{ "parameter", source->getTitle() }, { "cc", juce::String(idx) }}), [safeSource, processorPtr, idx] {
+                    if (safeSource != nullptr) processorPtr->midiCCMapper->removeMapping(idx);
                 });
             } else {
-                popup.addItem("Assign parameter [" + source->getTitle() + "] to Midi CC...", [source, this, parameter] {
-                    new MidiCCListenerStatus(source, this->processor.midiCCMapper.get(), parameter);
+                popup.addItem(language.format("assignMidiMapping", {{ "parameter", source->getTitle() }}), [safeSource, processorPtr, parameter] {
+                    if (safeSource != nullptr) new MidiCCListenerStatus(safeSource.getComponent(), processorPtr->midiCCMapper.get(), parameter);
                 });
             }
             popup.addSeparator();
         }
 
         addSpecificItems(popup, source);
-        popup.addItem("Send current program to DX7", [this] {
-            processor.sendCurrentSysexProgram();
+        popup.addItem(language.text("sendCurrentVoice"), [safeSource, processorPtr] {
+            if (safeSource != nullptr) processorPtr->sendCurrentSysexProgram();
         });
 
         if ( processor.getZoomFactor() > 1.0f ) {
             popup.addSeparator();
-            popup.addItem("Reset plugin UI scaling factor", [source] {
-                if (auto *editor = source->findParentComponentOfClass<DexedAudioProcessorEditor>())
+            popup.addItem(language.text("resetUiScale"), [safeSource] {
+                if (safeSource == nullptr) return;
+                if (auto *editor = safeSource->findParentComponentOfClass<DexedAudioProcessorEditor>())
                     editor->resetZoomFactor();
             });
         }
 
-        auto options = juce::PopupMenu::Options();
+        // A PopupMenu ignores its target's LookAndFeel; without this it is JUCE's default.
+        popup.setLookAndFeel(&source->getLookAndFeel());
+        auto options = juce::PopupMenu::Options().withTargetComponent(source).withMousePosition();
         popup.showMenuAsync(options);
     }
 };

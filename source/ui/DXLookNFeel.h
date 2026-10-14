@@ -22,6 +22,7 @@
 #define DXLOOKNFEEL_H_INCLUDED
 
 #include "../JuceLibraryCode/JuceHeader.h"
+#include "AVDexedTheme.h"
 
 class LightedToggleButton : public ToggleButton {
 public:
@@ -30,15 +31,9 @@ public:
 
 
 class DXLookNFeel : public LookAndFeel_V4 {
-    HashMap<String, int> colourMap;
-
 public:
     DXLookNFeel();
     
-    Image imageKnob, imageSwitch, imageSwitchLighted, imageButton, imageSlider, imageScaling, imageLight, imageLFO;
-    Image imageSwitchOperator;
-    Image imageOperator, imageGlobal;
-
     /* overridden methods */
     virtual void drawRotarySlider(Graphics &g, int x, int y, int width, int height, float sliderPosProportional, float rotaryStartAngle, float rotaryEndAngle,  Slider &slider ) override;
     virtual void drawToggleButton(Graphics& g, ToggleButton& button, bool isMouseOverButton, bool isButtonDown) override;
@@ -49,14 +44,99 @@ public:
                                  float sliderPos, float minSliderPos, float maxSliderPos,
                                  const Slider::SliderStyle, Slider&) override;
 
-    //virtual Font getTextButtonFont(TextButton&, int buttonHeight) override;
+    Font getTextButtonFont(TextButton&, int buttonHeight) override;
+    void drawButtonText(Graphics&, TextButton&, bool, bool) override;
+    void drawDrawableButton(Graphics&, DrawableButton&, bool, bool) override;
+    Font getComboBoxFont(ComboBox&) override;
+    Font getPopupMenuFont() override;
+    Font getAlertWindowTitleFont() override;
+    Font getAlertWindowMessageFont() override;
+    Font getAlertWindowFont() override;
+    Label* createSliderTextBox(Slider&) override;
+    void drawLabel(Graphics&, Label&) override;
+    void drawAlertBox(Graphics&, AlertWindow&, const Rectangle<int>&, TextLayout&) override;
+    void drawTooltip(Graphics&, const String&, int width, int height) override;
+    Rectangle<int> getTooltipBounds(const String&, juce::Point<int>, Rectangle<int>) override;
+    Font getTabButtonFont(TabBarButton&, float height) override;
+    void drawTableHeaderBackground(Graphics&, TableHeaderComponent&) override;
+    void drawTableHeaderColumn(Graphics&, TableHeaderComponent&, const String&, int columnId,
+                               int width, int height, bool isMouseOver, bool isMouseDown, int columnFlags) override;
     virtual Typeface::Ptr getTypefaceForFont(const Font &) override;
     virtual void positionComboBoxText (ComboBox& box, Label& label) override;
+    Label* createComboBoxTextBox(ComboBox& box) override;
+    void drawComboBox(Graphics&, int width, int height, bool isButtonDown,
+                      int buttonX, int buttonY, int buttonW, int buttonH,
+                      ComboBox&) override;
+    void drawPopupMenuBackgroundWithOptions(Graphics&, int width, int height,
+                                            const PopupMenu::Options&) override;
+    void drawPopupMenuItemWithOptions(Graphics&, const Rectangle<int>& area,
+                                      bool isHighlighted, const PopupMenu::Item&,
+                                      const PopupMenu::Options&) override;
+    int getPopupMenuBorderSizeWithOptions(const PopupMenu::Options&) override;
+    void getIdealPopupMenuItemSizeWithOptions(const String&, bool isSeparator,
+                                               int standardMenuItemHeight,
+                                               int& idealWidth, int& idealHeight,
+                                               const PopupMenu::Options&) override;
+    void drawResizableFrame(Graphics&, int width, int height,
+                            const BorderSize<int>& border) override;
 
     static Colour fillColour;
     static Colour lightBackground;
     static Colour background;
     static Colour roundBackground;
 };
+
+/** A modal owns its theme so closing the originating editor cannot leave a
+    dangling LookAndFeel pointer in JUCE's asynchronous window. While it is
+    open, the editor it belongs to sits under a 55% black veil, as GOZO dims
+    the instrument behind its dialogs. */
+class AVAlertWindow : public juce::AlertWindow {
+public:
+    AVAlertWindow(const juce::String& title, const juce::String& message,
+                  juce::MessageBoxIconType icon, juce::Component* parent = nullptr)
+        : juce::AlertWindow(title, message, icon, parent) {
+        setLookAndFeel(&AVLookAndFeel);
+        auto* editor = dynamic_cast<juce::AudioProcessorEditor*>(parent);
+        if (editor == nullptr && parent != nullptr)
+            editor = parent->findParentComponentOfClass<juce::AudioProcessorEditor>();
+        if (editor != nullptr) {
+            AVVeil = std::make_unique<Veil>(*editor);
+            juce::Desktop::getInstance().getAnimator().fadeIn(AVVeil.get(), 83);
+        }
+    }
+    ~AVAlertWindow() override {
+        if (AVVeil != nullptr)
+            juce::Desktop::getInstance().getAnimator().cancelAnimation(AVVeil.get(), false);
+        setLookAndFeel(nullptr);
+    }
+    bool keyPressed(const juce::KeyPress& key) override {
+        // Dialog windows receive their own keys: Tab here must bring rings back.
+        if (AVDexedTheme::noteKeyboardNavigation(key)) repaint();
+        return juce::AlertWindow::keyPressed(key);
+    }
+private:
+    /** Dims the editor and keeps covering it if the editor is resized. */
+    struct Veil final : public juce::Component, private juce::ComponentListener {
+        explicit Veil(juce::Component& editorToCover) : host(&editorToCover) {
+            setInterceptsMouseClicks(true, true);
+            editorToCover.addChildComponent(*this);  // shown by fadeIn()
+            setBounds(editorToCover.getLocalBounds());
+            editorToCover.addComponentListener(this);
+        }
+        ~Veil() override { if (host != nullptr) host->removeComponentListener(this); }
+        void paint(juce::Graphics& g) override { g.fillAll(juce::Colours::black.withAlpha(0.55f)); }
+        void componentMovedOrResized(juce::Component& component, bool, bool) override {
+            setBounds(component.getLocalBounds());
+        }
+        juce::Component::SafePointer<juce::Component> host;
+    };
+    DXLookNFeel AVLookAndFeel;
+    std::unique_ptr<Veil> AVVeil;
+};
+
+/** Asynchronous AV-themed notice with a localized OK button. JUCE's static
+    message boxes fall back to the host-wide LookAndFeel and an English "OK". */
+void AVShowMessage(juce::MessageBoxIconType icon, const juce::String& title,
+                   const juce::String& message, juce::Component* parent = nullptr);
 
 #endif  // DXLOOKNFEEL_H_INCLUDED

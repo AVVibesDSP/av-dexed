@@ -2,6 +2,7 @@
 
 #include "../util/CachedParameter.h"
 #include "parameter/DexedApvts.h"
+#include "../AVDexedTheme.h"
 
 class OperatorDisplay : public juce::Component {
     CachedParameter<int> opFine, opCoarse, detune, opMode;
@@ -58,7 +59,8 @@ public:
     }
 
     void paint(juce::Graphics &g) override {
-        g.setColour(juce::Colours::white);
+        g.setColour(AVDexedTheme::oceanHighlight);
+        g.setFont(AVDexedTheme::font(11.0f, "SemiBold"));
         g.drawFittedText(message, 0, 0, getWidth(), getHeight(),
                          juce::Justification::centred, false);
     }

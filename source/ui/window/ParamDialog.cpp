@@ -25,6 +25,8 @@
 
 #include "../PluginEditor.h"
 #include "ParamDialog.h"
+#include "../AVDexedTheme.h"
+#include <cmath>
 
 //[MiscUserDefs] You can add your own user definitions and misc code here...
 //[/MiscUserDefs]
@@ -56,7 +58,7 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     sysexIn->setEditableText (false);
     sysexIn->setJustificationType (juce::Justification::centredLeft);
     sysexIn->setTextWhenNothingSelected (juce::String());
-    sysexIn->setTextWhenNoChoicesAvailable (TRANS ("(no choices)"));
+    sysexIn->setTextWhenNoChoicesAvailable (AVDexedLanguageService::getInstance().text("noChoices"));
     sysexIn->addListener (this);
 
     sysexIn->setBounds (104, 244, 224, 24);
@@ -180,7 +182,7 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     sclButton.reset (new juce::TextButton ("scl button"));
     addAndMakeVisible (sclButton.get());
     sclButton->setExplicitFocusOrder (26);
-    sclButton->setButtonText (TRANS ("SCL"));
+    sclButton->setButtonText ("SCL");
     sclButton->addListener (this);
 
     sclButton->setBounds (448, 205, 56, 30);
@@ -188,7 +190,7 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     kbmButton.reset (new juce::TextButton ("kbm button"));
     addAndMakeVisible (kbmButton.get());
     kbmButton->setExplicitFocusOrder (27);
-    kbmButton->setButtonText (TRANS ("KBM"));
+    kbmButton->setButtonText ("KBM");
     kbmButton->addListener (this);
 
     kbmButton->setBounds (512, 205, 56, 30);
@@ -196,7 +198,7 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     showTunButton.reset (new juce::TextButton ("show tuning button"));
     addAndMakeVisible (showTunButton.get());
     showTunButton->setExplicitFocusOrder (28);
-    showTunButton->setButtonText (TRANS ("Show"));
+    showTunButton->setButtonText (AVDexedLanguageService::getInstance().text("show"));
     showTunButton->addListener (this);
 
     showTunButton->setBounds (576, 205, 48, 30);
@@ -204,7 +206,7 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     resetTuningButton.reset (new juce::TextButton ("reset tuning button"));
     addAndMakeVisible (resetTuningButton.get());
     resetTuningButton->setExplicitFocusOrder (29);
-    resetTuningButton->setButtonText (TRANS ("Reset"));
+    resetTuningButton->setButtonText (AVDexedLanguageService::getInstance().text("reset"));
     resetTuningButton->addListener (this);
 
     resetTuningButton->setBounds (632, 205, 48, 30);
@@ -232,14 +234,10 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
 
     mpeEnabled->setBounds (456, 320, 48, 30);
 
-    transposeHelp.reset (new juce::ImageButton ("new button"));
+    transposeHelp.reset (new juce::TextButton ("?"));
     addAndMakeVisible (transposeHelp.get());
     transposeHelp->addListener (this);
-
-    transposeHelp->setImages (false, true, true,
-                              juce::ImageCache::getFromMemory (BinaryData::HelpButton_png, BinaryData::HelpButton_pngSize), 1.000f, juce::Colour (0x00000000),
-                              juce::Image(), 1.000f, juce::Colour (0x00000000),
-                              juce::Image(), 1.000f, juce::Colour (0x00000000));
+    transposeHelp->setTooltip (AVDexedLanguageService::getInstance().text("transposeScaleHelp"));
     transposeHelp->setBounds (500, 245, 20, 20);
 
     pitchRangeUp.reset(new juce::Slider(IDs::pitchRangeUp.name));
@@ -256,8 +254,14 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     scalingFactor->setEditableText (false);
     scalingFactor->setJustificationType (juce::Justification::centredLeft);
     scalingFactor->setTextWhenNothingSelected (juce::String());
-    scalingFactor->setTextWhenNoChoicesAvailable (TRANS ("(no choices)"));
-    scalingFactor->addItem (TRANS ("100 %"), 1);
+    scalingFactor->setTextWhenNoChoicesAvailable (AVDexedLanguageService::getInstance().text("noChoices"));
+    scalingFactor->addItem("80 %", 1);
+    scalingFactor->addItem("90 %", 2);
+    scalingFactor->addItem("100 %", 3);
+    scalingFactor->addItem("110 %", 4);
+    scalingFactor->addItem("125 %", 5);
+    scalingFactor->addItem("150 %", 6);
+    scalingFactor->addItem("160 %", 7);
     scalingFactor->addListener (this);
 
     scalingFactor->setBounds (236, 136, 90, 24);
@@ -286,38 +290,25 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     storeButton->addListener(this);
     storeButton->setBounds(558, 378, 130, 24);
 
-    //[UserPreSize]
-    float maxScaling = DexedAudioProcessorEditor::getLargestScaleFactor();
 
-    if ( maxScaling >= 1.25f)
-        scalingFactor->addItem (TRANS ("125 %"), 2);
-    if ( maxScaling >= 1.5f)
-        scalingFactor->addItem (TRANS ("150 %"), 3);
-    if ( maxScaling >= 2.0f )
-        scalingFactor->addItem (TRANS ("200 %"), 4);
-    if ( maxScaling >= 3.0f )
-        scalingFactor->addItem (TRANS ("300 %"), 5);
-    if ( maxScaling >= 4.0f )
-        scalingFactor->addItem (TRANS ("400 %"), 6);
 
-    //[/UserPreSize]
-
-    setSize (710, 414);
+    setLookAndFeel(&AVLookAndFeel);
+    setSize(860, 540);
 
 
     //[Constructor] You can add your own custom stuff here..
     pitchRangeUp->setEnabled(pitchStep->getValue() == 0);
     pitchRangeDn->setEnabled(pitchStep->getValue() == 0);
 
-    StringArray input;
-    input.add("None");
-    // TODO: refactor this since JUCE 8
-    //input.addArray(MidiInput::getDevices());
-    sysexIn->addItemList(input, 2);
+    sysexIn->addItem(AVDexedLanguageService::getInstance().text("none"), 1);
+    for (const auto& device : MidiInput::getAvailableDevices())
+        sysexIn->addItem(device.name, sysexIn->getNumItems() + 1);
+    sysexIn->setSelectedId(1, dontSendNotification);
 
-    if ( JUCEApplication::isStandaloneApp() ) {
-        sysexIn->setVisible(false);
-    }
+    // SysEx port and channel are edited in Settings > SysEx; these stay hidden
+    // and only mirror the current values (setDialogValues) when read back.
+    sysexIn->setVisible(false);
+    sysexChl->setVisible(false);
 
     // ACCESSIBLITY (modulation component titles set by AudioComponentContainer::attach)
     pitchRangeUp->setTitle("Pitch Bend Range Up");
@@ -356,7 +347,37 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     profileSelector->setWantsKeyboardFocus(true);
     storeButton->setWantsKeyboardFocus(true);
 
-    refreshProfileList();
+    for (auto* child : getChildren()) {
+        child->setWantsKeyboardFocus(true);
+        if (auto* slider = dynamic_cast<Slider*>(child)) {
+            slider->setSliderStyle(Slider::LinearHorizontal);
+            slider->setTextBoxStyle(Slider::TextBoxLeft, false, int(AVDexedSettingsStyle::valueWidth), 28);
+            slider->setVelocityModeParameters(1.0, 1, 0.0, true, ModifierKeys::shiftModifier);
+        }
+    }
+    // GOZO settings: On/Off is a pair of pills (the toggles stay, hidden, so
+    // their attachments and listeners are untouched); the modulation matrix
+    // uses ring toggles.
+    const auto pills = [this](Component* toggle) {
+        auto* button = dynamic_cast<Button*>(toggle);
+        jassert(button != nullptr);
+        button->setVisible(false);
+        auto pair = std::make_unique<AVDexedSettingsStyle::OnOffPills>(*button);
+        addAndMakeVisible(*pair);
+        return pair;
+    };
+    AVGlissandoPills = pills(AVChild(IDs::glissando.name));
+    AVShowKeyboardPills = pills(showKeyboard.get());
+    AVTransposePills = pills(AVChild(IDs::transposeTuningScale.name));
+    AVMpePills = pills(mpeEnabled.get());
+    for (const auto& name : { IDs::modWheelPitch.name, IDs::modWheelAmp.name, IDs::modWheelEgBias.name,
+                              IDs::modFootPitch.name, IDs::modFootAmp.name, IDs::modFootEgBias.name,
+                              IDs::modBreathPitch.name, IDs::modBreathAmp.name, IDs::modBreathEgBias.name,
+                              IDs::modAftertouchPitch.name, IDs::modAftertouchAmp.name, IDs::modAftertouchEgBias.name })
+        if (auto* ring = AVChild(name)) ring->getProperties().set("AVRing", true);
+    AVDexedLanguageService::getInstance().addChangeListener(this);
+    AVRefreshLanguage();
+    resized();
     setWantsKeyboardFocus(true);
     startTimer(100);
     //[/Constructor]
@@ -364,6 +385,8 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
 
 ParamDialog::~ParamDialog() {
     //[Destructor_pre]. You can add your own custom destruction code here..
+    AVDexedLanguageService::getInstance().removeChangeListener(this);
+    setLookAndFeel(nullptr);
     attachments_.freeAttachments();
     //[/Destructor_pre]
 
@@ -392,304 +415,153 @@ ParamDialog::~ParamDialog() {
 }
 
 //==============================================================================
-void ParamDialog::paint (juce::Graphics& g) {
-    //[UserPrePaint] Add your own custom painting code here..
-    juce::Font font(juce::FontOptions().withHeight(15.00f).withStyle("Regular"));
+juce::Component* ParamDialog::AVChild(const juce::String& name) const {
+    for (auto* child : getChildren())
+        if (child->getName() == name) return child;
+    return nullptr;
+}
 
-    //[/UserPrePaint]
+// GOZO settings layout in two columns (each: labels right-aligned in 0..170,
+// fields from 182), sections under a heading with a hairline. No cards.
+void ParamDialog::paint(Graphics& g) {
+    namespace S = AVDexedSettingsStyle;
+    auto& language = AVDexedLanguageService::getInstance();
+    const float column = float(AVColumnWidth()), right = column + 35.0f;
+    const auto row = [](int index) { return 34.0f + 36.0f * float(index); };
 
-    g.fillAll (juce::Colour (0xff3c322f)); {
-        int x = 20, y = 16, width = 276, height = 23;
-        juce::String text (TRANS ("Pitch Bend Range"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 20, y = 56, width = 276, height = 23;
-        juce::String text (TRANS ("Pitch Bend Step"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 20, y = 319, width = 245, height = 23;
-        juce::String text (TRANS ("DX7 Channel"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 20, y = 190, width = 276, height = 23;
-        juce::String text (TRANS ("Engine Resolution"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 22, y = 174, width = 306, height = 1;
-        juce::Colour fillColour = juce::Colours::black;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.fillRect (x, y, width, height);
-    } {
-        int x = 22, y = 227, width = 306, height = 1;
-        juce::Colour fillColour = juce::Colours::black;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.fillRect (x, y, width, height);
-    } {
-        int x = 20, y = 96, width = 276, height = 23;
-        juce::String text (TRANS ("Show Keyboard"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 352, y = 12, width = 1, height = 349;
-        juce::Colour fillColour = juce::Colours::black;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.fillRect (x, y, width, height);
-    } {
-        int x = 368, y = 16, width = 276, height = 23;
-        juce::String text (TRANS ("Wheel"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 368, y = 96, width = 276, height = 23;
-        juce::String text (TRANS ("Breath"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 368, y = 56, width = 276, height = 23;
-        juce::String text (TRANS ("Foot"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 368, y = 136, width = 276, height = 23;
-        juce::String text (TRANS ("After Touch"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 528, y = 163, width = 48, height = 23;
-        juce::String text (TRANS ("PITCH"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centred, true);
-    } {
-        int x = 584, y = 163, width = 48, height = 23;
-        juce::String text (TRANS ("AMP"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centred, true);
-    } {
-        int x = 640, y = 163, width = 48, height = 23;
-        juce::String text (TRANS ("EG BIAS"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centred, true);
-    } {
-        int x = 376, y = 194, width = 325, height = 1;
-        juce::Colour fillColour = juce::Colours::black;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.fillRect (x, y, width, height);
-    } {
-        int x = 371, y = 208, width = 276, height = 25;
-        juce::String text (TRANS ("Tuning"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 371, y = 242, width = 157, height = 25;
-        juce::String text (TRANS ("Transposition 12 as:"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 368, y = 310, width = 328, height = 1;
-        juce::Colour fillColour = juce::Colours::black;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.fillRect (x, y, width, height);
-    } {
-        int x = 368, y = 318, width = 276, height = 27;
-        juce::String text (TRANS ("MPE"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 528, y = 318, width = 119, height = 27;
-        juce::String text (TRANS ("Bend Range"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 548, y = 242, width = 37, height = 25;
-        juce::String text (TRANS ("12"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 628, y = 242, width = 45, height = 25;
-        juce::String text (TRANS ("SCL"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 147, y = 16, width = 20, height = 23;
-        juce::String text (TRANS ("up"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 240, y = 16, width = 20, height = 23;
-        juce::String text (TRANS ("dn"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 20, y = 136, width = 276, height = 23;
-        juce::String text (TRANS ("UI Scaling"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 371, y = 277, width = 184, height = 23;
-        juce::String text (TRANS ("Portamento Rate"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    } {
-        int x = 628, y = 274, width = 75, height = 27;
-        juce::String text (TRANS ("Glissando"));
-        juce::Colour fillColour = juce::Colours::white;
-        //[UserPaintCustomArguments] Customize the painting arguments here..
-        //[/UserPaintCustomArguments]
-        g.setColour (fillColour);
-        g.setFont (font);
-        g.drawText (text, x, y, width, height,
-                    juce::Justification::centredLeft, true);
-    }
+    S::heading(g, language.text("instrumentGeneral"), { 0.0f, 0.0f, column, 24.0f });
+    const char* leftKeys[] { "pitchBendUp", "pitchBendDown", "pitchBendStep", "portamentoRate", "glissando",
+                             "showKeyboard", "uiScaling", "engineResolution" };
+    for (int i = 0; i < 8; ++i)
+        S::label(g, language.text(leftKeys[i]) + ":", { 0.0f, row(i), 170.0f, S::rowHeight });
+    S::heading(g, language.text("profile"), { 0.0f, 340.0f, column, 24.0f });
 
-    //[UserPaint] Add your own custom painting code here..
-    if ( ! JUCEApplication::isStandaloneApp() ) {
-        g.setColour (Colours::white);
-        g.setFont (font);
-        g.drawText (translate("DX7 In"),
-                    20, 245, 131, 23,
-                    Justification::centredLeft, true);
+    S::heading(g, language.text("controllerModulation"), { right, 0.0f, column, 24.0f });
+    S::hint(g, language.text("modRange"), { right + 134.0f, 28.0f, 120.0f, 20.0f });
+    const char* columns[] { "modPitch", "modAmplitude", "modEgBias" };
+    for (int i = 0; i < 3; ++i)
+        S::hint(g, language.text(columns[i]), { right + 274.0f + 42.0f * float(i), 28.0f, 42.0f, 20.0f }, Justification::centred);
+    const char* sources[] { "wheel", "foot", "breath", "aftertouch" };
+    for (int i = 0; i < 4; ++i)
+        S::label(g, language.text(sources[i]), { right, 52.0f + 32.0f * float(i), 130.0f, 28.0f }, Justification::centredLeft);
 
-    }
-
-    g.setColour (Colours::black);
-    g.fillRect (0, 370, 710, 1);
-
-    g.setColour (Colours::white);
-    g.setFont (font);
-    g.drawText (translate("Profile:"), 20, 378, 76, 24, Justification::centredLeft, true);
-    //[/UserPaint]
+    S::heading(g, language.text("tuning"), { right, 200.0f, column, 24.0f });
+    S::label(g, language.text("transposeScale") + ":", { right, 270.0f, 170.0f, S::rowHeight });
+    S::heading(g, language.text("mpeSection"), { right, 320.0f, column, 24.0f });
+    S::label(g, language.text("mpeEnabled") + ":", { right, 354.0f, 170.0f, S::rowHeight });
+    S::label(g, language.text("mpeBendRange") + ":", { right, 390.0f, 170.0f, S::rowHeight });
 }
 
 void ParamDialog::resized() {
-    //[UserPreResize] Add your own custom resize code here..
-    //[/UserPreResize]
+    if (AVMpePills == nullptr) return;   // setSize() in the constructor runs before the pills exist
+    const int column = AVColumnWidth(), right = column + 35, field = 182, fieldWidth = column - field;
+    const auto row = [](int index) { return 34 + 36 * index; };
+    const auto place = [this](const String& name, Rectangle<int> bounds) {
+        if (auto* child = AVChild(name)) child->setBounds(bounds);
+    };
+    const auto pillsWidth = [](AVDexedSettingsStyle::OnOffPills& pair, int available) {
+        return jmin(available, pair.idealWidth());
+    };
 
-    //[UserResized] Add your own custom resize handling here..
-    //[/UserResized]
+    pitchRangeUp->setBounds(field, row(0), fieldWidth, 30);
+    pitchRangeDn->setBounds(field, row(1), fieldWidth, 30);
+    pitchStep->setBounds(field, row(2), fieldWidth, 30);
+    place(IDs::portamentoTm.name, { field, row(3), fieldWidth, 30 });
+    AVGlissandoPills->setBounds(field, row(4), pillsWidth(*AVGlissandoPills, fieldWidth), 30);
+    AVShowKeyboardPills->setBounds(field, row(5), pillsWidth(*AVShowKeyboardPills, fieldWidth), 30);
+    scalingFactor->setBounds(field, row(6), fieldWidth, 30);
+    engineType->setBounds(field, row(7), fieldWidth, 30);
+    sysexIn->setBounds(field, row(7), fieldWidth, 30);     // hidden: lives in Settings > SysEx
+    sysexChl->setBounds(field, row(7), fieldWidth, 30);
+
+    const int save = AVDexedSettingsStyle::pillWidth(storeButton->getButtonText(), 110);
+    profileSelector->setBounds(0, 374, column - save - 8, 30);
+    storeButton->setBounds(column - save, 374, save, 30);
+
+    const String ranges[] { IDs::modWheel.name, IDs::modFoot.name, IDs::modBreath.name, IDs::modAftertouch.name };
+    const String pitch[] { IDs::modWheelPitch.name, IDs::modFootPitch.name, IDs::modBreathPitch.name, IDs::modAftertouchPitch.name };
+    const String amplitude[] { IDs::modWheelAmp.name, IDs::modFootAmp.name, IDs::modBreathAmp.name, IDs::modAftertouchAmp.name };
+    const String bias[] { IDs::modWheelEgBias.name, IDs::modFootEgBias.name, IDs::modBreathEgBias.name, IDs::modAftertouchEgBias.name };
+    for (int index = 0; index < 4; ++index) {
+        const int y = 52 + 32 * index;
+        place(ranges[index], { right + 134, y, 132, 28 });
+        place(pitch[index], { right + 274, y, 42, 28 });
+        place(amplitude[index], { right + 316, y, 42, 28 });
+        place(bias[index], { right + 358, y, 42, 28 });
+    }
+
+    int x = right;
+    for (auto* button : { sclButton.get(), kbmButton.get(), showTunButton.get(), resetTuningButton.get() }) {
+        const int width = AVDexedSettingsStyle::pillWidth(button->getButtonText(), 64);
+        button->setBounds(x, 234, width, 30);
+        x += width + 8;
+    }
+    transposeHelp->setBounds(right + column - 30, 234, 30, 30);   // "?" explains transposing by scale
+    AVTransposePills->setBounds(right + field, 270, pillsWidth(*AVTransposePills, fieldWidth), 30);
+    AVMpePills->setBounds(right + field, 354, pillsWidth(*AVMpePills, fieldWidth), 30);
+    mpePBRange->setBounds(right + field, 390, fieldWidth, 30);
+}
+
+void ParamDialog::changeListenerCallback(juce::ChangeBroadcaster*) { AVRefreshLanguage(); }
+
+void ParamDialog::AVRefreshLanguage() {
+    auto& language = AVDexedLanguageService::getInstance();
+    const std::pair<Component*, const char*> controls[] {
+        { pitchRangeUp.get(), "pitchBendUp" }, { pitchRangeDn.get(), "pitchBendDown" },
+        { pitchStep.get(), "pitchBendStep" }, { sysexIn.get(), "sysexInput" }, { sysexChl.get(), "sysexChannel" },
+        { engineType.get(), "engineResolution" }, { showKeyboard.get(), "showKeyboard" },
+        { sclButton.get(), "loadScale" }, { kbmButton.get(), "loadKeyboardMap" },
+        { showTunButton.get(), "showTuning" }, { resetTuningButton.get(), "resetTuning" },
+        { mpePBRange.get(), "mpeBendRange" }, { mpeEnabled.get(), "mpeEnabled" },
+        { transposeHelp.get(), "transposeScaleHelp" }, { scalingFactor.get(), "uiScaling" },
+        { profileSelector.get(), "profile" }, { storeButton.get(), "storeProfile" }
+    };
+    for (const auto& item : controls) {
+        item.first->setTitle(language.text(item.second));
+        if (auto* tooltip = dynamic_cast<SettableTooltipClient*>(item.first))
+            tooltip->setTooltip(language.text(item.second));
+    }
+    const String rangeIds[] { IDs::modWheel.name, IDs::modFoot.name, IDs::modBreath.name, IDs::modAftertouch.name };
+    const char* rowKeys[] { "wheel", "foot", "breath", "aftertouch" };
+    const String pitchIds[] { IDs::modWheelPitch.name, IDs::modFootPitch.name, IDs::modBreathPitch.name, IDs::modAftertouchPitch.name };
+    const String ampIds[] { IDs::modWheelAmp.name, IDs::modFootAmp.name, IDs::modBreathAmp.name, IDs::modAftertouchAmp.name };
+    const String biasIds[] { IDs::modWheelEgBias.name, IDs::modFootEgBias.name, IDs::modBreathEgBias.name, IDs::modAftertouchEgBias.name };
+    for (int row = 0; row < 4; ++row)
+        for (auto* child : getChildren()) {
+            const auto id = child->getName();
+            const auto suffix = id == rangeIds[row] ? "modRange" : id == pitchIds[row] ? "modPitch"
+                              : id == ampIds[row] ? "modAmplitude" : id == biasIds[row] ? "modEgBias" : "";
+            if (String(suffix).isNotEmpty()) {
+                child->setTitle(language.text(rowKeys[row]) + String::fromUTF8(" · ") + language.text(suffix));
+                if (auto* tooltip = dynamic_cast<SettableTooltipClient*>(child)) tooltip->setTooltip(child->getTitle());
+            }
+            if (id == IDs::transposeTuningScale.name) child->setTitle(language.text("transposeScale"));
+            if (id == IDs::portamentoTm.name) child->setTitle(language.text("portamentoRate"));
+            if (id == IDs::glissando.name) child->setTitle(language.text("glissando"));
+        }
+    for (auto* child : getChildren())
+        if (auto* tooltip = dynamic_cast<SettableTooltipClient*>(child))
+            tooltip->setTooltip(child->getTitle() + (dynamic_cast<Slider*>(child) != nullptr
+                ? "\n" + language.text("sliderHelp") : String()));
+    showTunButton->setButtonText(language.text("show"));
+    resetTuningButton->setButtonText(language.text("reset"));
+    storeButton->setButtonText(language.text("storeProfile"));
+    for (auto* pair : { AVGlissandoPills.get(), AVShowKeyboardPills.get(), AVTransposePills.get(), AVMpePills.get() })
+        if (pair != nullptr) pair->setTexts(language.text("optionOn"), language.text("optionOff"));
+    resized();
+    // changeItemText leaves the visible caption stale, and getSelectedId() reads
+    // 0 once caption and item differ: keep the ids and refresh both displays.
+    const int engineId = engineType->getSelectedId();
+    const int sysexId = sysexIn->getSelectedId();
+    engineType->changeItemText(1, language.text("engineModern"));
+    sysexIn->changeItemText(1, language.text("none"));
+    engineType->setSelectedId(engineId, dontSendNotification);
+    sysexIn->setSelectedId(sysexId, dontSendNotification);
+    sysexIn->setTextWhenNoChoicesAvailable(language.text("noChoices"));
+    const auto profileId = profileSelector->getSelectedId();
+    refreshProfileList();
+    profileSelector->setSelectedId(jmax(1, profileId), dontSendNotification);
+    repaint();
 }
 
 void ParamDialog::sliderValueChanged (juce::Slider* sliderThatWasMoved) {
@@ -783,46 +655,48 @@ void ParamDialog::buttonClicked (juce::Button* buttonThatWasClicked) {
     }
     else if (buttonThatWasClicked == transposeHelp.get()) {
         //[UserButtonCode_transposeHelp] -- add your button handler code here..
-        auto te = new TextEditor();
+        auto& language = AVDexedLanguageService::getInstance();
+        struct AVTuningHelpPanel final : Component {
+            DXLookNFeel AVLookAndFeel;
+            TextEditor editor;
+            AVTuningHelpPanel() {
+                setLookAndFeel(&AVLookAndFeel);
+                addAndMakeVisible(editor);
+                setSize(560, 340);
+            }
+            ~AVTuningHelpPanel() override { setLookAndFeel(nullptr); }
+            void resized() override { editor.setBounds(getLocalBounds().reduced(12)); }
+        };
+        auto* panel = new AVTuningHelpPanel();
+        auto* te = &panel->editor;
         te->setReadOnly(true);
         te->setMultiLine(true);
-        te->setBounds( 0, 0, 250, 200 );
-        te->setText( R"TUNINGHELP(
-Help on Tuning Transposition
-
-Many DX7 cartridges use a transposition of -12 or -24 to acheive a bass sound. The DX7 transposes in key space, and so this transposition remaps C4 to C3 and so on, leading to an octave drop.
-
-When applying non-12-note scales, though, this transposition results in an irregular retuning. If you have a 15 note scale, a transposition of -12 will move you to the  third note of the scale, not the root.
-
-To allow existing patches to work, we have added a feature which replaces transpositions of -24, -12, 12, and 24 with the length of the scale. This behavior is controlled by the switch here.
-
-With the switch in the SCL (lighted) position, a transposition of -24 is replaced with  -2 scale length, -12 by - scale length, and so on. This results in octave transpositions being scale aware, but has the strange effect that the jump from -11 to -12 to -13 in  transposition space is no longer continuous in frequency space. With an 18 note octave transpose -11 will play note 7, -12 note 0, and -13 note 5.
-
-With the switch in the 12 (unlighted) position, transposition stays with the keyboard. In this case transposition through 11, 12 and 13 is continous, but transposition by 12 is no a single scale length drop.
-)TUNINGHELP" );
-
+        te->setFont(AVDexedTheme::font(12.0f, "Regular"));
+        te->setBounds(0, 0, 560, 340);
+        te->setText(language.text("transposeHelpText"));
         DialogWindow::LaunchOptions options;
-        options.content.setOwned(te);
-        options.dialogTitle = "Transposition Help";
-        options.dialogBackgroundColour = Colour(0xFF323E44);
+        options.content.setOwned(panel);
+        options.componentToCentreAround = this;
+        options.dialogTitle = language.text("transposeHelpTitle");
+        options.dialogBackgroundColour = AVDexedTheme::panelTop;
         options.escapeKeyTriggersCloseButton = true;
-        options.useNativeTitleBar = false;
+        options.useNativeTitleBar = true;
         options.resizable = false;
-
-        auto dialogwindow = options.launchAsync();
+        options.launchAsync();
 
         //[/UserButtonCode_transposeHelp]
     }
     else if (buttonThatWasClicked == storeButton.get()) {
-        auto* aw = new juce::AlertWindow("Save Profile", "Enter a name for this profile:", juce::MessageBoxIconType::NoIcon);
-        aw->addTextEditor("name", "", "Profile name:");
-        aw->addButton("Save", 1);
-        aw->addButton("Cancel", 0);
-        aw->enterModalState(true, juce::ModalCallbackFunction::create([this, aw](int result) {
-            if (result == 1) {
-                juce::String name = aw->getTextEditorContents("name").trim();
-                if (name.isNotEmpty())
-                    saveProfileToFile(name);
+        auto& language = AVDexedLanguageService::getInstance();
+        auto* aw = new AVAlertWindow(language.text("saveProfileTitle"), language.text("saveProfilePrompt"), juce::MessageBoxIconType::NoIcon, this);
+        aw->addTextEditor("name", "", language.text("profileName"));
+        aw->addButton(language.text("save"), 1, KeyPress(KeyPress::returnKey));
+        aw->addButton(language.text("cancel"), 0, KeyPress(KeyPress::escapeKey));
+        const auto safe = Component::SafePointer<ParamDialog>(this);
+        aw->enterModalState(true, juce::ModalCallbackFunction::create([safe, aw](int result) {
+            if (result == 1 && safe != nullptr) {
+                const auto name = aw->getTextEditorContents("name").trim();
+                if (name.isNotEmpty()) safe->saveProfileToFile(name);
             }
         }), true);
         handled = true;
@@ -847,30 +721,23 @@ void ParamDialog::setDialogValues(Controllers &c, SysexComm &mgr, bool showKey, 
     mpeEnabled->setToggleState(c.mpeEnabled, dontSendNotification);
     mpePBRange->setValue(c.mpePitchBendRange, dontSendNotification);
 
-    // TODO: fix for JUCE 8 migration
-    // StringArray inputs = MidiInput::getDevices();
-    // int idx = inputs.indexOf(mgr.getInput());
-    // idx = idx == -1 ? 0 : idx + 1;
-    // sysexIn->setSelectedItemIndex(idx);
+    int inputIndex = 0;
+    for (int i = 1; i < sysexIn->getNumItems(); ++i)
+        if (sysexIn->getItemText(i) == mgr.getInput()) inputIndex = i;
+    sysexIn->setSelectedItemIndex(inputIndex, dontSendNotification);
 
     showKeyboard->setToggleState(showKey, NotificationType::dontSendNotification);
 
-    if ( dpiScaleFactor == 1.25 ) {
-        scalingFactor->setSelectedItemIndex(1);
-    } else if ( dpiScaleFactor == 1.50 ) {
-        scalingFactor->setSelectedItemIndex(2);
+    const auto exactScale = String(dpiScaleFactor * 100.0f, 1).trimCharactersAtEnd("0").trimCharactersAtEnd(".") + " %";
+    int selectedId = 0;
+    for (int i = 0; i < scalingFactor->getNumItems(); ++i)
+        if (approximatelyEqual(scalingFactor->getItemText(i).getFloatValue() / 100.0f, dpiScaleFactor))
+            selectedId = scalingFactor->getItemId(i);
+    if (selectedId == 0) {
+        selectedId = 100;
+        scalingFactor->addItem(exactScale, selectedId);
     }
-    else if (dpiScaleFactor == 2.00) {
-        scalingFactor->setSelectedItemIndex(3);
-    }
-    else if (dpiScaleFactor == 3.00) {
-        scalingFactor->setSelectedItemIndex(4);
-    }
-    else if (dpiScaleFactor == 4.00) {
-        scalingFactor->setSelectedItemIndex(5);
-    } else {
-        scalingFactor->setSelectedItemIndex(0);
-    }
+    scalingFactor->setSelectedId(selectedId, dontSendNotification);
 }
 
 bool ParamDialog::getDialogValues(Controllers &c, SysexComm &mgr, bool *showKey, float *dpiScaleFactor) {
@@ -884,32 +751,14 @@ bool ParamDialog::getDialogValues(Controllers &c, SysexComm &mgr, bool *showKey,
     c.refresh();
 
     if ( ! JUCEApplication::isStandaloneApp() ) {
-        ret &= mgr.setInput(sysexIn->getItemText(sysexIn->getSelectedItemIndex()));
+        ret &= mgr.setInput(sysexIn->getSelectedItemIndex() <= 0 ? String() : sysexIn->getItemText(sysexIn->getSelectedItemIndex()));
     }
 
     mgr.setChl(sysexChl->getValue() - 1);
 
     *showKey = showKeyboard->getToggleState();
 
-    switch(scalingFactor->getSelectedItemIndex()) {
-        case 1 :
-            *dpiScaleFactor = 1.25;
-            break;
-        case 2 :
-            *dpiScaleFactor = 1.5;
-            break;
-        case 3:
-            *dpiScaleFactor = 2.0;
-            break;
-        case 4:
-            *dpiScaleFactor = 3.0;
-            break;
-        case 5:
-            *dpiScaleFactor = 4.0;
-            break;
-        default:
-            *dpiScaleFactor = 1.0;
-    }
+    *dpiScaleFactor = jlimit(0.80f, 1.6f, scalingFactor->getText().getFloatValue() / 100.0f);
     return ret;
 }
 
@@ -948,7 +797,7 @@ static juce::StringArray dialogParamIds() {
 
 void ParamDialog::refreshProfileList() {
     profileSelector->clear();
-    profileSelector->addItem("Select profile...", 1);
+    profileSelector->addItem(AVDexedLanguageService::getInstance().text("selectProfile"), 1);
 
     juce::File profileDir = DexedAudioProcessor::dexedAppDir.getChildFile("Profiles");
     if (profileDir.exists()) {
@@ -961,42 +810,94 @@ void ParamDialog::refreshProfileList() {
     profileSelector->setSelectedItemIndex(0, juce::dontSendNotification);
 }
 
-void ParamDialog::saveProfileToFile(const juce::String& name) {
-    juce::File profileDir = DexedAudioProcessor::dexedAppDir.getChildFile("Profiles");
-    profileDir.createDirectory();
-
-    juce::ValueTree profileVt("DexedProfile");
+void ParamDialog::saveProfileToFile(const String& name) {
+    auto& language = AVDexedLanguageService::getInstance();
+    if (name.containsAnyOf("/\\:") || name == "." || name == "..") {
+        AVShowMessage(AlertWindow::WarningIcon, language.text("profileError"),
+                      language.text("profileNameInvalid"), this);
+        return;
+    }
+    const auto profileDir = DexedAudioProcessor::dexedAppDir.getChildFile("Profiles");
+    if (!profileDir.createDirectory()) {
+        AVShowMessage(AlertWindow::WarningIcon, language.text("saveError"),
+                      language.format("writeError", {{"path", profileDir.getFullPathName()}}), this);
+        return;
+    }
+    ValueTree profileVt("DexedProfile");
     for (const auto& paramId : dialogParamIds()) {
         if (auto* param = apvts_.getParameter(paramId)) {
-            juce::ValueTree paramVt("param");
+            ValueTree paramVt("param");
             paramVt.setProperty(IDs::id, paramId, nullptr);
             paramVt.setProperty(IDs::value, param->convertFrom0to1(param->getValue()), nullptr);
             profileVt.addChild(paramVt, -1, nullptr);
         }
     }
-
-    juce::ValueTree tuningVt("tuning");
-    tuningVt.setProperty("scl", juce::String(proc_.currentSCLData), nullptr);
-    tuningVt.setProperty("kbm", juce::String(proc_.currentKBMData), nullptr);
+    ValueTree tuningVt("tuning");
+    tuningVt.setProperty("scl", String(proc_.currentSCLData), nullptr);
+    tuningVt.setProperty("kbm", String(proc_.currentKBMData), nullptr);
     profileVt.addChild(tuningVt, -1, nullptr);
-
+    const auto destination = profileDir.getChildFile(name + ".xml");
+    TemporaryFile temporary(destination);
     auto xml = profileVt.createXml();
-    xml->writeTo(profileDir.getChildFile(name + ".xml"));
+    if (!xml->writeTo(temporary.getFile()) || !temporary.overwriteTargetFileWithTemporary()) {
+        AVShowMessage(AlertWindow::WarningIcon, language.text("saveError"),
+                      language.format("writeError", {{"path", destination.getFullPathName()}}), this);
+        return;
+    }
     refreshProfileList();
 }
 
 void ParamDialog::loadProfileFromFile(const juce::File& file) {
     auto xml = juce::XmlDocument::parse(file);
-    if (!xml) return;
-
-    auto profileVt = juce::ValueTree::fromXml(*xml);
+    auto profileVt = xml != nullptr ? juce::ValueTree::fromXml(*xml) : ValueTree();
+    bool valid = profileVt.hasType("DexedProfile");
+    const auto supported = dialogParamIds();
+    StringArray seenIds;
+    for (const auto& child : profileVt) {
+        if (child.hasType("param")) {
+            const auto id = child.getProperty(IDs::id).toString();
+            // ValueTree XML attributes are strings, including numeric values.
+            // Consume the complete number so corrupt text cannot silently turn
+            // into zero while retaining compatibility with existing profiles.
+            const auto valueText = child.getProperty(IDs::value).toString().trim();
+            auto cursor = valueText.getCharPointer();
+            const auto start = cursor;
+            const auto value = static_cast<float>(CharacterFunctions::readDoubleValue(cursor));
+            valid &= supported.contains(id) && !seenIds.contains(id) && std::isfinite(value)
+                     && valueText.containsAnyOf("0123456789") && cursor != start && cursor.isEmpty();
+            seenIds.add(id);
+            if (auto* parameter = apvts_.getParameter(id))
+                valid &= value >= parameter->getNormalisableRange().start
+                         && value <= parameter->getNormalisableRange().end;
+            else valid = false;
+        } else if (child.hasType("tuning")) {
+            const auto scl = child.getProperty("scl").toString();
+            const auto kbm = child.getProperty("kbm").toString();
+            valid &= scl.getNumBytesAsUTF8() <= MAX_SCL_KBM_FILE_SIZE && kbm.getNumBytesAsUTF8() <= MAX_SCL_KBM_FILE_SIZE;
+            try {
+                const auto scale = scl.isEmpty() ? Tunings::evenTemperament12NoteScale() : Tunings::parseSCLData(scl.toStdString());
+                const auto mapping = kbm.isEmpty() ? Tunings::KeyboardMapping() : Tunings::parseKBMData(kbm.toStdString());
+                const Tunings::Tuning validated(scale, mapping);
+                ignoreUnused(validated);
+            } catch (const std::exception&) { valid = false; }
+        } else valid = false;
+    }
+    if (!valid) {
+        auto& language = AVDexedLanguageService::getInstance();
+        AVShowMessage(AlertWindow::WarningIcon, language.text("profileError"),
+                      language.text("invalidProfile"), this);
+        return;
+    }
     for (int i = 0; i < profileVt.getNumChildren(); ++i) {
         auto child = profileVt.getChild(i);
         if (child.hasType("param")) {
             juce::String paramId = child.getProperty(IDs::id).toString();
             float value = static_cast<float>(child.getProperty(IDs::value));
-            if (auto* param = apvts_.getParameter(paramId))
+            if (auto* param = apvts_.getParameter(paramId)) {
+                param->beginChangeGesture();
                 param->setValueNotifyingHost(param->convertTo0to1(value));
+                param->endChangeGesture();
+            }
         } else if (child.hasType("tuning")) {
             juce::String sclData = child.getProperty("scl").toString();
             juce::String kbmData = child.getProperty("kbm").toString();
@@ -1010,235 +911,3 @@ void ParamDialog::loadProfileFromFile(const juce::File& file) {
 }
 
 //[/MiscUserCode]
-
-
-//==============================================================================
-#if 0
-/*  -- Projucer information section --
-
-    This is where the Projucer stores the metadata that describe this GUI layout, so
-    make changes in here at your peril!
-
-BEGIN_JUCER_METADATA
-
-<JUCER_COMPONENT documentType="Component" className="ParamDialog" componentName=""
-                 parentClasses="public Component" constructorParams="" variableInitialisers=""
-                 snapPixels="4" snapActive="1" snapShown="1" overlayOpacity="0.330"
-                 fixedSize="1" initialWidth="710" initialHeight="370">
-  <BACKGROUND backgroundColour="ff3c322f">
-    <TEXT pos="20 16 276 23" fill="solid: ffffffff" hasStroke="0" text="Pitch Bend Range"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="20 56 276 23" fill="solid: ffffffff" hasStroke="0" text="Pitch Bend Step"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="24 319 245 23" fill="solid: ffffffff" hasStroke="0" text="DX7 Channel"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="20 190 276 23" fill="solid: ffffffff" hasStroke="0" text="Engine Resolution"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <RECT pos="22 174 306 1" fill="solid: ff000000" hasStroke="0"/>
-    <RECT pos="22 227 306 1" fill="solid: ff000000" hasStroke="0"/>
-    <TEXT pos="20 96 276 23" fill="solid: ffffffff" hasStroke="0" text="Show Keyboard"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <RECT pos="352 12 1 349" fill="solid: ff000000" hasStroke="0"/>
-    <TEXT pos="368 16 276 23" fill="solid: ffffffff" hasStroke="0" text="Wheel"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="368 96 276 23" fill="solid: ffffffff" hasStroke="0" text="Breath"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="368 56 276 23" fill="solid: ffffffff" hasStroke="0" text="Foot"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="368 136 276 23" fill="solid: ffffffff" hasStroke="0" text="After Touch"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="528 163 48 23" fill="solid: ffffffff" hasStroke="0" text="PITCH"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="36"/>
-    <TEXT pos="584 163 48 23" fill="solid: ffffffff" hasStroke="0" text="AMP"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="36"/>
-    <TEXT pos="640 163 48 23" fill="solid: ffffffff" hasStroke="0" text="EG BIAS"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="36"/>
-    <RECT pos="376 194 325 1" fill="solid: ff000000" hasStroke="0"/>
-    <TEXT pos="371 208 276 25" fill="solid: ffffffff" hasStroke="0" text="Tuning"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="371 242 157 25" fill="solid: ffffffff" hasStroke="0" text="Transposition 12 as:"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <RECT pos="368 310 328 1" fill="solid: ff000000" hasStroke="0"/>
-    <TEXT pos="368 322 276 27" fill="solid: ffffffff" hasStroke="0" text="MPE"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="528 322 119 27" fill="solid: ffffffff" hasStroke="0" text="Bend Range"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="548 242 37 25" fill="solid: ffffffff" hasStroke="0" text="12"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="628 242 45 25" fill="solid: ffffffff" hasStroke="0" text="SCL"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="147 16 20 23" fill="solid: ffffffff" hasStroke="0" text="up"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="240 16 20 23" fill="solid: ffffffff" hasStroke="0" text="dn"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="20 136 276 23" fill="solid: ffffffff" hasStroke="0" text="UI Scaling"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="371 277 184 23" fill="solid: ffffffff" hasStroke="0" text="Portamento Rate"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-    <TEXT pos="628 274 75 27" fill="solid: ffffffff" hasStroke="0" text="Glissando"
-          fontname="Default font" fontsize="15.0" kerning="0.0" bold="0"
-          italic="0" justification="33"/>
-  </BACKGROUND>
-  <SLIDER name="pitchRangeDn" id="7409be5a8dfaa91" memberName="pitchRangeDn"
-          virtualName="" explicitFocusOrder="2" pos="264 16 72 24" min="0.0"
-          max="48.0" int="1.0" style="RotaryVerticalDrag" textBoxPos="TextBoxLeft"
-          textBoxEditable="1" textBoxWidth="80" textBoxHeight="20" skewFactor="1.0"
-          needsCallback="1"/>
-  <SLIDER name="pitchStep" id="b86af4b792e768ca" memberName="pitchStep"
-          virtualName="" explicitFocusOrder="3" pos="264 56 72 24" min="0.0"
-          max="12.0" int="1.0" style="RotaryVerticalDrag" textBoxPos="TextBoxLeft"
-          textBoxEditable="1" textBoxWidth="80" textBoxHeight="20" skewFactor="1.0"
-          needsCallback="1"/>
-  <COMBOBOX name="sysexIn" id="3750642d8b5be11" memberName="sysexIn" virtualName=""
-            explicitFocusOrder="7" pos="104 244 224 24" editable="0" layout="33"
-            items="" textWhenNonSelected="" textWhenNoItems="(no choices)"/>
-  <SLIDER name="sysexChl" id="7fdc8830f90a7c86" memberName="sysexChl" virtualName=""
-          explicitFocusOrder="9" pos="252 320 72 24" min="1.0" max="16.0"
-          int="1.0" style="RotaryVerticalDrag" textBoxPos="TextBoxLeft"
-          textBoxEditable="1" textBoxWidth="80" textBoxHeight="20" skewFactor="1.0"
-          needsCallback="1"/>
-  <COMBOBOX name="new combo box" id="4087ff978c3d9e8d" memberName="engineReso"
-            virtualName="" explicitFocusOrder="6" pos="160 188 168 24" editable="0"
-            layout="33" items="Modern (24-bit)&#10;Mark I&#10;OPL Series"
-            textWhenNonSelected="" textWhenNoItems="(no choices)"/>
-  <TOGGLEBUTTON name="showKeyboard" id="c963d2cb8e49ffd7" memberName="showKeyboard"
-                virtualName="LightedToggleButton" explicitFocusOrder="4" pos="264 96 56 24"
-                buttonText="" connectedEdges="0" needsCallback="1" radioGroupId="0"
-                state="0"/>
-  <SLIDER name="whlRange" id="3d6522f5f581e580" memberName="whlRange" virtualName=""
-          explicitFocusOrder="10" pos="448 16 72 24" min="0.0" max="99.0"
-          int="1.0" style="RotaryVerticalDrag" textBoxPos="TextBoxLeft"
-          textBoxEditable="1" textBoxWidth="80" textBoxHeight="20" skewFactor="1.0"
-          needsCallback="1"/>
-  <SLIDER name="ftRange" id="cf553f74c3fb0d12" memberName="ftRange" virtualName=""
-          explicitFocusOrder="14" pos="448 56 72 24" min="0.0" max="99.0"
-          int="1.0" style="RotaryVerticalDrag" textBoxPos="TextBoxLeft"
-          textBoxEditable="1" textBoxWidth="80" textBoxHeight="20" skewFactor="1.0"
-          needsCallback="1"/>
-  <SLIDER name="brRange" id="c4aa6814f75016a7" memberName="brRange" virtualName=""
-          explicitFocusOrder="18" pos="448 96 72 24" min="0.0" max="99.0"
-          int="1.0" style="RotaryVerticalDrag" textBoxPos="TextBoxLeft"
-          textBoxEditable="1" textBoxWidth="80" textBoxHeight="20" skewFactor="1.0"
-          needsCallback="1"/>
-  <SLIDER name="atRange" id="d0aa1ebb24284577" memberName="atRange" virtualName=""
-          explicitFocusOrder="22" pos="448 136 72 24" min="0.0" max="99.0"
-          int="1.0" style="RotaryVerticalDrag" textBoxPos="TextBoxLeft"
-          textBoxEditable="1" textBoxWidth="80" textBoxHeight="20" skewFactor="1.0"
-          needsCallback="1"/>
-  <TOGGLEBUTTON name="whlEg" id="d8242ae592c912a" memberName="whlEg" virtualName="LightedToggleButton"
-                explicitFocusOrder="13" pos="640 16 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="ftEg" id="69d816607bd71cb0" memberName="ftEg" virtualName="LightedToggleButton"
-                explicitFocusOrder="17" pos="640 56 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="brEg" id="ba89ae54d676983f" memberName="brEg" virtualName="LightedToggleButton"
-                explicitFocusOrder="21" pos="640 96 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="atEg" id="371934a58ce5f1bc" memberName="atEg" virtualName="LightedToggleButton"
-                explicitFocusOrder="25" pos="640 136 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="whlAmp" id="3d4e46e63c3ddd86" memberName="whlAmp" virtualName="LightedToggleButton"
-                explicitFocusOrder="12" pos="584 16 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="ftAmp" id="f631892e209b094a" memberName="ftAmp" virtualName="LightedToggleButton"
-                explicitFocusOrder="16" pos="584 56 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="brAmp" id="d0a68d37220638f1" memberName="brAmp" virtualName="LightedToggleButton"
-                explicitFocusOrder="20" pos="584 96 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="atAmp" id="4220c7b22e7845ea" memberName="atAmp" virtualName="LightedToggleButton"
-                explicitFocusOrder="24" pos="584 136 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="whlPitch" id="b7a626ec1e45af16" memberName="whlPitch" virtualName="LightedToggleButton"
-                explicitFocusOrder="11" pos="528 16 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="ftPitch" id="1acedf6f16a5a3" memberName="ftPitch" virtualName="LightedToggleButton"
-                explicitFocusOrder="15" pos="528 56 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="brPitch" id="23fa82533e004b96" memberName="brPitch" virtualName="LightedToggleButton"
-                explicitFocusOrder="19" pos="528 96 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TOGGLEBUTTON name="atPitch" id="43805c6a4673e291" memberName="atPitch" virtualName="LightedToggleButton"
-                explicitFocusOrder="23" pos="528 136 56 24" buttonText="" connectedEdges="0"
-                needsCallback="1" radioGroupId="0" state="0"/>
-  <TEXTBUTTON name="scl button" id="7a6b689f406ae37d" memberName="sclButton"
-              virtualName="" explicitFocusOrder="26" pos="448 205 56 30" buttonText="SCL"
-              connectedEdges="0" needsCallback="1" radioGroupId="0"/>
-  <TEXTBUTTON name="kbm button" id="181d5b67bc897076" memberName="kbmButton"
-              virtualName="" explicitFocusOrder="27" pos="512 205 56 30" buttonText="KBM"
-              connectedEdges="0" needsCallback="1" radioGroupId="0"/>
-  <TEXTBUTTON name="show tuning button" id="565d5c630087f71" memberName="showTunButton"
-              virtualName="" explicitFocusOrder="28" pos="576 205 48 30" buttonText="Show"
-              connectedEdges="0" needsCallback="1" radioGroupId="0"/>
-  <TEXTBUTTON name="reset tuning button" id="44a4ec0c1d200987" memberName="resetTuningButton"
-              virtualName="" explicitFocusOrder="29" pos="632 205 48 30" buttonText="Reset"
-              connectedEdges="0" needsCallback="1" radioGroupId="0"/>
-  <TOGGLEBUTTON name="transposeScale" id="9d4dd65775ed9e38" memberName="transposeScale"
-                virtualName="LightedToggleButton" explicitFocusOrder="30" pos="576 240 56 30"
-                buttonText="" connectedEdges="0" needsCallback="1" radioGroupId="0"
-                state="1"/>
-  <SLIDER name="mpePBRange" id="a13948d1cc74a51a" memberName="mpePBRange"
-          virtualName="" explicitFocusOrder="32" pos="616 323 72 24" min="0.0"
-          max="96.0" int="1.0" style="RotaryVerticalDrag" textBoxPos="TextBoxLeft"
-          textBoxEditable="1" textBoxWidth="80" textBoxHeight="20" skewFactor="1.0"
-          needsCallback="1"/>
-  <TOGGLEBUTTON name="mpeEnabled" id="e1a11d0372879dd8" memberName="mpeEnabled"
-                virtualName="LightedToggleButton" explicitFocusOrder="31" pos="456 320 48 30"
-                buttonText="" connectedEdges="0" needsCallback="1" radioGroupId="0"
-                state="0"/>
-  <IMAGEBUTTON name="new button" id="1c9edab9992cbeef" memberName="transposeHelp"
-               virtualName="" explicitFocusOrder="0" pos="500 245 20 20" buttonText="new button"
-               connectedEdges="0" needsCallback="1" radioGroupId="0" keepProportions="1"
-               resourceNormal="BinaryData::HelpButton_png" opacityNormal="1.0"
-               colourNormal="0" resourceOver="" opacityOver="1.0" colourOver="0"
-               resourceDown="" opacityDown="1.0" colourDown="0"/>
-  <SLIDER name="pitchRangeUp" id="56a2aeddd2444bea" memberName="pitchRangeUp"
-          virtualName="" explicitFocusOrder="1" pos="168 16 72 24" min="0.0"
-          max="48.0" int="1.0" style="RotaryVerticalDrag" textBoxPos="TextBoxLeft"
-          textBoxEditable="1" textBoxWidth="80" textBoxHeight="20" skewFactor="1.0"
-          needsCallback="1"/>
-  <COMBOBOX name="scalingFactor" id="843af1bae988d4d6" memberName="scalingFactor"
-            virtualName="" explicitFocusOrder="5" pos="236 136 90 24" editable="0"
-            layout="33" items="100 %&#10;125 %&#10;150 %&#10;200 %&#10;300 %&#10;400 %"
-            textWhenNonSelected="" textWhenNoItems="(no choices)"/>
-  <TOGGLEBUTTON name="glissando" id="f531397d4cf195a6" memberName="glissando"
-                virtualName="LightedToggleButton" explicitFocusOrder="30" pos="576 272 56 30"
-                buttonText="" connectedEdges="0" needsCallback="1" radioGroupId="0"
-                state="1"/>
-  <SLIDER name="portamentoTm" id="12588a21a3ec6c02" memberName="portamentoTm"
-          virtualName="" explicitFocusOrder="22" pos="504 276 72 24" min="0.0"
-          max="99.0" int="1.0" style="RotaryVerticalDrag" textBoxPos="TextBoxLeft"
-          textBoxEditable="1" textBoxWidth="80" textBoxHeight="20" skewFactor="1.0"
-          needsCallback="1"/>
-</JUCER_COMPONENT>
-
-END_JUCER_METADATA
-*/
-#endif
-
-
-//[EndFile] You can add extra defines here...
-//[/EndFile]
-

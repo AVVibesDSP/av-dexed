@@ -8,7 +8,8 @@ Program::Program(const juce::MidiMessage message) {
 
 void Program::setName(const juce::String &name) {
     for (int i=0; i < 10; i++) {
-        char c = (char) name[i];
+        const auto unicode = i < name.length() ? name[i] : 0;
+        char c = unicode <= 127 ? static_cast<char>(unicode) : ' ';
         if ( c == 0 ) {
             // Fill remaining positions with spaces
             for(int j = i; j < 10; j++) {
@@ -40,7 +41,7 @@ void Program::pushToParameters(const DexedApvts &apvts) const {
     }
 
     for (int i=0;i<6;i++) {
-        juce::RangedAudioParameter *parameter = apvts.getParameter( IDs::on.op(i).name);
+        juce::RangedAudioParameter *parameter = apvts.avOperatorSwitchParameters[static_cast<size_t>(i)];
         if ( parameter != nullptr ) {
             bool opOn =  data[155] & (1 << (5-i));
             parameter->beginChangeGesture();

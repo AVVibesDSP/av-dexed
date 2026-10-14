@@ -35,18 +35,31 @@ class DexedAudioProcessor;
  // so it is NOT RECOMMENDED to define this macro!
  //#define IMPLEMENT_MidiMonitor
 
-class SysexComm {
+class SysexComm : private juce::Timer {
     std::unique_ptr<MidiInput> input;
     std::unique_ptr<MidiOutput> output;
     String inputName;
     String outputName;
-    int sysexChl;
+    std::atomic<int> sysexChl { 0 };
     
     bool inputOutput;
 
     MidiBuffer noteOutput;
 
     CommandFifo<DexedAudioProcessor> *commandFifo;
+    static constexpr int AVSendQueueSize = 256, AVSendPacketBytes = 4104;
+    struct AVSendPacket {
+        std::array<uint8_t, AVSendPacketBytes> bytes {};
+        int size = 0;
+        std::atomic<size_t> sequence { 0 };
+    };
+    std::unique_ptr<AVSendPacket[]> avSendPackets;
+    std::atomic<size_t> avSendWrite { 0 };
+    size_t avSendRead = 0;
+    std::atomic<int> avDroppedOutput { 0 };
+    juce::MidiBuffer avSendBatch;
+    DexedAudioProcessor* avProcessor = nullptr;
+    void timerCallback() override;
 public :
     MidiInputCallback *listener;
 #ifdef IMPLEMENT_MidiMonitor
@@ -54,6 +67,12 @@ public :
     bool outActivity;
 #endif //IMPLEMENT_MidiMonitor    
     SysexComm();
+    ~SysexComm() override { stopTimer(); if (input != nullptr) input->stop(); }
+    void setAVProcessor(DexedAudioProcessor* processor) noexcept { avProcessor = processor; }
+    int getAVDroppedOutputCount() const noexcept { return avDroppedOutput.load(std::memory_order_relaxed); }
+#if defined(AVDEXED_TESTING)
+    void flushAVPendingOutputForTesting() { timerCallback(); }
+#endif
     
     bool setInput(String name);
     bool setOutput(String name);

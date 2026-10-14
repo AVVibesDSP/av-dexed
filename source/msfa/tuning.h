@@ -1,3 +1,6 @@
+// Modified by AV Vibes, 2026 (AV Dexed): tuning errors are returned to the
+// caller instead of opening alert windows from the audio or host thread.
+
 #ifndef __SYNTH_TUNING_H
 #define __SYNTH_TUNING_H
 
@@ -23,8 +26,10 @@ public:
 
 std::shared_ptr<TuningState> createStandardTuning();
 
-std::shared_ptr<TuningState> createTuningFromSCLData( const std::string &sclData );
-std::shared_ptr<TuningState> createTuningFromKBMData( const std::string &kbmData );
-std::shared_ptr<TuningState> createTuningFromSCLAndKBMData( const std::string &sclData, const std::string &kbmData );
+// On failure these return nullptr and, when `error` is given, the parser's
+// technical detail; the caller decides how to present it.
+std::shared_ptr<TuningState> createTuningFromSCLData( const std::string &sclData, std::string* error = nullptr );
+std::shared_ptr<TuningState> createTuningFromKBMData( const std::string &kbmData, std::string* error = nullptr );
+std::shared_ptr<TuningState> createTuningFromSCLAndKBMData( const std::string &sclData, const std::string &kbmData, std::string* error = nullptr );
 
 #endif

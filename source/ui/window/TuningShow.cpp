@@ -21,10 +21,66 @@
 //[/Headers]
 
 #include "TuningShow.h"
+#include "../AVDexedTheme.h"
 
 
-//[MiscUserDefs] You can add your own user definitions and misc code here...
-//[/MiscUserDefs]
+namespace {
+class AVTuningTableModel final : public surgesynthteam::TuningTableListBoxModel {
+public:
+    AVTuningTableModel(TableListBox& table, const Tunings::Tuning& tuning) : AVTable(&table), AVTuning(tuning) {}
+    void paintRowBackground(Graphics& g, int row, int, int, bool selected) override {
+        g.fillAll(selected ? AVDexedTheme::oceanBottom : row % 2 == 0 ? AVDexedTheme::controlBottom : AVDexedTheme::panelTop);
+    }
+    void paintCell(Graphics& g, int row, int column, int width, int height, bool) override {
+        static const StringArray names { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        String text;
+        switch (column) {
+            case surgesynthteam::COLUMNID_NOTE: text = String(row); break;
+            case surgesynthteam::COLUMNID_NAME: text = names[row % 12] + String(row / 12 - 1); break;
+            case surgesynthteam::COLUMNID_FREQ: text = String(AVTuning.frequencyForMidiNote(row), 4); break;
+            case surgesynthteam::COLUMNID_LOG2F: text = String(AVTuning.logScaledFrequencyForMidiNote(row), 6); break;
+            default: break;
+        }
+        g.setColour(AVDexedTheme::textPrimary);
+        g.setFont(AVDexedTheme::font(11.0f));
+        g.drawText(text, 10, 0, width - 20, height, Justification::centredLeft);
+    }
+    void cellClicked(int, int, const MouseEvent& event) override {
+        if (!event.mods.isPopupMenu()) return;
+        PopupMenu menu;
+        menu.addItem(1, AVDexedLanguageService::getInstance().text("exportCsv"));
+        const auto table = AVTable;
+        menu.setLookAndFeel(&table->getLookAndFeel());
+        menu.showMenuAsync(PopupMenu::Options().withTargetComponent(table.getComponent()), [this, table](int result) {
+            if (table != nullptr && result == 1) exportToCSV();
+        });
+    }
+    void exportToCSV() override {
+        AVChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("exportCsvTitle"), File(), "*.csv");
+        const auto tuning = AVTuning;
+        const auto table = AVTable;
+        AVChooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
+            [tuning, table](const FileChooser& chooser) {
+                if (table == nullptr || chooser.getResults().isEmpty()) return;
+                const auto destination = chooser.getResult().withFileExtension(".csv");
+                String csv("MIDI note,Frequency (Hz),log2(f/8.17)\n");
+                for (int note = 0; note < 128; ++note)
+                    csv += String(note) + "," + String(tuning.frequencyForMidiNote(note), 9) + "," + String(tuning.logScaledFrequencyForMidiNote(note), 9) + "\n";
+                TemporaryFile temporary(destination);
+                if (!temporary.getFile().replaceWithText(csv) || !temporary.overwriteTargetFileWithTemporary()) {
+                    auto& language = AVDexedLanguageService::getInstance();
+                    AVShowMessage(AlertWindow::WarningIcon, language.text("saveError"),
+                                  language.format("writeError", {{"path", destination.getFullPathName()}}), table.getComponent());
+                }
+            });
+    }
+private:
+    Component::SafePointer<TableListBox> AVTable;
+    Tunings::Tuning AVTuning;
+    std::unique_ptr<FileChooser> AVChooser;
+};
+}
+
 
 //==============================================================================
 TuningShow::TuningShow () {
@@ -33,10 +89,11 @@ TuningShow::TuningShow () {
 
     tabbedComponent.reset (new TabbedComponent (TabbedButtonBar::TabsAtTop));
     addAndMakeVisible (tabbedComponent.get());
-    tabbedComponent->setTabBarDepth (30);
-    tabbedComponent->addTab (translate("Tuning"), Colours::lightgrey, new TableListBox(), true, 0);
-    tabbedComponent->addTab (translate("SCL"), Colours::lightgrey, new TextEditor(), true, 1);
-    tabbedComponent->addTab (translate("KBM"), Colours::lightgrey, new TextEditor(), true, 2);
+    setLookAndFeel(&AVLookAndFeel);
+    tabbedComponent->setTabBarDepth(36);
+    tabbedComponent->addTab (AVDexedLanguageService::getInstance().text("tuning"), AVDexedTheme::panelTop, new TableListBox(), true, 0);
+    tabbedComponent->addTab ("SCL", AVDexedTheme::panelTop, new TextEditor(), true, 1);
+    tabbedComponent->addTab ("KBM", AVDexedTheme::panelTop, new TextEditor(), true, 2);
     tabbedComponent->setCurrentTabIndex (0);
 
     tabbedComponent->setBounds (0, 0, 500, 400);
@@ -45,7 +102,7 @@ TuningShow::TuningShow () {
     //[UserPreSize]
     //[/UserPreSize]
 
-    setSize (500, 400);
+    setSize(620, 440);
 
 
     //[Constructor] You can add your own custom stuff here..
@@ -59,7 +116,13 @@ TuningShow::TuningShow () {
     kbmt->setMultiLine(true);
     kbmt->setScrollbarsShown(true);
 
-    table = dynamic_cast<TableListBox*>( tabbedComponent->getTabContentComponent(0) );
+    table = dynamic_cast<TableListBox*>(tabbedComponent->getTabContentComponent(0));
+    table->setRowHeight(28);
+    sclt->setFont(AVDexedTheme::font(11.5f, "Regular"));
+    kbmt->setFont(AVDexedTheme::font(11.5f, "Regular"));
+    AVDexedLanguageService::getInstance().addChangeListener(this);
+    AVRefreshLanguage();
+    resized();
 
     //[/Constructor]
 }
@@ -68,6 +131,10 @@ TuningShow::~TuningShow() {
     //[Destructor_pre]. You can add your own custom destruction code here..
     //[/Destructor_pre]
 
+    AVDexedLanguageService::getInstance().removeChangeListener(this);
+    table->setModel(nullptr);
+    mod.reset();
+    setLookAndFeel(nullptr);
     tabbedComponent = nullptr;
 
 
@@ -80,13 +147,14 @@ void TuningShow::paint (Graphics& g) {
     //[UserPrePaint] Add your own custom painting code here..
     //[/UserPrePaint]
 
-    g.fillAll (Colour (0xff323e44));
+    g.fillAll(AVDexedTheme::canvas);
 
     //[UserPaint] Add your own custom painting code here..
     //[/UserPaint]
 }
 
 void TuningShow::resized() {
+    if (tabbedComponent != nullptr) tabbedComponent->setBounds(getLocalBounds().reduced(8));
     //[UserPreResize] Add your own custom resize code here..
     //[/UserPreResize]
 
@@ -104,9 +172,9 @@ void TuningShow::setTuning( const Tunings::Tuning &t ) {
     if( kbmt )
         kbmt->setText( tuning.keyboardMapping.rawText, false );
 
-    mod = std::make_unique<surgesynthteam::TuningTableListBoxModel>();
+    mod = std::make_unique<AVTuningTableModel>(*table, tuning);
     mod->setTableListBox( table );
-    mod->setupDefaultHeaders( table );
+    AVRefreshLanguage();
     mod->tuningUpdated( tuning );
 
     table->setModel( mod.get() );
@@ -117,37 +185,20 @@ void TuningShow::setTuning( const Tunings::Tuning &t ) {
 //[/MiscUserCode]
 
 
-//==============================================================================
-#if 0
-/*  -- Projucer information section --
+void TuningShow::changeListenerCallback(ChangeBroadcaster*) { AVRefreshLanguage(); }
 
-    This is where the Projucer stores the metadata that describe this GUI layout, so
-    make changes in here at your peril!
-
-BEGIN_JUCER_METADATA
-
-<JUCER_COMPONENT documentType="Component" className="TuningShow" componentName=""
-                 parentClasses="public Component" constructorParams="" variableInitialisers=""
-                 snapPixels="8" snapActive="1" snapShown="1" overlayOpacity="0.330"
-                 fixedSize="1" initialWidth="500" initialHeight="400">
-  <BACKGROUND backgroundColour="ff323e44"/>
-  <TABBEDCOMPONENT name="new tabbed component" id="de33c460f07f5cdd" memberName="tabbedComponent"
-                   virtualName="" explicitFocusOrder="0" pos="0 0 500 400" orientation="top"
-                   tabBarDepth="30" initialTab="0">
-    <TAB name="Tuning" colour="ffd3d3d3" useJucerComp="0" contentClassName="TableListBox"
-         constructorParams="" jucerComponentFile=""/>
-    <TAB name="SCL" colour="ffd3d3d3" useJucerComp="0" contentClassName="TextEditor"
-         constructorParams="" jucerComponentFile=""/>
-    <TAB name="KBM" colour="ffd3d3d3" useJucerComp="0" contentClassName="TextEditor"
-         constructorParams="" jucerComponentFile=""/>
-  </TABBEDCOMPONENT>
-</JUCER_COMPONENT>
-
-END_JUCER_METADATA
-*/
-#endif
-
-
-//[EndFile] You can add extra defines here...
-//[/EndFile]
-
+void TuningShow::AVRefreshLanguage() {
+    auto& language = AVDexedLanguageService::getInstance();
+    tabbedComponent->setTabName(0, language.text("tuning"));
+    sclt->setTitle(language.text("loadScale"));
+    kbmt->setTitle(language.text("loadKeyboardMap"));
+    table->setTitle(language.text("showTuning"));
+    auto& header = table->getHeader();
+    header.removeAllColumns();
+    header.addColumn(language.text("tuningNote"), surgesynthteam::COLUMNID_NOTE, 92, 70, -1, TableHeaderComponent::notSortable);
+    header.addColumn(language.text("tuningNoteName"), surgesynthteam::COLUMNID_NAME, 126, 90, -1, TableHeaderComponent::notSortable);
+    header.addColumn(language.text("tuningFrequency"), surgesynthteam::COLUMNID_FREQ, 180, 150, -1, TableHeaderComponent::notSortable);
+    header.addColumn("log2(f/8.17)", surgesynthteam::COLUMNID_LOG2F, 164, 140, -1, TableHeaderComponent::notSortable);
+    header.setPopupMenuActive(false);
+    repaint();
+}

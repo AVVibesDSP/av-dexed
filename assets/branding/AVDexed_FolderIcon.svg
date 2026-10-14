@@ -1,0 +1,4 @@
+<svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M5.625 2.30794H10V10H0V0H3.75L5.625 2.30794Z" fill="url(#folder)"/>
+  <defs><linearGradient id="folder" x1="5" y1="0" x2="5" y2="10" gradientUnits="userSpaceOnUse"><stop stop-color="#58BFE8"/><stop offset="1" stop-color="#0B3558"/></linearGradient></defs>
+</svg>

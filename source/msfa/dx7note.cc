@@ -13,6 +13,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by AV Vibes, 2026 (AV Dexed): carrier detection used for voice
+ * state and the operator glow.
  */
 
 #include <math.h>
@@ -444,6 +447,17 @@ void Dx7Note::oscSync() {
 
 // a note is playing if it's been initialised and any carrier's amp
 // envelope is active
+bool Dx7Note::hasAudibleCarrier(uint32_t minimumAmp) {
+    if ( !initialised_ ) return false;
+    for (int i=0; i<6; i++) {
+        if ( FmCore::isCarrier(algorithm_, i) && env_[i].isActive()
+             && Exp2::lookup(params_[i].level_in - (14 * (1 << 24))) >= minimumAmp ) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool Dx7Note::isPlaying() {
     if ( !initialised_ ) return false;
     for (int i=0; i<6; i++) {

@@ -1,11 +1,17 @@
-cmake_minimum_required(VERSION 3.16)
-project(Dexed VERSION 1.1.0)
+cmake_minimum_required(VERSION 3.22)
+project(AVDexed VERSION 0.1.0)
+
+option(DEXED_BUILD_TESTS "Build AV Dexed regression tests" OFF)
+if(DEXED_BUILD_TESTS)
+    enable_testing()
+endif()
 
 #Compile commands, useful for some IDEs like VS-Code
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
+# AV Dexed's own version (0.x = public preview); BUILD_ID overrides it.
 if(NOT BUILD_ID)
-    add_definitions("-DDEXED_ID=DEVBUILD")
+    add_definitions("-DDEXED_ID=${PROJECT_VERSION}")
 else()
     add_definitions("-DDEXED_ID=${BUILD_ID}")
 endif()
@@ -13,8 +19,9 @@ endif()
 #Minimum MacOS target, set globally
 # set(CMAKE_OSX_DEPLOYMENT_TARGET "10.9" CACHE STRING "Minimum OS X deployment version" FORCE)
 
-if (CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE INTERNAL "")
+# Release is universal unless the builder picks architectures (-DCMAKE_OSX_ARCHITECTURES=arm64).
+if (CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "")
 endif()
 
 #static linking in Windows

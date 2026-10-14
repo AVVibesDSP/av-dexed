@@ -1,59 +1,83 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
-#include "BinaryData.h"
-#include "../../debugger/Logger.h"
+#include <BinaryData.h>
+#include "../AVDexedTheme.h"
+#include "../AVDexedLanguage.h"
+#include "../DXLookNFeel.h"
 
-class AboutBox : public juce::DialogWindow {
+/** Public product information; technical provenance remains in notices. */
+class AboutBox final : public juce::DialogWindow, private juce::ChangeListener {
+    class AVAboutContent final : public juce::Component {
+    public:
+        AVAboutContent() {
+            if (auto svg = juce::XmlDocument::parse(juce::String::fromUTF8(BinaryData::AVDexed_InfoIcon_svg,
+                                                                         BinaryData::AVDexed_InfoIcon_svgSize)))
+                AVInfoIcon = juce::Drawable::createFromSVG(*svg);
+            for (auto* link : { &AVDexedLink, &AVSurgeLink }) {
+                link->setColour(juce::HyperlinkButton::textColourId, AVDexedTheme::oceanHighlight);
+                auto linkFont = AVDexedTheme::font(13.0f, "Medium");
+                linkFont.setUnderline(true);
+                link->setFont(linkFont, false, juce::Justification::centredLeft);
+                link->setWantsKeyboardFocus(true);
+                addAndMakeVisible(link);
+            }
+            AVRefreshLanguage();
+            setSize(540, 500);
+        }
+        void AVRefreshLanguage() {
+            AVDexedLink.setButtonText(AVDexedLanguageService::getInstance().text("originalProject"));
+            AVDexedLink.setTitle(AVDexedLink.getButtonText());
+            AVSurgeLink.setTitle(AVSurgeLink.getButtonText());
+            repaint();
+        }
+        void resized() override {
+            AVDexedLink.setBounds(24, getHeight() - 68, getWidth() - 48, 28);
+            AVSurgeLink.setBounds(24, getHeight() - 36, getWidth() - 48, 28);
+        }
+        void paint(juce::Graphics& g) override {
+            AVDexedTheme::panel(g, getLocalBounds().toFloat(), 10.0f);
+            if (AVInfoIcon != nullptr)
+                AVInfoIcon->drawWithin(g, { 24.0f, 24.0f, 32.0f, 32.0f }, juce::RectanglePlacement::centred, 1.0f);
+            g.setColour(AVDexedTheme::textPrimary);
+            g.setFont(AVDexedTheme::font(23.0f, "SemiBold"));
+            g.drawText("AV Dexed", 70, 20, getWidth() - 94, 42, juce::Justification::centredLeft);
+            auto& language = AVDexedLanguageService::getInstance();
+            g.setFont(AVDexedTheme::font(11.0f));
+            g.setColour(AVDexedTheme::oceanHighlight);
+            g.drawText(language.format("aboutVersion", {{ "version", DEXED_VERSION }}), 24, 70, getWidth() - 48, 26, juce::Justification::centredLeft);
+            juce::AttributedString credits;
+            credits.append(language.text("aboutCredits"), AVDexedTheme::font(11.5f, "Regular"), AVDexedTheme::textPrimary);
+            credits.setLineSpacing(3.0f);
+            juce::TextLayout layout;
+            layout.createLayout(credits, static_cast<float>(getWidth() - 48));
+            layout.draw(g, { 24.0f, 106.0f, static_cast<float>(getWidth() - 48), static_cast<float>(getHeight() - 182) });
+        }
+    private:
+        juce::HyperlinkButton AVDexedLink { "DEXED", juce::URL("https://asb2m10.github.io/dexed/") };
+        juce::HyperlinkButton AVSurgeLink { "Surge Synthesizer Team", juce::URL("https://surge-synthesizer.github.io/") };
+        std::unique_ptr<juce::Drawable> AVInfoIcon;
+    };
 public:
-    juce::Image logo_png;
-    std::unique_ptr<juce::HyperlinkButton> dexed; // changed to std::unique_ptr from juce::ScopedPointer
-    std::unique_ptr<juce::HyperlinkButton> surge; // changed to std::unique_ptr from juce::ScopedPointer
-
-    AboutBox() : juce::DialogWindow("About", juce::Colour(0xFF000000), true),
-        dexed(std::make_unique<juce::HyperlinkButton>("https://asb2m10.github.io/dexed/", juce::URL("https://asb2m10.github.io/dexed/"))),
-        surge(std::make_unique<juce::HyperlinkButton>("https://surge-synthesizer.github.io/", juce::URL("https://surge-synthesizer.github.io/")))
-    {
-        setUsingNativeTitleBar(false);
+    AboutBox() : juce::DialogWindow(AVDexedLanguageService::getInstance().text("aboutDexed"), AVDexedTheme::canvas, true) {
+        setLookAndFeel(&AVLookAndFeel);
+        setUsingNativeTitleBar(true);
         setAlwaysOnTop(true);
-        logo_png = juce::ImageCache::getFromMemory(BinaryData::dexedlogo_png, BinaryData::dexedlogo_pngSize);
-        setSize(logo_png.getWidth() + 8, 500);
-        //centreAroundComponent(parent, getWidth(), getHeight());
-
-        dexed->setColour(juce::HyperlinkButton::ColourIds::textColourId, juce::Colour(0xFF4ea097));
-        dexed->setJustificationType(juce::Justification::left);
-        dexed->setBounds(18, 433, getWidth() - 36, 30);
-
-        surge->setColour(juce::HyperlinkButton::ColourIds::textColourId, juce::Colour(0xFF4ea097));
-        surge->setJustificationType(juce::Justification::left);
-        surge->setBounds(18, 458, getWidth() - 36, 30);
-
-        // create a new Component to hold ''dexed'' and ''surge'' as subcomponents
-        // and set this holder Component as the content component of the DialogWindow
-        Component* holder = new Component();
-        holder->setSize(getWidth(), getHeight());
-        holder->addAndMakeVisible((juce::Component*)dexed.get());
-        holder->addAndMakeVisible((juce::Component*)surge.get());
-        setContentOwned(holder, true);  // TODO: ''setContentComponent(holder, true, true);'' also worked; which is the better?
+        auto* content = new AVAboutContent();
+        AVContent = content;
+        setContentOwned(content, true);
+        AVDexedLanguageService::getInstance().addChangeListener(this);
     }
-
-    void closeButtonPressed() override {
-        setVisible(false);
+    ~AboutBox() override {
+        AVDexedLanguageService::getInstance().removeChangeListener(this);
+        setLookAndFeel(nullptr);
     }
-
-    void paint(juce::Graphics &g) override {
-        g.fillAll(juce::Colour(0xFF554F46));
-        g.drawImage(logo_png, 0, 10, logo_png.getWidth(), logo_png.getHeight(),
-                     0, 0, logo_png.getWidth(), logo_png.getHeight());
-        g.setFont(20);
-        g.setColour(juce::Colour(0xFFFFFFFF));
-        const char *credits = "Version " DEXED_VERSION " build date: " __DATE__ "\n"
-                            "This software is released under the GPL V3\n\n"
-                            "DSP Engine: orignal project (msfa) Raph Levin, enhancements Pascal Gauthier\n"
-                            "UI Programming: Pascal Gauthier\n"
-                            "UI Design: AZur Studio\n\n"
-                            "Credits to Surge Synthesizer Team for MPE and microtuning support\n"
-                            "Credits to GitHub users: tico-tico, Sentinel77, jeremybernstein; filters based on OB-Xd";
-        g.drawMultiLineText(credits, 18, 260, logo_png.getWidth()-18);
+    void closeButtonPressed() override { exitModalState(0); setVisible(false); }
+private:
+    DXLookNFeel AVLookAndFeel;
+    AVAboutContent* AVContent = nullptr;
+    void changeListenerCallback(juce::ChangeBroadcaster*) override {
+        setName(AVDexedLanguageService::getInstance().text("aboutDexed"));
+        AVContent->AVRefreshLanguage();
     }
 };

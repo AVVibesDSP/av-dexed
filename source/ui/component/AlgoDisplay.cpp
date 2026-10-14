@@ -19,102 +19,173 @@
  */
 
 #include "AlgoDisplay.h"
+#include <cmath>
+#include <vector>
 #include "../DXLookNFeel.h"
+#include "../AVDexedTheme.h"
+#include "../AVDexedLanguage.h"
 
 void AlgoDisplay::displayOp(juce::Graphics &g, char id, int x, int y, char link, char fb) {
-    const int LINE_SZ = 3;
-    String t(id);
+    const float LINE_SZ = hero ? 1.1f : 2.2f;
+    const String t = String(int(id));
     bool opOn = opSwitch[id-1];
-    
+    const bool carrier = y == 3;
+
     x *= 25;
     x += 3;
     y *= 21;
     y += 5;
-    
-    if ( opOn )
-        g.setColour(Colours::white);
-    else
-        g.setColour(DXLookNFeel::roundBackground);
-    
+
+    if (hero) {
+        const auto node = Rectangle<float>(float(x) - 1.0f, float(y) - 1.0f, 18.0f, 14.0f);
+        opBounds[size_t(id - 1)] = node.transformedBy(heroTransform);
+        // Opacity grows from exactly zero, so the glow fades rather than
+        // switching on at a minimum strength.
+        const float glow = opOn ? std::pow(levels[size_t(id - 1)], 0.7f) : 0.0f;
+        if (glow > 0.002f) {
+            g.setColour(AVDexedTheme::oceanHighlight.withAlpha(0.32f * glow));
+            g.fillRoundedRectangle(node.expanded(2.2f), 4.5f);
+            g.setColour(AVDexedTheme::oceanHighlight.withAlpha(0.44f * glow));
+            g.fillRoundedRectangle(node.expanded(1.0f), 3.5f);
+        }
+        if (carrier && opOn)
+            g.setGradientFill(ColourGradient(AVDexedTheme::oceanTop, 0.0f, node.getY(),
+                                             AVDexedTheme::oceanBottom, 0.0f, node.getBottom(), false));
+        else
+            g.setGradientFill(ColourGradient(opOn ? AVDexedTheme::outline : AVDexedTheme::controlTop, 0.0f, node.getY(),
+                                             AVDexedTheme::controlBottom, 0.0f, node.getBottom(), false));
+        g.fillRoundedRectangle(node, 3.0f);
+        const bool hovered = hoveredOp == id - 1;
+        g.setColour(hovered ? AVDexedTheme::textPrimary
+                            : opOn ? AVDexedTheme::oceanHighlight.withAlpha(carrier ? 0.9f : 0.55f)
+                                   : AVDexedTheme::outline);
+        g.drawRoundedRectangle(node.reduced(0.25f), 3.0f, hovered ? 0.55f : 0.4f);
+        auto label = node;
+        const auto ratio = label.removeFromBottom(5.2f).translated(0.0f, -0.6f);
+        g.setFont(AVDexedTheme::font(6.6f, "SemiBold"));
+        g.setColour(opOn ? AVDexedTheme::textPrimary : AVDexedTheme::textSecondary.withAlpha(0.55f));
+        g.drawText(t, label.translated(0.0f, 0.4f), Justification::centred, false);
+        // Frequency ratio (or fixed Hz): the number that shapes the timbre most.
+        g.setFont(AVDexedTheme::font(3.3f, "Medium"));
+        g.setColour((carrier && opOn ? AVDexedTheme::textPrimary : AVDexedTheme::textSecondary).withAlpha(opOn ? 0.85f : 0.45f));
+        g.drawText(frequencyText(id - 1), ratio, Justification::centred, false);
+        g.setColour(opOn ? AVDexedTheme::oceanTop : AVDexedTheme::outline);
+    } else {
+    // Each operator sits in its own grid cell, like the classic panel. A muted
+    // operator stays readable (dimmed) instead of vanishing into the panel.
+    const auto box = Rectangle<float>(float(x) - 1.0f, float(y) - 1.0f, 18.0f, 14.0f);
+    g.setGradientFill(ColourGradient(opOn ? AVDexedTheme::outline : AVDexedTheme::controlTop, 0.0f, box.getY(),
+                                     AVDexedTheme::controlBottom, 0.0f, box.getBottom(), false));
+    g.fillRoundedRectangle(box, 2.5f);
+    g.setColour(opOn ? AVDexedTheme::oceanHighlight.withAlpha(0.75f) : AVDexedTheme::outline.withAlpha(0.8f));
+    g.drawRoundedRectangle(box.reduced(0.4f), 2.5f, 0.8f);
+    g.setColour(opOn ? AVDexedTheme::textPrimary : AVDexedTheme::textSecondary.withAlpha(0.6f));
     g.drawText(t, x, y, 16, 12, Justification::centred, true);
-    
-    if ( opOn )
-        g.setColour(DXLookNFeel::fillColour);
-    else
-        g.setColour(DXLookNFeel::roundBackground);
-    
-    switch(link) {
-        case 0 : // LINE DOWN
-            g.drawLine(x+8, y+12, x+8, y+21, LINE_SZ);
-            break;
-        case 1: // ARROW TO RIGHT
-            g.drawLine(x+8, y+12, x+8,  y+18, LINE_SZ);
-            g.drawLine(x+7, y+18, x+34, y+18, LINE_SZ);
-            break;
-        case 2: // ARROW TO RIGHT JOIN
-            g.drawLine(x+8,  y+12, x+8, y+19, LINE_SZ);
-            break;
-        case 3: // ARROW TO RIGHT AND DOWN
-            g.drawLine(x+8, y+12, x+8, y+21, LINE_SZ);
-            g.drawLine(x+7, y+18, x+34, y+18, LINE_SZ);
-            g.drawLine(x+34, y+17, x+34, y+21, LINE_SZ);
-            break;
-        case 4: // ARROW TO RIGHT+LEFT AND DOWN
-            g.drawLine(x+8, y+12, x+8, y+21, LINE_SZ);
-            g.drawLine(x+7, y+18, x+34, y+18, LINE_SZ);
-            g.drawLine(x+34, y+17, x+34, y+21, LINE_SZ);
-            g.drawLine(x-17, y+18, x+8, y+18, LINE_SZ);
-            g.drawLine(x-17, y+17, x-17, y+21, LINE_SZ);
-            break;
-        case 6:
-            g.drawLine(x+8, y+12, x+8,  y+18, LINE_SZ);
-            g.drawLine(x+7, y+18, x+58, y+18, LINE_SZ);
-            break;
-        case 7: // ARROW TO LEFT
-            g.drawLine(x+8,  y+12, x+8, y+19, LINE_SZ);
-            g.drawLine(x-17, y+18, x+9, y+18, LINE_SZ);
-            break;
+
+    g.setColour(opOn ? DXLookNFeel::fillColour : AVDexedTheme::outline);
     }
     
+    // Wires are continuous polylines whose segments meet exactly (the old
+    // per-segment drawLine calls were off by one unit at every bend), with a
+    // small decorative dot on every bend and junction.
+    const float cx = float(x) + 8.0f;        // node centre line
+    const float bottom = float(y) + 13.0f;   // node bottom edge
+    const float nextTop = float(y) + 20.0f;  // top edge of the node one row down
+    const float bus = float(y) + 17.5f;      // horizontal routing level
+    const float lift = float(y) - 4.5f;      // feedback loop above the node
+    const auto loopAt = [y](int rowsDown) { return float(y + 21 * rowsDown) + 15.5f; };
+    Path wires;
+    std::vector<Point<float>> joints;
+    const auto poly = [&wires, &joints](std::initializer_list<Point<float>> points) {
+        auto it = points.begin();
+        wires.startNewSubPath(*it);
+        for (++it; it != points.end(); ++it) {
+            wires.lineTo(*it);
+            if (std::next(it) != points.end()) joints.push_back(*it);   // bends
+        }
+    };
+
+    switch(link) {
+        case 0 : // LINE DOWN (a carrier has no node below: it stops at the bus)
+            poly({{cx, bottom}, {cx, carrier ? bus : nextTop}});
+            break;
+        case 1: // ARROW TO RIGHT
+            poly({{cx, bottom}, {cx, bus}, {cx + 25.0f, bus}});
+            joints.push_back({cx + 25.0f, bus});
+            break;
+        case 2: // ARROW TO RIGHT JOIN
+            poly({{cx, bottom}, {cx, bus}});
+            break;
+        case 3: // ARROW TO RIGHT AND DOWN
+            poly({{cx, bottom}, {cx, nextTop}});
+            poly({{cx, bus}, {cx + 25.0f, bus}, {cx + 25.0f, nextTop}});
+            joints.push_back({cx, bus});
+            break;
+        case 4: // ARROW TO RIGHT+LEFT AND DOWN
+            poly({{cx, bottom}, {cx, nextTop}});
+            poly({{cx - 25.0f, nextTop}, {cx - 25.0f, bus}, {cx + 25.0f, bus}, {cx + 25.0f, nextTop}});
+            joints.push_back({cx, bus});
+            break;
+        case 6:
+            poly({{cx, bottom}, {cx, bus}, {cx + 50.0f, bus}});
+            joints.push_back({cx + 50.0f, bus});
+            break;
+        case 7: // ARROW TO LEFT
+            poly({{cx, bottom}, {cx, bus}, {cx - 25.0f, bus}});
+            joints.push_back({cx - 25.0f, bus});
+            break;
+    }
+
+    // Feedback: from the operator's output back over the top into its input.
+    const float right = float(x) + 20.5f, left = float(x) - 4.5f;   // same 3.5 gap both sides
     switch(fb) {
         case 0:
             break;
         case 1:
-            g.drawLine(x+7, y, x+8, y-5, LINE_SZ);
-            g.drawLine(x+8, y-4, x+21, y-4, LINE_SZ);
-            g.drawLine(x+20, y-4, x+20, y+15, LINE_SZ);
-            g.drawLine(x+19, y+15, x+20, y+16, LINE_SZ);
-            g.drawLine(x+8, y+15, x+20, y+15, LINE_SZ);
+            poly({{cx, float(y) - 1.0f}, {cx, lift}, {right, lift}, {right, loopAt(0)}, {cx, loopAt(0)}});
+            joints.push_back({cx, loopAt(0)});
             break;
         case 2: // ALGO 4
-            g.drawLine(x+7, y, x+8, y-5, LINE_SZ);
-            g.drawLine(x+8, y-4, x+20, y-4, LINE_SZ);
-            g.drawLine(x+19, y-4, x+19, y+59, LINE_SZ);
-            g.drawLine(x+8, y+58, x+19, y+58, LINE_SZ);
+            poly({{cx, float(y) - 1.0f}, {cx, lift}, {right, lift}, {right, loopAt(2)}, {cx, loopAt(2)}});
+            joints.push_back({cx, loopAt(2)});
             break;
         case 3: // ALGO 6
-            g.drawLine(x+7, y, x+8, y-5, LINE_SZ);
-            g.drawLine(x+8, y-4, x+20, y-4, LINE_SZ);
-            g.drawLine(x+19, y-4, x+19, y+37, LINE_SZ);
-            g.drawLine(x+8, y+36, x+19, y+36, LINE_SZ);
+            poly({{cx, float(y) - 1.0f}, {cx, lift}, {right, lift}, {right, loopAt(1)}, {cx, loopAt(1)}});
+            joints.push_back({cx, loopAt(1)});
             break;
         case 4:
-            g.drawLine(x+7, y, x+8, y-5, LINE_SZ);
-            g.drawLine(x+8, y-4, x-4, y-4, LINE_SZ);
-            g.drawLine(x-3, y-4, x-3, y+15, LINE_SZ);
-            g.drawLine(x-3, y+15, x+8, y+15, LINE_SZ);
-            g.drawLine(x+8, y+15, x+8, y+12, LINE_SZ);
+            poly({{cx, float(y) - 1.0f}, {cx, lift}, {left, lift}, {left, loopAt(0)}, {cx, loopAt(0)}});
+            joints.push_back({cx, loopAt(0)});
             break;
     }
-    
+
+    const auto wireColour = opOn ? (hero ? AVDexedTheme::oceanTop : DXLookNFeel::fillColour) : AVDexedTheme::outline;
+    g.setColour(wireColour);
+    g.strokePath(wires, PathStrokeType(LINE_SZ, PathStrokeType::mitered, PathStrokeType::butt));
+    // Dots are solid, in exactly the colour of their wire.
+    const float dot = LINE_SZ * (hero ? 2.4f : 1.5f);
+    for (const auto& joint : joints)
+        g.fillEllipse(Rectangle<float>(dot, dot).withCentre(joint));
 }
 
 void AlgoDisplay::paint(Graphics &g) {
-    g.setColour(DXLookNFeel::fillColour);
-    g.fillRect(1, 3, 20, 15);
+    const float scale = jmin(float(getWidth()) / 152.0f, float(getHeight()) / 91.0f);
+    heroTransform = AffineTransform::scale(scale).translated((getWidth() - 152 * scale) * (hero ? 0.5f : 0.0f),
+                                                             (getHeight() - 91 * scale) * 0.5f);
+    g.addTransform(heroTransform);
+    g.setFont(AVDexedTheme::font(11.5f, "SemiBold"));
+    // Empty 6×4 grid of the classic algorithm panel; operators fill their cells.
+    g.setColour(AVDexedTheme::track.withAlpha(hero ? 0.13f : 0.6f));
+    for (int column = 0; column < 6; ++column)
+        for (int row = 0; row < 4; ++row)
+            g.fillRoundedRectangle(float(column * 25 + 2), float(row * 21 + 4), 18.0f, 14.0f, hero ? 3.0f : 2.5f);
     int algo = algoValue;
-    g.setColour(Colours::white);
-    g.drawText(juce::String(algo), 1, 3, 20, 15, Justification::centred, true);
+    if (!hero) {
+        g.setColour(DXLookNFeel::fillColour);
+        g.fillRoundedRectangle(1.0f, 3.0f, 20.0f, 15.0f, 2.5f);
+        g.setColour(Colours::white);
+        g.drawText(juce::String(algo), 1, 3, 20, 15, Justification::centred, true);
+    }
     
     switch(algo-1) {
         case 0:
@@ -378,3 +449,90 @@ void AlgoDisplay::paint(Graphics &g) {
     }
 }
 
+
+void AlgoDisplay::setHeroStyle(bool shouldUseHeroStyle) {
+    hero = shouldUseHeroStyle;
+    setInterceptsMouseClicks(hero, false);
+    repaint();
+}
+
+void AlgoDisplay::setLevels(const std::array<float, 6>& newLevels) {
+    bool moving = false;
+    for (size_t i = 0; i < levels.size(); ++i) {
+        levelTargets[i] = jlimit(0.0f, 1.0f, newLevels[i]);
+        moving |= std::abs(levelTargets[i] - levels[i]) > 0.002f;
+    }
+    if (moving && hero && !isTimerRunning()) {
+        lastGlowTick = Time::getMillisecondCounterHiRes();
+        startTimerHz(60);
+    }
+}
+
+void AlgoDisplay::timerCallback() {
+    // Exponential ease with time constants of 45 ms rising and 140 ms
+    // falling: about 100 ms to fade in and 400 ms to fade out.
+    const double now = Time::getMillisecondCounterHiRes();
+    const float elapsed = float(jlimit(1.0, 100.0, now - lastGlowTick));
+    lastGlowTick = now;
+    const float rise = 1.0f - std::exp(-elapsed / 45.0f);
+    const float fall = 1.0f - std::exp(-elapsed / 140.0f);
+    bool moving = false;
+    for (size_t i = 0; i < levels.size(); ++i) {
+        const float target = levelTargets[i];
+        float next = levels[i] + (target - levels[i]) * (target > levels[i] ? rise : fall);
+        if (std::abs(target - next) <= 0.002f) next = target;
+        else moving = true;
+        levels[i] = next;
+    }
+    repaint();
+    if (!moving) stopTimer();
+}
+
+int AlgoDisplay::operatorAt(Point<float> position) const {
+    for (size_t i = 0; i < opBounds.size(); ++i)
+        if (opBounds[i].expanded(4.0f).contains(position))
+            return int(i);
+    return -1;
+}
+
+void AlgoDisplay::mouseMove(const MouseEvent& event) {
+    if (!hero) return;
+    const int op = operatorAt(event.position);
+    if (op == hoveredOp) return;
+    hoveredOp = op;
+    setMouseCursor(op >= 0 ? MouseCursor::PointingHandCursor : MouseCursor::NormalCursor);
+    setTooltip(op >= 0 ? AVDexedLanguageService::getInstance().format("operatorOpen", {{"number", String(op + 1)}}) : String());
+    repaint();
+}
+
+void AlgoDisplay::mouseExit(const MouseEvent&) {
+    if (hoveredOp < 0) return;
+    hoveredOp = -1;
+    setTooltip({});
+    repaint();
+}
+
+void AlgoDisplay::mouseUp(const MouseEvent& event) {
+    if (!hero || event.mouseWasDraggedSinceMouseDown()) return;
+    const int op = operatorAt(event.position);
+    if (op >= 0 && onOperatorClicked) onOperatorClicked(op);
+}
+
+String AlgoDisplay::frequencyText(int op) const {
+    const auto value = [this, op](const String& id) {
+        const auto* parameter = state.getRawParameterValue(id);
+        return parameter != nullptr ? parameter->load() : 0.0f;
+    };
+    const float coarse = std::round(value(IDs::frequencyCoarse.op(op).name));
+    const float fine = std::round(value(IDs::frequencyFine.op(op).name));
+    if (value(IDs::mode.op(op).name) >= 0.5f) {
+        const double hz = std::pow(10.0, int(coarse) & 3) * std::exp(2.30258509299404568402 * fine / 100.0);
+        // String(double, 0) keeps every digit in JUCE, so whole hertz are rounded explicitly.
+        return (hz < 100.0 ? String(hz, hz < 10.0 ? 2 : 1) : String(roundToInt(hz))) + " Hz";
+    }
+    const float ratio = (coarse == 0.0f ? 0.5f : coarse) * (1.0f + fine / 100.0f);
+    auto text = String(ratio, 2);
+    while (text.containsChar('.') && (text.endsWithChar('0') || text.endsWithChar('.')))
+        text = text.dropLastCharacters(1);
+    return String::fromUTF8("×") + text;
+}

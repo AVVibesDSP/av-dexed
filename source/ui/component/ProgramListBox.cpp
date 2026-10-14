@@ -55,6 +55,10 @@ void ProgramListBox::setCartridge(Cartridge &cart) {
     cartContent = cart;
     cartContent.getProgramNames(programNames);
     hasContent = true;
+    for (int i = 0; i < 32; ++i) {
+        labels[i]->setTitle(String(i + 1) + String::fromUTF8(" · ") + programNames[i]);
+        labels[i]->setTooltip(labels[i]->getTitle());
+    }
     repaint();
 }
 
@@ -72,6 +76,8 @@ Cartridge &ProgramListBox::getCurrentCart() {
 }
 
 bool ProgramListBox::keyPressed(const KeyPress &key, Component *originatingComponent) {
+    if (AVDexedTheme::noteKeyboardNavigation(key))
+        if (auto* top = getTopLevelComponent()) top->repaint();
     ProgramLabel *programLabel = dynamic_cast<ProgramLabel*>(getCurrentlyFocusedComponent());
     if ( programLabel == nullptr ) 
         return false;
@@ -112,6 +118,6 @@ bool ProgramListBox::keyPressed(const KeyPress &key, Component *originatingCompo
     return true;
 }
 
-void ProgramListBox::paint(Graphics &g) {
-    g.fillAll(DXLookNFeel::background);
+void ProgramListBox::paint(Graphics &) {
+    // Transparent: the cells sit directly on the manager's panel.
 }

@@ -22,6 +22,8 @@
 //[Headers]     -- You can add your own extra header files here --
 #include <JuceHeader.h>
 #include "Tunings.h"
+#include "../AVDexedLanguage.h"
+#include "../DXLookNFeel.h"
 //[/Headers]
 
 
@@ -34,7 +36,7 @@
     Describe your class and how it works here!
                                                                     //[/Comments]
 */
-class TuningShow  : public Component
+class TuningShow  : public Component, private juce::ChangeListener
 {
 public:
     //==============================================================================
@@ -54,9 +56,12 @@ public:
 private:
     //[UserVariables]   -- You can add your own custom variables in this section.
     Tunings::Tuning tuning;
+    DXLookNFeel AVLookAndFeel;
     TextEditor *sclt, *kbmt;
     TableListBox *table;
     std::unique_ptr<surgesynthteam::TuningTableListBoxModel> mod;
+    void AVRefreshLanguage();
+    void changeListenerCallback(juce::ChangeBroadcaster*) override;
     //[/UserVariables]
 
     //==============================================================================

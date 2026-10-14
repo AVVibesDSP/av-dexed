@@ -13,6 +13,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by AV Vibes, 2026 (AV Dexed): carrier detection used for voice
+ * state and the operator glow.
  */
 
 #ifndef SYNTH_DX7NOTE_H_
@@ -52,6 +55,9 @@ public:
     void keyup();
     
     bool isPlaying();
+    /** True when at least one carrier is still at or above minimumAmp (same
+        units as VoiceStatus::amp). */
+    bool hasAudibleCarrier(uint32_t minimumAmp);
     
     // PG:add the update
     void update(const uint8_t patch[156], int midinote, int velocity, int channel);

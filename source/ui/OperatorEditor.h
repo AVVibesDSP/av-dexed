@@ -6,7 +6,7 @@
 #include "component/EnvDisplay.h"
 #include "util/AudioComponentContainer.h"
 
-class OperatorEditor : public Component {
+class OperatorEditor : public Component, private juce::Timer {
 public:
     OperatorEditor (DexedAudioProcessor &processor, int num);
     ~OperatorEditor() override;
@@ -16,6 +16,9 @@ public:
     void updateEnvPos(char pos);
     void mouseDown(const MouseEvent& e) override;
     void toggleOpSwitch();
+    void applyLanguage();
+    /** Briefly outlines the panel, e.g. after choosing it in Play's algorithm. */
+    void flashHighlight();
 
     void paint (juce::Graphics& g) override;
     void resized() override;
@@ -25,8 +28,13 @@ private:
     int internalOp;
 
     String opNum;
-    Image light;
-    Image background;
+    int AVOperatorIndex = 0;
+    juce::Component* AVFrequencyDisplay = nullptr;
+    struct AVLabel { String key; Rectangle<int> bounds; bool heading = false; };
+    std::vector<AVLabel> AVLabels;
+    void AVPlace(const String& id, Rectangle<int> bounds);
+    void timerCallback() override;
+    float AVFlash = 0.0f;
 
     std::unique_ptr<EnvDisplay> envDisplay;
     std::unique_ptr<ToggleButton> opSwitch;

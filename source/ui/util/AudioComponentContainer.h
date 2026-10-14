@@ -53,9 +53,9 @@ public:
             auto *choiceParam = dynamic_cast<juce::AudioParameterChoice *>(param);
             if ( choiceParam != nullptr ) {
                const auto &choices = choiceParam->choices;
-               for ( int i = 0; i < choices.size(); ++i ) {
-                    comboBox->addItem(choices[i], i + 1);
-                }
+               if (comboBox->getNumItems() == 0)
+                    for (int i = 0; i < choices.size(); ++i)
+                        comboBox->addItem(choices[i], i + 1);
             } else {
                 jassertfalse;
             }

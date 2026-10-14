@@ -1,0 +1,22 @@
+<svg preserveAspectRatio="xMidYMid meet" width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- Authorized adaptation of AV Vibes vector artwork; provenance in doc/THIRD_PARTY_NOTICES.md. -->
+<g id="Info Icon | VEC | 15x15px | at(-1114,-343) | fill:linGrad(#E0E0E0&#62;#9A9A9A)">
+<path d="M7.5 6.81818C7.87656 6.81818 8.18182 7.12344 8.18182 7.5V10.2273C8.18182 10.6038 7.87656 10.9091 7.5 10.9091C7.12344 10.9091 6.81818 10.6038 6.81818 10.2273V7.5C6.81818 7.12344 7.12344 6.81818 7.5 6.81818Z" fill="url(#paint0_linear_0_4)"/>
+<path d="M7.50666 4.09091C7.88322 4.09091 8.18848 4.39617 8.18848 4.77273C8.18848 5.14929 7.88322 5.45455 7.50666 5.45455H7.5C7.12344 5.45455 6.81818 5.14929 6.81818 4.77273C6.81818 4.39617 7.12344 4.09091 7.5 4.09091H7.50666Z" fill="url(#paint1_linear_0_4)"/>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M7.5 0C11.6421 0 15 3.35786 15 7.5C15 11.6421 11.6421 15 7.5 15C3.35786 15 0 11.6421 0 7.5C0 3.35786 3.35786 0 7.5 0ZM7.5 1.36364C4.11098 1.36364 1.36364 4.11098 1.36364 7.5C1.36364 10.889 4.11098 13.6364 7.5 13.6364C10.889 13.6364 13.6364 10.889 13.6364 7.5C13.6364 4.11098 10.889 1.36364 7.5 1.36364Z" fill="url(#paint2_linear_0_4)"/>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_4" x1="7.5" y1="0" x2="7.5" y2="15" gradientUnits="userSpaceOnUse">
+<stop stop-color="#E0E0E0"/>
+<stop offset="1" stop-color="#9A9A9A"/>
+</linearGradient>
+<linearGradient id="paint1_linear_0_4" x1="7.5" y1="0" x2="7.5" y2="15" gradientUnits="userSpaceOnUse">
+<stop stop-color="#E0E0E0"/>
+<stop offset="1" stop-color="#9A9A9A"/>
+</linearGradient>
+<linearGradient id="paint2_linear_0_4" x1="7.5" y1="0" x2="7.5" y2="15" gradientUnits="userSpaceOnUse">
+<stop stop-color="#E0E0E0"/>
+<stop offset="1" stop-color="#9A9A9A"/>
+</linearGradient>
+</defs>
+</svg>

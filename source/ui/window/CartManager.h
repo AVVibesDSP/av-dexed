@@ -23,6 +23,8 @@
 
 #include "../JuceLibraryCode/JuceHeader.h"
 #include "PluginData.h"
+#include "../AVDexedLanguage.h"
+#include "../AVDexedTheme.h"
 #include "../component/ProgramListBox.h"
 #include "PluginData.h"
 
@@ -38,19 +40,15 @@ public:
     }
 
     void paint(Graphics& g) override {
-        g.setColour(Colours::whitesmoke);
+        g.setFont(AVDexedTheme::font(10.5f));
+        g.setColour(AVDexedTheme::textSecondary);
+        auto& language = AVDexedLanguageService::getInstance();
         if ( file.exists() ) {
-            g.setFont(g.getCurrentFont().withStyle(Font::underlined));
-            TextLayout layout;
-            AttributedString attributedString(file.getFileName());
-            attributedString.setFont(g.getCurrentFont());
-            layout.createLayout(attributedString, 1000.0f);
-            clickableArea = layout.getWidth();
-            g.drawText(file.getFileName(), 0, 0, getWidth(), getHeight(), Justification::right);
-            g.setFont(g.getCurrentFont().withStyle(Font::plain));
-            g.drawText("Based on cartridge: ", 0, 0, getWidth() - (clickableArea + 2), getHeight(), Justification::right);
+            g.setColour(AVDexedTheme::oceanHighlight);
+            g.drawText(language.format("basedOnBank", {{ "name", file.getFileName() }}), getLocalBounds(), Justification::centredRight);
+            clickableArea = static_cast<float>(getWidth());
         } else {
-            g.drawText("[No reference to original cartridge]", 0, 0, getWidth(), getHeight(), Justification::right);
+            g.drawText(language.text("noBankReference"), getLocalBounds(), Justification::centredRight);
             clickableArea = 0;
         }
     }
@@ -64,7 +62,7 @@ public:
 };
 
 class CartManager : public Component, public Button::Listener, public DragAndDropContainer, public FileBrowserListener
-    , public ProgramListBoxListener, public KeyListener {
+    , public ProgramListBoxListener, public KeyListener, private ChangeListener {
     std::unique_ptr<TextButton> newButton;
     std::unique_ptr<TextButton> loadButton;
     std::unique_ptr<TextButton> saveButton;
@@ -90,6 +88,8 @@ class CartManager : public Component, public Button::Listener, public DragAndDro
     DexedAudioProcessorEditor *mainWindow;
 
     void showSysexConfigMsg();
+    void AVRefreshLanguage();
+    void changeListenerCallback(ChangeBroadcaster*) override;
 
     std::vector<Component*> focusOrder;
 

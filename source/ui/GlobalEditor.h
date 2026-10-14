@@ -43,6 +43,7 @@ public:
     void updatePitchPos(int pos);
     void updateVu(float v);
     void updateDisplay();
+    void applyLanguage();
     ProgramSelector *programs;
 
 #ifdef IMPLEMENT_MidiMonitor
@@ -63,10 +64,11 @@ public:
 private:
     //[UserVariables]   -- You can add your own custom variables in this section.
     DexedAudioProcessor &processor;
+    struct AVLabel { String key; Rectangle<int> bounds; bool heading = false; };
+    std::vector<AVLabel> AVLabels;
+    std::vector<Rectangle<float>> AVPanels;
+    void AVPlace(const String& id, Rectangle<int> bounds);
     std::unique_ptr<ParameterObserver> observer;
-
-    Image background;
-    Image imageLight;
 
     std::unique_ptr<Component> aboutBox;
     //[/UserVariables]
@@ -79,8 +81,8 @@ private:
     std::unique_ptr<VuMeterOutput> vuOutput;
     std::unique_ptr<juce::ToggleButton> monoMode;
     std::unique_ptr<ProgramSelector> programSelector;
-    std::unique_ptr<juce::ImageButton> aboutButton;
-    std::unique_ptr<ComboBoxImage> lfoType;
+    std::unique_ptr<juce::TextButton> aboutButton;
+    std::unique_ptr<WaveformSelector> lfoType;
     std::unique_ptr<AudioComponentContainer> binder;
 
     std::unique_ptr<juce::MouseListener> contextMenuAdapter;

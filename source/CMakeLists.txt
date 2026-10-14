@@ -1,6 +1,7 @@
-set(BaseTargetName Dexed)
+set(BaseTargetName AVDexed)
 
 set(DEXED_JUCE_FORMATS Standalone)
+option(DEXED_COPY_PLUGIN_AFTER_BUILD "Copy built plugin formats into user plugin folders" OFF)
 
 if(NOT DEXED_SKIP_VST3)
   list(APPEND DEXED_JUCE_FORMATS VST3)
@@ -13,27 +14,27 @@ endif()
 message(STATUS "Building Dexed in formats: ${DEXED_JUCE_FORMATS}")
 
 juce_add_plugin("${BaseTargetName}"
-        VERSION "1.1.0"
-        ICON_BIG "../assets/ui/dexedIcon.png"
-        ICON_SMALL "../assets/ui/dexedIcon.png"
-        COMPANY_NAME "Digital Suburban"
+        VERSION "${PROJECT_VERSION}"
+        COMPANY_NAME "AV Vibes"
         IS_SYNTH TRUE
         NEEDS_MIDI_INPUT TRUE
         NEEDS_MIDI_OUTPUT TRUE
         IS_MIDI_EFFECT FALSE
         EDITOR_WANTS_KEYBOARD_FOCUS TRUE
-        PLUGIN_MANUFACTURER_CODE DGSB
-        PLUGIN_CODE Dexd
+        PLUGIN_MANUFACTURER_CODE AVVB
+        PLUGIN_CODE AVDx
         FORMATS ${DEXED_JUCE_FORMATS}
-        PRODUCT_NAME "Dexed"
-        DESCRIPTION "Dexed FM Synth"
-        BUNDLE_ID "com.digitalsuburban.Dexed"
-        COPY_PLUGIN_AFTER_BUILD TRUE
+        PRODUCT_NAME "AV Dexed"
+        DESCRIPTION "AV Dexed free FM instrument"
+        BUNDLE_ID "org.avvibes.avdexed"
+        ICON_BIG "${PROJECT_SOURCE_DIR}/assets/branding/AVDexed_AppIcon.png"
+        ICON_SMALL "${PROJECT_SOURCE_DIR}/assets/branding/AVDexed_AppIcon.png"
+        COPY_PLUGIN_AFTER_BUILD ${DEXED_COPY_PLUGIN_AFTER_BUILD}
 )
 
 clap_juce_extensions_plugin(TARGET ${BaseTargetName}
-        CLAP_ID "com.digital-suburban.dexed"
-        CLAP_FEATURES instrument FM DX7)
+        CLAP_ID "org.avvibes.avdexed"
+        CLAP_FEATURES instrument FM)
 
 juce_generate_juce_header(${PROJECT_NAME})
 
@@ -53,9 +54,14 @@ target_sources(${BaseTargetName} PRIVATE
 	msfa/porta.cpp
 
 	PluginProcessor.cpp
+	AVDexedStandaloneApp.cpp
 
 	PluginData.cpp
 	PluginFx.cpp
+	effects/AVDexedReverb.cpp
+	effects/AVDexedChorus.cpp
+	effects/AVDexedDelay.cpp
+	effects/AVDexedFxChain.cpp
 	Tuning.cpp
 
 	core/Cartridge.cpp
@@ -65,11 +71,16 @@ target_sources(${BaseTargetName} PRIVATE
 	engine/EngineOpl.cpp
 
     ui/PluginEditor.cpp
+	ui/AVDexedPlayView.cpp
+	ui/AVDexedLanguage.cpp
+	ui/AVDexedKeyboard.cpp
+	ui/AVDexedResizeGrip.cpp
 		ui/window/CartManager.cpp
 	ui/DXLookNFeel.cpp
     ui/GlobalEditor.cpp
 	ui/OperatorEditor.cpp
 		ui/window/ParamDialog.cpp
+    ui/window/AVDexedSettingsPanel.cpp
 		ui/window/TuningShow.cpp
 	ui/component/AlgoDisplay.cpp
 	ui/component/DXComponents.cpp
@@ -109,6 +120,7 @@ target_compile_definitions(${BaseTargetName} PUBLIC
     JUCE_ALSA=$<IF:$<BOOL:${DEXED_ALSA}>,1,0>
     JUCE_MODAL_LOOPS_PERMITTED=0 # needed for FileBrowser in CartManager
     JUCE_REPORT_APP_USAGE=0
+    JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
     # JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS=1     # REVERT BACK SINCE THERE IS AN ISSUE WITH JUCE 7.0.0
 )
 
@@ -120,6 +132,7 @@ PRIVATE
     juce::juce_audio_plugin_client
     juce::juce_audio_processors
     juce::juce_audio_utils
+    juce::juce_dsp
     juce::juce_core
     juce::juce_data_structures
     juce::juce_events
@@ -133,3 +146,37 @@ PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
 )
+
+if(DEXED_BUILD_TESTS)
+    target_compile_definitions(${BaseTargetName} PRIVATE AVDEXED_TESTING=1)
+    juce_add_console_app(AVDexedRegressionTests
+        PRODUCT_NAME "AV Dexed Regression Tests")
+    juce_generate_juce_header(AVDexedRegressionTests)
+    target_sources(AVDexedRegressionTests PRIVATE
+        ../tests/AVDexedFxChainTests.cpp
+        ../tests/AVDexedStateTests.cpp
+        ../tests/AVDexedUIEvidence.cpp)
+    target_include_directories(AVDexedRegressionTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../libs
+        ${CMAKE_CURRENT_SOURCE_DIR}/../libs/clap-juce-extensions/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../libs/MTS-ESP/Client
+        ${CMAKE_CURRENT_SOURCE_DIR}/../libs/tuning-library/include
+        ${CMAKE_CURRENT_BINARY_DIR}/AVDexedRegressionTests_artefacts/JuceLibraryCode
+        ${CMAKE_CURRENT_BINARY_DIR}/../assets/juce_binarydata_DexedResources/JuceLibraryCode)
+    target_compile_definitions(AVDexedRegressionTests PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        AVDEXED_TESTING=1)
+    target_compile_features(AVDexedRegressionTests PRIVATE cxx_std_20)
+    target_link_libraries(AVDexedRegressionTests PRIVATE
+        ${BaseTargetName}
+        juce::juce_audio_basics
+        juce::juce_dsp
+        juce::juce_core
+        juce::juce_events
+        juce::juce_gui_basics
+        juce::juce_recommended_config_flags)
+    add_test(NAME AVDexedRegressionTests
+        COMMAND $<TARGET_FILE:AVDexedRegressionTests>)
+endif()

@@ -17,8 +17,57 @@ static void setApvtsParamBool(DexedApvts& apvts, const juce::String& paramId, bo
         param->setValueNotifyingHost(value ? 1.0f : 0.0f);
 }
 
-void setStateInformation10(DexedAudioProcessor* proc, XmlElement* root) {
+bool setStateInformation10(DexedAudioProcessor* proc, XmlElement* root) {
     auto& apvts = proc->parameters;
+
+    // Validate the complete legacy payload before changing a live parameter.
+    // A short blob previously made Program read 155 bytes past its allocation.
+    const auto* dexedBlob = root->getChildByName("dexedBlob");
+    NamedValueSet blobSet;
+    if (dexedBlob == nullptr)
+        return false;
+    blobSet.setFromXmlAttributes(*dexedBlob);
+    const auto program = blobSet["program"];
+    const auto* programData = program.getBinaryData();
+    if (programData == nullptr || programData->getSize() < Program::PROGRAM_SIZE
+        || programData->getSize() > Program::PROGRAM_SIZE + 1)
+        return false;
+
+    juce::String sclData, kbmData;
+    const auto* tuningParent = root->getChildByName("dexedTuning");
+    if (tuningParent != nullptr) {
+        if (const auto* scl = tuningParent->getChildByName("scl")) sclData = scl->getAllSubText();
+        if (const auto* kbm = tuningParent->getChildByName("kbm")) kbmData = kbm->getAllSubText();
+        if (sclData.getNumBytesAsUTF8() > MAX_SCL_KBM_FILE_SIZE
+            || kbmData.getNumBytesAsUTF8() > MAX_SCL_KBM_FILE_SIZE)
+            return false;
+        try {
+            if (sclData.isNotEmpty() && kbmData.isNotEmpty()) {
+                Tunings::Tuning tuning(Tunings::parseSCLData(sclData.toStdString()), Tunings::parseKBMData(kbmData.toStdString()));
+            } else if (sclData.isNotEmpty()) {
+                Tunings::Tuning tuning(Tunings::parseSCLData(sclData.toStdString()));
+            } else if (kbmData.isNotEmpty()) {
+                Tunings::Tuning tuning(Tunings::parseKBMData(kbmData.toStdString()));
+            }
+        } catch (const std::exception&) { return false; }
+    }
+    for (const auto* name : { "cutoff", "reso", "gain", "engineType", "monoMode", "transpose12AsScale", "glissando", "portamento", "currentProgram" }) {
+        if (root->hasAttribute(name) && !std::isfinite(root->getDoubleAttribute(name)))
+            return false;
+    }
+    const int legacyProgram = root->getIntAttribute("currentProgram", proc->getCurrentProgram());
+    if (legacyProgram < 0 || legacyProgram >= proc->getNumPrograms())
+        return false;
+
+    proc->panic();
+    bool newParameters = false;
+    for (auto* parameter : proc->getParameters()) {
+        auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(parameter);
+        if (ranged == nullptr) continue;
+        newParameters |= ranged->paramID == IDs::masterVolume.name;
+        if (newParameters)
+            ranged->setValueNotifyingHost(ranged->getDefaultValue());
+    }
 
     setApvtsParam(apvts, IDs::cutoff.name, (float)root->getDoubleAttribute("cutoff", 1.0));
     setApvtsParam(apvts, IDs::resonance.name, (float)root->getDoubleAttribute("reso", 0.0));
@@ -33,32 +82,30 @@ void setStateInformation10(DexedAudioProcessor* proc, XmlElement* root) {
     setApvtsParam(apvts, IDs::portamentoTm.name, oldPortamento * 99.0f / 127.0f);
 
     // Load program data from dexedBlob
-    XmlElement* dexedBlob = root->getChildByName("dexedBlob");
-    if (dexedBlob != nullptr) {
-        NamedValueSet blobSet;
-        blobSet.setFromXmlAttributes(*dexedBlob);
-        var program = blobSet["program"];
-        if (!program.isVoid() && program.getBinaryData() != nullptr) {
-            const auto* data = static_cast<const uint8_t*>(program.getBinaryData()->getData());
-            proc->applyProgram(Program(data));
+    proc->applyProgram(Program(static_cast<const uint8_t*>(programData->getData())));
+
+    // Restore the visible context without loading a slot over the voice that
+    // was embedded in the legacy state.
+    if (legacyProgram >= 0 && legacyProgram < proc->getNumPrograms())
+        proc->setCurrentProgramSelection(legacyProgram);
+
+    const juce::String sourcePath = root->getStringAttribute("activeFileCartridge");
+    if (sourcePath.isNotEmpty()) {
+        const juce::File sourceFile(sourcePath);
+        if (sourceFile.existsAsFile()) {
+            Cartridge restoredCart;
+            if (restoredCart.load(sourceFile) == 0)
+                proc->loadCartridge(restoredCart);
         }
+        proc->activeFileCartridge = sourceFile;
     }
 
     // Load tuning from dexedTuning child
-    XmlElement* tuningParent = root->getChildByName("dexedTuning");
     if (tuningParent != nullptr) {
         proc->retuneToStandard();
-        auto* sclx = tuningParent->getChildByName("scl");
-        if (sclx && sclx->getFirstChildElement() && sclx->getFirstChildElement()->isTextElement()) {
-            std::string s = sclx->getFirstChildElement()->getText().toStdString();
-            if (s.size() > 1)
-                proc->applySCLTuning(s);
-        }
-        auto* kbmx = tuningParent->getChildByName("kbm");
-        if (kbmx && kbmx->getFirstChildElement() && kbmx->getFirstChildElement()->isTextElement()) {
-            std::string k = kbmx->getFirstChildElement()->getText().toStdString();
-            if (k.size() > 1)
-                proc->applyKBMMapping(k);
-        }
+        if (sclData.isNotEmpty()) proc->applySCLTuning(sclData.toStdString());
+        if (kbmData.isNotEmpty()) proc->applyKBMMapping(kbmData.toStdString());
     }
+    proc->captureAVPresetBaseline();
+    return true;
 }

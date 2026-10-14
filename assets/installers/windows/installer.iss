@@ -1,5 +1,5 @@
 #ifndef Publisher
-#define Publisher "Digital Suburban"
+#define Publisher "AV Vibes"
 #endif
 
 #ifndef Version
@@ -111,8 +111,8 @@ function get_data_path(Param: string): string;
 begin
   if IsAdminInstallMode then
     // System-wide → ProgramData
-    Result := ExpandConstant('{commonappdata}')
+    Result := ExpandConstant('{commonappdata}\AV Vibes\AV Dexed')
   else
-    // Per-user → LocalAppData
-    Result := ExpandConstant('{localappdata}');
+    // Keep installed cartridge data beside the user's AV Dexed settings.
+    Result := ExpandConstant('{userappdata}\AV Vibes\AV Dexed');
 end;

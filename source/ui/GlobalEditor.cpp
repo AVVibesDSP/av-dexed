@@ -1,3 +1,4 @@
+#include <map>
 
 #include "GlobalEditor.h"
 #include "DXLookNFeel.h"
@@ -5,6 +6,8 @@
 #include "ui/util/ContextMenuAdapter.h"
 #include "window/AboutBox.h"
 #include "../debugger/ValueTreeDebugger.h"
+#include "AVDexedTheme.h"
+#include "AVDexedLanguage.h"
 
 /**
  * Ugly but useful midi monitor to know if you are really sending/receiving something from the DX7
@@ -13,37 +16,28 @@
 #ifdef IMPLEMENT_MidiMonitor
 class MidiMonitor : public Component {
     SysexComm *midi;
-    Image light;
-    int imageHeight;
-    int imageHeight2;
-    int imageWidth;
-
-    SharedResourcePointer<DXLookNFeel> lookAndFeel;
 public:
     MidiMonitor(SysexComm *sysexComm) {
         midi = sysexComm;
-        light = lookAndFeel->imageLight;
-        imageHeight = light.getHeight();
-        imageHeight2 = imageHeight / 2;
-        imageWidth = light.getWidth();
-
         TRACE("WARNING! This functionality is a candidate for deprecation/obsolescence!");
     }
 
     void paint(Graphics &g) {
         if ( ! (midi->isInputActive() || midi->isOutputActive() ) )
             return;
-        g.setColour(Colours::white);
+        g.setColour(AVDexedTheme::textPrimary);
 
         if ( midi->isInputActive() ) {
-            g.drawSingleLineText("DX7 IN", 24, 18);
-            g.drawImage(light, 0, 0, imageWidth, imageHeight2, 0, midi->inActivity ? imageHeight2 : 0, imageWidth, imageHeight2);
+            g.drawSingleLineText("DEXED IN", 24, 18);
+            g.setColour(midi->inActivity ? AVDexedTheme::oceanHighlight : Colour(0xff34404a));
+            g.fillEllipse(4.0f, 6.0f, 10.0f, 10.0f);
             midi->inActivity = false;
         }
 
         if ( midi->isOutputActive() ) {
-            g.drawSingleLineText("DX7 OUT", 24, 36);
-            g.drawImage(light, 0, 18, imageWidth, imageHeight2, 0, midi->outActivity ? imageHeight2 : 0, imageWidth, imageHeight2);
+            g.drawSingleLineText("DEXED OUT", 24, 36);
+            g.setColour(midi->outActivity ? AVDexedTheme::oceanHighlight : Colour(0xff34404a));
+            g.fillEllipse(4.0f, 24.0f, 10.0f, 10.0f);
             midi->outActivity = false;
         }
     }
@@ -217,13 +211,12 @@ GlobalEditor::GlobalEditor(DexedAudioProcessor &processor, juce::Component *pare
     tune->setBounds(190, 9, 34, 34);
     binder->addAndAttach(std::move(tune));
 
-    lfoType.reset(new ComboBoxImage());
+    lfoType.reset(new WaveformSelector());
     addAndMakeVisible(lfoType.get());
     lfoType->setExplicitFocusOrder(13);
     lfoType->setName(IDs::lfoWaveform.name);
     lfoType->setBounds(583, 8, 36, 26);
     binder->attach(lfoType.get());
-    lfoType->setImage(lookAndFeel->imageLFO);
 
     // EVENT DRIVEN COMPONENTS
 
@@ -300,9 +293,12 @@ GlobalEditor::GlobalEditor(DexedAudioProcessor &processor, juce::Component *pare
     addAndMakeVisible(programSelector.get());
     programSelector->setBounds(153, 115, 112, 18);
 
-    aboutButton.reset(new juce::ImageButton());
+    aboutButton.reset(new juce::TextButton("DEXED"));
     addAndMakeVisible(aboutButton.get());
-    aboutButton->setButtonText(juce::String());
+    aboutButton->setButtonText("DEXED");
+    aboutButton->setTitle("About AV Dexed");
+    aboutButton->setColour(TextButton::textColourOffId, AVDexedTheme::textPrimary);
+    aboutButton->setColour(TextButton::textColourOnId, AVDexedTheme::textPrimary);
     aboutButton->onClick = [this]() {
         juce::ModifierKeys modifiers = juce::ModifierKeys::getCurrentModifiers();
         if( modifiers.isAltDown()  || modifiers.isShiftDown() ) {
@@ -315,18 +311,18 @@ GlobalEditor::GlobalEditor(DexedAudioProcessor &processor, juce::Component *pare
         aboutBox->centreWithSize(aboutBox->getWidth(), aboutBox->getHeight());
         aboutBox->enterModalState(true,{});
     };
-    aboutButton->setImages(false, true, false,
-                            juce::Image(), 1.000f, juce::Colour(0x00000000),
-                            juce::Image(), 1.000f, juce::Colour(0x00000000),
-                            juce::Image(), 1.000f, juce::Colour(0x00000000));
     aboutButton->setBounds(8, 11, 135, 46);
-    aboutButton->setTitle("About DEXED");
 
-    setSize(864, 144);
+    for (auto* child : getChildren()) {
+        if (auto* slider = dynamic_cast<DXSlider*>(child)) {
+            slider->setTextBoxStyle(Slider::TextBoxBelow, false, 60, 16);
+            slider->setColour(Slider::textBoxOutlineColourId, Colours::transparentBlack);
+            slider->setColour(Slider::textBoxBackgroundColourId, Colours::transparentBlack);
+        }
+    }
+    setSize(1392, 184);
 
     programs = programSelector.get();
-    background = lookAndFeel->imageGlobal;
-    imageLight = lookAndFeel->imageLight;
     setTitle("Global Parameters");
     setFocusContainerType(FocusContainerType::focusContainer);
     setWantsKeyboardFocus(true);
@@ -359,17 +355,136 @@ GlobalEditor::~GlobalEditor() {
 }
 
 //==============================================================================
-void GlobalEditor::paint(juce::Graphics& g) {
-    g.drawImage(background, 0, 0, 864, 144, 0, 0, 1728, 288);
-    g.drawImage(imageLight, 300, 70, 14, 14, 0, monoMode->getToggleState() ? 28 : 0, 28, 28);
-    g.drawImage(imageLight, 619, 102, 14, 14, 0, lfoSync->getToggleState() ? 28 : 0, 28, 28);
-    g.drawImage(imageLight, 705, 102, 14, 14, 0, oscSync->getToggleState() ? 28 : 0, 28, 28);
+void GlobalEditor::paint(Graphics& g) {
+    for (const auto& area : AVPanels) AVDexedTheme::fillBox(g, area, 0.0f);
+    auto& language = AVDexedLanguageService::getInstance();
+    for (const auto& label : AVLabels) {
+        const auto font = AVDexedTheme::font(label.heading ? 12.0f : 11.0f, label.heading ? "SemiBold" : "Medium");
+        g.setFont(font);
+        const float inkHeight = jmin(float(label.bounds.getHeight()), font.getHeight());
+        const float inkTop = float(label.bounds.getCentreY()) - inkHeight * 0.5f;
+        AVDexedTheme::textFill(g, font, AVDexedTheme::textPrimary, AVDexedTheme::textSecondary, inkTop, inkTop + inkHeight);
+        g.drawText(language.text(label.key), label.bounds, Justification::centred, true);
+    }
+}
+
+void GlobalEditor::AVPlace(const String& id, Rectangle<int> bounds) {
+    for (auto* child : getChildren()) if (child->getName() == id) {
+        child->setBounds(bounds);
+        return;
+    }
 }
 
 void GlobalEditor::resized() {
+    AVLabels.clear();
+    AVPanels.clear();
+    const int gap = 10;
+    const int available = getWidth() - gap * 4;
+    // The algorithm panel gets more room so its operator grid reads clearly.
+    const int library = roundToInt(available * 0.18f);
+    const int synthesis = roundToInt(available * 0.19f);
+    const int algorithm = roundToInt(available * 0.23f);
+    const int lfo = roundToInt(available * 0.22f);
+    const int pitch = available - library - synthesis - algorithm - lfo;
+    const int sx = library + gap;
+    const int ax = sx + synthesis + gap;
+    const int lx = ax + algorithm + gap;
+    const int px = lx + lfo + gap;
+    for (auto r : {Rectangle<int>(0, 0, library, getHeight()), {sx, 0, synthesis, getHeight()},
+                    {ax, 0, algorithm, getHeight()}, {lx, 0, lfo, getHeight()}, {px, 0, pitch, getHeight()}})
+        AVPanels.push_back(r.toFloat().reduced(0.5f));
+    aboutButton->setBounds(12, 9, 108, 27);
+    aboutButton->setButtonText("AV Dexed");
+    observer->setBounds(128, 9, library - 140, 27);
+    programSelector->setBounds(12, 43, library - 24, 32);
+    vuOutput->setBounds(12, 84, library - 24, 7);
+    const int bw = (library - 30) / 2;
+    cartButton->setBounds(12, 103, bw, 30);
+    parmButton->setBounds(18 + bw, 103, bw, 30);
+    initButton->setBounds(12, 140, bw, 30);
+    storeButton->setBounds(18 + bw, 140, bw, 30);
+
+    const int sc = (synthesis - 24) / 3;
+    const String synthIds[] {IDs::masterTuneAdj.name, IDs::cutoff.name, IDs::resonance.name,
+                             IDs::output.name, IDs::transpose.name};
+    const String synthKeys[] {"AV_MASTER_TUNE", "CUTOFF", "RESONANCE", "OUTPUT", "TRANSPOSE"};
+    for (int i = 0; i < 5; ++i) {
+        int x = sx + 12 + (i % 3) * sc;
+        int y = i < 3 ? 10 : 91;
+        AVLabels.push_back({synthKeys[i], {x, y, sc - 2, 22}});
+        AVPlace(synthIds[i], {x, y + 23, sc - 2, 56});
+    }
+    AVLabels.push_back({"MONO", {sx + 12 + 2 * sc, 95, sc - 2, 24}});
+    monoMode->setBounds(sx + 18 + 2 * sc, 128, sc - 14, 27);
+    AVLabels.push_back({"ALGORITHM", {ax + 10, 8, algorithm - 20, 22}, true});
+    algoDisplay->setBounds(ax + 10, 34, algorithm - 88, 138);
+    AVPlace(IDs::algorithm.name, {ax + algorithm - 75, 34, 62, 55});
+    AVLabels.push_back({"AV_FEEDBACK", {ax + algorithm - 80, 99, 73, 20}});
+    AVPlace(IDs::feedback.name, {ax + algorithm - 75, 119, 62, 55});
+
+    AVLabels.push_back({"LFO_WAVE", {lx + 10, 7, 128, 20}, true});
+    lfoType->setBounds(lx + 15, 29, 114, 28);
+    AVLabels.push_back({"PM_SENS", {lx + lfo - 130, 7, 115, 20}});
+    AVPlace(IDs::pitchModSens.name, {lx + lfo - 100, 27, 70, 44});
+    const int lc = (lfo - 24) / 4;
+    const String lfoIds[] {IDs::lfoRate.name, IDs::lfoDelay.name, IDs::lfoPmDepth.name, IDs::lfoAmpDepth.name};
+    const String lfoKeys[] {"SPEED", "DELAY", "PMD", "AMD"};
+    for (int i = 0; i < 4; ++i) {
+        int x = lx + 12 + i * lc;
+        AVLabels.push_back({lfoKeys[i], {x, 70, lc - 2, 20}});
+        AVPlace(lfoIds[i], {x, 91, lc - 2, 52});
+    }
+    lfoSync->setBounds(lx + 15, 149, 43, 24);
+    oscSync->setBounds(lx + lfo / 2 + 4, 149, 43, 24);
+    AVLabels.push_back({"KEY_SYNC", {lx + 61, 149, lfo / 2 - 65, 24}});
+    AVLabels.push_back({"OSC_SYNC", {lx + lfo / 2 + 50, 149, lfo / 2 - 60, 24}});
+
+    AVLabels.push_back({"PITCH_ENVELOPE", {px + 10, 6, pitch - 20, 22}, true});
+    pitchEnvDisplay->setBounds(px + 15, 32, pitch - 30, 22);
+    const int pc = (pitch - 24) / 4;
+    for (int i = 0; i < 4; ++i) {
+        int x = px + 12 + i * pc;
+        AVLabels.push_back({"L" + String(i + 1), {x, 57, pc - 1, 17}});
+        AVPlace(IDs::pitchEgLevel.idx(i).name, {x, 73, pc - 1, 43});
+        AVLabels.push_back({"R" + String(i + 1), {x, 117, pc - 1, 17}});
+        AVPlace(IDs::pitchEgRate.idx(i).name, {x, 133, pc - 1, 43});
+    }
+#ifdef IMPLEMENT_MidiMonitor
+    midiMonitor->setBounds(128, 9, library - 140, 27);
+#endif
 }
 
 void GlobalEditor::updateDisplay() {
+    repaint();
+}
+
+void GlobalEditor::applyLanguage() {
+    auto& language = AVDexedLanguageService::getInstance();
+    if (initButton) initButton->setButtonText(language.text("classicInit"));
+    if (parmButton) parmButton->setButtonText(language.text("classicSettings"));
+    if (cartButton) cartButton->setButtonText(language.text("classicBank"));
+    if (storeButton) storeButton->setButtonText(language.text("classicSave"));
+    if (aboutButton) aboutButton->setTitle(language.text("aboutDexed"));
+    setTitle(language.text("classicGlobalTitle"));
+    std::map<String, String> captions {
+        {IDs::masterTuneAdj.name, "MASTER_TUNE"}, {IDs::cutoff.name, "CUTOFF"}, {IDs::resonance.name, "RESONANCE"},
+        {IDs::output.name, "OUTPUT"}, {IDs::transpose.name, "TRANSPOSE"}, {IDs::monoMode.name, "MONO"},
+        {IDs::algorithm.name, "ALGORITHM"}, {IDs::feedback.name, "FEEDBACK"}, {IDs::lfoWaveform.name, "LFO_WAVE"},
+        {IDs::lfoRate.name, "SPEED"}, {IDs::lfoDelay.name, "DELAY"}, {IDs::lfoPmDepth.name, "PMD"},
+        {IDs::lfoAmpDepth.name, "AMD"}, {IDs::pitchModSens.name, "PM_SENS"}, {IDs::lfoKeySync.name, "KEY_SYNC"},
+        {IDs::oscKeySync.name, "OSC_SYNC"}
+    };
+    for (auto* child : getChildren()) {
+        String title;
+        if (auto found = captions.find(child->getName()); found != captions.end()) title = language.text(found->second);
+        for (int step = 0; step < 4; ++step) {
+            if (child->getName() == IDs::pitchEgLevel.idx(step).name) title = language.text("PITCH_ENVELOPE") + " L" + String(step + 1);
+            if (child->getName() == IDs::pitchEgRate.idx(step).name) title = language.text("PITCH_ENVELOPE") + " R" + String(step + 1);
+        }
+        if (title.isEmpty()) continue;
+        child->setTitle(title);
+        if (auto* tooltip = dynamic_cast<SettableTooltipClient*>(child)) tooltip->setTooltip(title);
+    }
     repaint();
 }
 

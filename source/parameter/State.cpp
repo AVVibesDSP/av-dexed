@@ -1,126 +1,356 @@
 #include "PluginProcessor.h"
 #include "parameter/Model.h"
 #include "StateLegacy.h"
+#include "midi/MidiCCHandler.h"
+#include <cstdlib>
+#include <set>
+
+namespace {
+constexpr int currentStateSchema = 2;
+constexpr auto sessionNode = "session";
+constexpr auto voiceProperty = "voice";
+constexpr auto cartridgeProperty = "cartridge";
+
+bool decodeFixedBlock(const juce::String& encoded, size_t expectedSize, juce::MemoryBlock& decoded) {
+    if (encoded.isEmpty() || !decoded.fromBase64Encoding(encoded) || decoded.getSize() != expectedSize)
+        return false;
+    return true;
+}
+
+bool avPrepareParameterState(DexedApvts& parameters, juce::ValueTree& state) {
+    std::set<juce::String> ids;
+    for (const auto& child : state) {
+        const auto id = child.getProperty(IDs::id).toString();
+        auto* parameter = parameters.getParameter(id);
+        if (id.isEmpty() || parameter == nullptr || !ids.insert(id).second || !child.hasProperty(IDs::value))
+            return false;
+        const auto text = child.getProperty(IDs::value).toString().trim();
+        char* end = nullptr;
+        const auto value = std::strtod(text.toRawUTF8(), &end);
+        const auto& range = parameter->getNormalisableRange();
+        if (end == text.toRawUTF8() || *end != '\0' || !std::isfinite(value)
+            || value < range.start - 0.0001 || value > range.end + 0.0001)
+            return false;
+    }
+    if (ids.empty())
+        return false;
+
+    // APVTS otherwise retains the last live value for a missing parameter.
+    // New controls in old sessions must start from product defaults, even if
+    // another sound had enabled effects immediately before the restore.
+    bool newParameters = false;
+    for (const auto* abstractParameter : parameters.processor.getParameters()) {
+        const auto* parameter = dynamic_cast<const juce::RangedAudioParameter*>(abstractParameter);
+        if (parameter == nullptr)
+            continue;
+        newParameters |= parameter->paramID == IDs::masterVolume.name;
+        if (!newParameters || ids.count(parameter->paramID) != 0)
+            continue;
+        juce::ValueTree child("PARAM");
+        child.setProperty(IDs::id, parameter->paramID, nullptr);
+        child.setProperty(IDs::value, parameter->convertFrom0to1(parameter->getDefaultValue()), nullptr);
+        state.addChild(child, -1, nullptr);
+    }
+    return true;
+}
+
+bool avValidateTuningData(const juce::String& scl, const juce::String& kbm) {
+    try {
+        if (scl.isNotEmpty() && kbm.isNotEmpty()) {
+            Tunings::Tuning tuning(Tunings::parseSCLData(scl.toStdString()), Tunings::parseKBMData(kbm.toStdString()));
+        } else if (scl.isNotEmpty()) {
+            Tunings::Tuning tuning(Tunings::parseSCLData(scl.toStdString()));
+        } else if (kbm.isNotEmpty()) {
+            Tunings::Tuning tuning(Tunings::parseKBMData(kbm.toStdString()));
+        }
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+}
 
 //==============================================================================
 void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
+    const juce::ScopedLock avStateLock(getCallbackLock());
     auto state = parameters.copyState();
     juce::ValueTree storage { IDs::root };
     storage.setProperty(IDs::version, DexedApvts::MODEL_VERSION, nullptr);
+    storage.setProperty("schemaVersion", currentStateSchema, nullptr);
     storage.addChild(state, -1, nullptr);
-    storage.addChild(parameters.rootVt.getChildWithName(IDs::profile).createCopy(), -1, nullptr);
+
+    auto profile = parameters.rootVt.getChildWithName(IDs::profile);
+    if (profile.isValid()) {
+        auto snapshotProfile = profile.createCopy();
+        snapshotProfile.removeChild(snapshotProfile.getChildWithName(IDs::midiCCMappings), nullptr);
+        snapshotProfile.addChild(midiCCMapper->createAVMappingsSnapshot(), -1, nullptr);
+        storage.addChild(snapshotProfile, -1, nullptr);
+    }
 
     juce::ValueTree tuningVt("tuning");
     tuningVt.setProperty("scl", juce::String(currentSCLData), nullptr);
     tuningVt.setProperty("kbm", juce::String(currentKBMData), nullptr);
     storage.addChild(tuningVt, -1, nullptr);
 
-    std::unique_ptr<juce::XmlElement> xml(storage.createXml());
-    copyXmlToBinary(*xml, destData);
+    juce::ValueTree session(sessionNode);
+    session.setProperty("currentProgram", currentProgram, nullptr);
+    session.setProperty("sourcePath", activeFileCartridge.getFullPathName(), nullptr);
+    session.setProperty("avPresetName", avPresetContextCurrent.load(std::memory_order_relaxed) ? avPresetName : juce::String(), nullptr);
+    session.setProperty("avPresetId", getAVPresetId(), nullptr);
+    session.setProperty("avKnownPresetOrigin", hasAVKnownPresetOrigin(), nullptr);
+    session.setProperty("avPresetPath", getAVPresetPath().getFullPathName(), nullptr);
+    session.setProperty("avPresetBaseline", juce::String::toHexString(static_cast<juce::int64>(avPresetBaseline.load(std::memory_order_relaxed))), nullptr);
+
+    juce::MemoryBlock voiceData(activeProgram.getRawData(), Program::PROGRAM_SIZE + 1);
+    session.setProperty(voiceProperty, voiceData.toBase64Encoding(), nullptr);
+
+    if (currentCart.containsData()) {
+        const auto* sysex = currentCart.getVoiceSysex();
+        juce::MemoryBlock cartridgeData(sysex, SYSEX_SIZE);
+        session.setProperty(cartridgeProperty, cartridgeData.toBase64Encoding(), nullptr);
+    }
+
+    storage.addChild(session, -1, nullptr);
+
+    if (auto xml = storage.createXml())
+        copyXmlToBinary(*xml, destData);
 }
 
 void DexedAudioProcessor::setStateInformation(const void* source, int sizeInBytes) {
-    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (source, sizeInBytes));
-    if (xmlState != nullptr) {
-        if (xmlState->hasTagName(parameters.rootVt.getType())) {
-            ValueTree storage = juce::ValueTree::fromXml(*xmlState);
-
-            juce::String version = storage.getProperty(IDs::version);
-            if ( version != juce::String(DexedApvts::MODEL_VERSION) ) {
-                TRACE("Incompatible state version %s (current is %s)", version.toRawUTF8(), DexedApvts::MODEL_VERSION);
-                return;
-            }
-
-            parameters.replaceState(storage.getChildWithName(IDs::parameters));
-            // replaceState() swaps the tree, keep rootVt pointing to the live one
-            if (parameters.state.getParent() != parameters.rootVt) {
-                parameters.rootVt.removeChild(parameters.rootVt.getChildWithName(IDs::parameters), nullptr);
-                parameters.rootVt.addChild(parameters.state, 0, nullptr);
-            }
-            juce::ValueTree storageProfile = storage.getChildWithName(IDs::profile);
-            parameters.rootVt.getChildWithName(IDs::profile).getChildWithName(IDs::midiCCMappings).
-                copyPropertiesAndChildrenFrom(storageProfile.getChildWithName(IDs::midiCCMappings), nullptr);
-
-            juce::ValueTree tuningVt = storage.getChildWithName("tuning");
-            if (tuningVt.isValid()) {
-                juce::String sclData = tuningVt.getProperty("scl").toString();
-                juce::String kbmData = tuningVt.getProperty("kbm").toString();
-                retuneToStandard();
-                if (sclData.isNotEmpty())
-                    applySCLTuning(sclData.toStdString());
-                if (kbmData.isNotEmpty())
-                    applyKBMMapping(kbmData.toStdString());
-            }
-        } else if ( xmlState->hasTagName("dexedState") ) {
-            // Format is 1.0 legacy
-            setStateInformation10(this, xmlState.get());
-            // implement legacy loader
-        } else {
-            TRACE("No valid state found");
-        }
-    }
+    loadAVStateInformation(source, sizeInBytes);
 }
 
-// void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
-//     // You should use this method to store your parameters in the memory block.
-//     // You could do that either as raw data, or use the XML or ValueTree classes
-//     // as intermediaries to make it easy to save and load complex data.
-//
-//     // used to SAVE plugin state
-//
-//     XmlElement dexedState("dexedState");
-//     XmlElement *dexedBlob = dexedState.createNewChildElement("dexedBlob");
-//
-//     dexedState.setAttribute("cutoff", fx.uiCutoff);
-//     dexedState.setAttribute("reso", fx.uiReso);
-//     dexedState.setAttribute("gain", fx.uiGain);
-//     dexedState.setAttribute("currentProgram", currentProgram);
-//     dexedState.setAttribute("engineType", (int) engineType);
-//     dexedState.setAttribute("masterTune", controllers.masterTune);
-//     //dexedState.setAttribute("opSwitch", controllers.opSwitch);
-//     dexedState.setAttribute("transpose12AsScale", controllers.transpose12AsScale ? 1 : 0 );
-//     dexedState.setAttribute("mpeEnabled", controllers.mpeEnabled ? 1 : 0 );
-//     dexedState.setAttribute("mpePitchBendRange", controllers.mpePitchBendRange );
-//     dexedState.setAttribute("monoMode", monoMode ? 1 : 0);
-//     dexedState.setAttribute("portamento", controllers.portamento_cc);
-//     dexedState.setAttribute("glissando", controllers.portamento_gliss_cc ? 1 : 0);
-//
-//     char mod_cfg[15];
-//     controllers.wheel.setConfig(mod_cfg);
-//     dexedState.setAttribute("wheelMod", mod_cfg);
-//     controllers.foot.setConfig(mod_cfg);
-//     dexedState.setAttribute("footMod", mod_cfg);
-//     controllers.breath.setConfig(mod_cfg);
-//     dexedState.setAttribute("breathMod", mod_cfg);
-//     controllers.at.setConfig(mod_cfg);
-//     dexedState.setAttribute("aftertouchMod", mod_cfg);
-//
-//     if( currentSCLData.size() > 1 || currentKBMData.size() > 1 )
-//     {
-//         auto tuningx = dexedState.createNewChildElement("dexedTuning" );
-//         auto sclx = tuningx->createNewChildElement("scl");
-//         sclx->addTextElement(currentSCLData);
-//         auto kbmx = tuningx->createNewChildElement("kbm");
-//         kbmx->addTextElement(currentKBMData);
-//     }
-//
-//     if ( activeFileCartridge.exists() )
-//         dexedState.setAttribute("activeFileCartridge", activeFileCartridge.getFullPathName());
-//
-//     NamedValueSet blobSet;
-//     //blobSet.set("sysex", var((void *) currentCart.getVoiceSysex(), 4104));
-//     blobSet.set("program", var((void *) activeProgram.getUnpackedData(), 161));
-//
-//     blobSet.copyToXmlAttributes(*dexedBlob);
-//
-//     XmlElement *midiCC = dexedState.createNewChildElement("midiCC");
-//     HashMap<int, Ctrl *>::Iterator i(mappedMidiCC);
-//     while(i.next()) {
-//         XmlElement *ccMapping = midiCC->createNewChildElement("mapping");
-//         ccMapping->setAttribute("cc", i.getKey());
-//         Ctrl *ctrl = i.getValue();
-//         ccMapping->setAttribute("target", ctrl->label);
-//     }
-//
-//     copyXmlToBinary(dexedState, destData);
-// }
+bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInBytes) {
+    if (source == nullptr || sizeInBytes <= 0 || sizeInBytes > 32 * 1024 * 1024)
+        return false;
+    std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(source, sizeInBytes));
+    if (xmlState == nullptr)
+        return false;
+
+    if (xmlState->hasTagName("dexedState")) {
+        // Format 1.0 used a separate XML schema and binary program attribute.
+        juce::ScopedValueSetter<bool> disableSysexEcho(sendSysexChange, false);
+        const juce::ScopedLock avStateLock(getCallbackLock());
+        return setStateInformation10(this, xmlState.get());
+    }
+
+    if (!xmlState->hasTagName(parameters.rootVt.getType().toString())) {
+        TRACE("No valid state found");
+        return false;
+    }
+
+    auto storage = juce::ValueTree::fromXml(*xmlState);
+    if (storage.hasProperty("nativePresetVersion")
+        && static_cast<int>(storage.getProperty("nativePresetVersion")) != 1)
+        return false;
+    const auto version = storage.getProperty(IDs::version).toString();
+    const bool supportsVersion = version == DexedApvts::MODEL_VERSION || version == "1.0.0";
+    if (!supportsVersion) {
+        TRACE("Unsupported state version %s (current is %s)", version.toRawUTF8(), DexedApvts::MODEL_VERSION);
+        return false;
+    }
+
+    if (storage.hasProperty("nativePresetVersion") && static_cast<int>(storage.getProperty("nativePresetVersion")) != 1) {
+        TRACE("Unsupported native preset format");
+        return false;
+    }
+    auto parameterState = storage.getChildWithName(IDs::parameters);
+    if (!parameterState.isValid() || parameterState.getType() != IDs::parameters) {
+        TRACE("State has no valid APVTS parameter tree");
+        return false;
+    }
+    parameterState = parameterState.createCopy();
+    if (!avPrepareParameterState(parameters, parameterState)) {
+        TRACE("State contains invalid or duplicate parameter values");
+        return false;
+    }
+
+    auto schema = static_cast<int>(storage.getProperty("schemaVersion", 0));
+    if (schema < 0 || schema > currentStateSchema) {
+        TRACE("Unsupported state schema %d", schema);
+        return false;
+    }
+
+    // Validate every snapshot payload before changing the live processor.
+    auto session = storage.getChildWithName(sessionNode);
+    juce::MemoryBlock decodedVoice;
+    juce::MemoryBlock decodedCartridge;
+    bool hasVoiceSnapshot = false;
+    bool hasCartridgeSnapshot = false;
+    int restoredProgram = currentProgram;
+    juce::String restoredSourcePath;
+
+    if (session.isValid()) {
+        const auto encodedVoice = session.getProperty(voiceProperty).toString();
+        if (!decodeFixedBlock(encodedVoice, Program::PROGRAM_SIZE + 1, decodedVoice)) {
+            TRACE("State voice snapshot is missing or malformed");
+            return false;
+        }
+        hasVoiceSnapshot = true;
+
+        const auto encodedCartridge = session.getProperty(cartridgeProperty).toString();
+        if (encodedCartridge.isNotEmpty()) {
+            if (!decodeFixedBlock(encodedCartridge, SYSEX_SIZE, decodedCartridge)) {
+                TRACE("State cartridge snapshot is malformed");
+                return false;
+            }
+            hasCartridgeSnapshot = true;
+        }
+
+        restoredProgram = static_cast<int>(session.getProperty("currentProgram", -1));
+        if (restoredProgram < 0 || restoredProgram >= 32) {
+            TRACE("State program selection is outside the DX7 bank");
+            return false;
+        }
+        restoredSourcePath = session.getProperty("sourcePath").toString();
+    }
+
+    auto storageProfile = storage.getChildWithName(IDs::profile);
+    auto mappings = storageProfile.getChildWithName(IDs::midiCCMappings);
+    if (storageProfile.isValid() && (!mappings.isValid() || mappings.getType() != IDs::midiCCMappings)) {
+        TRACE("State MIDI mapping profile is malformed");
+        return false;
+    }
+    std::set<int> avMappedCCs;
+    for (const auto& mapping : mappings) {
+        const int cc = mapping.getProperty(IDs::midiCC, -1);
+        const auto id = mapping.getProperty(IDs::midiParameterName).toString();
+        if (mapping.getType() != IDs::midiCCMapping || cc < 0 || cc > 127
+            || parameters.getParameter(id) == nullptr || !avMappedCCs.insert(cc).second) {
+            TRACE("State MIDI mapping entry is invalid");
+            return false;
+        }
+    }
+
+    auto tuningVt = storage.getChildWithName("tuning");
+    juce::String sclData;
+    juce::String kbmData;
+    if (tuningVt.isValid()) {
+        sclData = tuningVt.getProperty("scl").toString();
+        kbmData = tuningVt.getProperty("kbm").toString();
+        if (sclData.getNumBytesAsUTF8() > MAX_SCL_KBM_FILE_SIZE
+            || kbmData.getNumBytesAsUTF8() > MAX_SCL_KBM_FILE_SIZE) {
+            TRACE("State tuning data exceeds the supported size");
+            return false;
+        }
+        if (!avValidateTuningData(sclData, kbmData)) {
+            TRACE("State contains invalid tuning data");
+            return false;
+        }
+    }
+
+    Cartridge restoredCart;
+    if (hasCartridgeSnapshot) {
+        const auto result = restoredCart.load(static_cast<const uint8_t*>(decodedCartridge.getData()),
+                                              static_cast<int>(decodedCartridge.getSize()));
+        if (result != 0 || !restoredCart.containsData()) {
+            TRACE("State cartridge could not be restored");
+            return false;
+        }
+    }
+
+    // State restoration must not echo parameter changes to an attached DX7.
+    const juce::ScopedLock avStateLock(getCallbackLock());
+    juce::ScopedValueSetter<bool> disableSysexEcho(sendSysexChange, false);
+    panic();
+    // The parsed parameter tree is still parented by the temporary state XML
+    // tree. Clone it before installing it into the live preference root so the
+    // ValueTree is never reparented implicitly (which JUCE asserts against).
+    parameters.replaceState(parameterState.createCopy());
+
+    // replaceState() swaps the APVTS tree, so keep rootVt pointing at the live one.
+    if (parameters.state.getParent() != parameters.rootVt) {
+        auto oldState = parameters.rootVt.getChildWithName(IDs::parameters);
+        if (oldState.isValid())
+            parameters.rootVt.removeChild(oldState, nullptr);
+        parameters.rootVt.addChild(parameters.state, 0, nullptr);
+    }
+
+    if (mappings.isValid()) {
+        auto liveMappings = parameters.rootVt.getChildWithName(IDs::profile).getChildWithName(IDs::midiCCMappings);
+        liveMappings.copyPropertiesAndChildrenFrom(mappings, nullptr);
+    }
+
+    if (hasVoiceSnapshot) {
+        Program restoredVoice(static_cast<const uint8_t*>(decodedVoice.getData()));
+        activeProgram = restoredVoice;
+
+        // APVTS is authoritative for automatable values. Reconcile the raw DX
+        // buffer with the restored parameter tree while retaining voice data
+        // such as its DX7 name that is not represented by a host parameter.
+        for (const auto& meta : dxParameters) {
+            if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*>(parameters.getParameter(meta.name))) {
+                auto value = static_cast<int>(std::lround(parameter->convertFrom0to1(parameter->getValue())));
+                activeProgram[meta.pos] = static_cast<uint8_t>(juce::jlimit(0, 127, value + meta.displayOffset));
+            }
+        }
+        for (int op = 0; op < 6; ++op) {
+            auto* parameter = parameters.getParameter(IDs::on.op(op).name);
+            if (parameter != nullptr) {
+                const auto mask = static_cast<uint8_t>(1U << (5 - op));
+                if (parameter->getValue() > 0.5f)
+                    activeProgram[155] |= mask;
+                else
+                    activeProgram[155] &= static_cast<uint8_t>(~mask);
+            }
+        }
+    }
+
+    if (hasCartridgeSnapshot) {
+        loadCartridge(restoredCart);
+        setCurrentProgramSelection(restoredProgram);
+        activeFileCartridge = restoredSourcePath.isNotEmpty() ? juce::File(restoredSourcePath) : juce::File();
+    } else if (session.isValid()) {
+        setCurrentProgramSelection(restoredProgram);
+        activeFileCartridge = restoredSourcePath.isNotEmpty() ? juce::File(restoredSourcePath) : juce::File();
+    }
+
+    refreshVoice.set(true);
+
+    avPresetName = session.getProperty("avPresetName").toString();
+    avPresetId = session.getProperty("avPresetId").toString();
+    const auto presetPath = session.getProperty("avPresetPath").toString();
+    avPresetPath = presetPath.isEmpty() ? juce::File() : juce::File(presetPath);
+    avPresetContextCurrent.store(avPresetName.isNotEmpty() || avPresetId.isNotEmpty() || presetPath.isNotEmpty(),
+                                 std::memory_order_relaxed);
+    avKnownPresetOrigin.store(session.isValid() && static_cast<bool>(session.getProperty("avKnownPresetOrigin", true)),
+                              std::memory_order_relaxed);
+    if (!session.isValid()) {
+        activeProgram.setName({});
+        activeFileCartridge = juce::File();
+    }
+
+    if (tuningVt.isValid()) {
+        retuneToStandard();
+        if (sclData.isNotEmpty())
+            applySCLTuning(sclData.toStdString());
+        if (kbmData.isNotEmpty())
+            applyKBMMapping(kbmData.toStdString());
+    }
+    const auto baseline = session.getProperty("avPresetBaseline").toString();
+    avPresetBaseline.store(static_cast<uint64_t>(baseline.getHexValue64()), std::memory_order_relaxed);
+    if (baseline.isEmpty() || avPresetBaseline.load(std::memory_order_relaxed) == 0)
+        captureAVPresetBaseline();
+    programChanged.set(true);
+    return true;
+}
+
+
+juce::MemoryBlock DexedAudioProcessor::createAVNativePresetState(const juce::String& name, const juce::String& id) {
+    const juce::ScopedLock avStateLock(getCallbackLock());
+    juce::MemoryBlock bytes;
+    getStateInformation(bytes);
+    auto xml = getXmlFromBinary(bytes.getData(), static_cast<int>(bytes.getSize()));
+    if (xml == nullptr) return {};
+    auto tree = juce::ValueTree::fromXml(*xml);
+    tree.setProperty("nativePresetVersion", 1, nullptr);
+    tree.setProperty("libraryPresetId", id, nullptr);
+    auto session = tree.getChildWithName(sessionNode);
+    session.setProperty("avPresetName", name, nullptr);
+    session.setProperty("avPresetId", id, nullptr);
+    session.setProperty("avKnownPresetOrigin", true, nullptr);
+    session.setProperty("avPresetPath", juce::String(), nullptr);
+    session.setProperty("avPresetBaseline", juce::String::toHexString(static_cast<juce::int64>(getAVMusicalFingerprint(&name))), nullptr);
+    if (auto nativeXml = tree.createXml()) copyXmlToBinary(*nativeXml, bytes);
+    return bytes;
+}

@@ -23,10 +23,34 @@
 #include "PluginData.h"
 #include "debugger/Logger.h"
 #include "PluginProcessor.h"
+#include "ui/AVDexedLanguage.h"
+#include "ui/DXLookNFeel.h"
 
 #include <fstream>
 
-void DexedAudioProcessor::loadCartridge(Cartridge &sysex) {
+namespace {
+
+bool copyMissingFilesRecursively(const juce::File& source, const juce::File& destination) {
+    if (!source.isDirectory())
+        return true;
+
+    bool copied = destination.createDirectory().wasOk();
+    for (const auto& entry : juce::RangedDirectoryIterator(source, true, "*", juce::File::findFiles)) {
+        const auto sourceFile = entry.getFile();
+        if (sourceFile.getFileName() == ".legacy-data-migration-v1")
+            continue;
+        const auto destinationFile = destination.getChildFile(sourceFile.getRelativePathFrom(source));
+        if (!destinationFile.existsAsFile()) {
+            copied &= destinationFile.getParentDirectory().createDirectory().wasOk()
+                && sourceFile.copyFileTo(destinationFile);
+        }
+    }
+    return copied;
+}
+
+} // namespace
+
+void DexedAudioProcessor::loadCartridge(const Cartridge& sysex) {
     currentCart = sysex;
     currentCart.getProgramNames(programNames);
     programChanged.set(true);
@@ -63,6 +87,7 @@ void DexedAudioProcessor::setupStartupCart() {
 
     if ( currentCart.load(startup) != -1 ) {
         loadCartridge(currentCart);
+        activeFileCartridge = startup;
         return;
     }
     
@@ -150,20 +175,19 @@ void DexedAudioProcessor::sendSysexCartridge(File cart) {
     
     std::unique_ptr<juce::FileInputStream> fis = cart.createInputStream();
     if ( fis == NULL ) {
-        String f = cart.getFullPathName();
-        AlertWindow::showMessageBoxAsync (AlertWindow::WarningIcon,
-                                          "Error",
-                                          "Unable to open: " + f);
+        auto& language = AVDexedLanguageService::getInstance();
+        AVShowMessage(AlertWindow::WarningIcon, language.text("error"),
+                      language.format("bankOpenError", {{"path", cart.getFullPathName()}}), getActiveEditor());
+        return;
     }
     
     uint8 syx_data[65535];
     int sz = fis->read(syx_data, 65535);
     
-    if (syx_data[0] != 0xF0) {
-        String f = cart.getFullPathName();
-        AlertWindow::showMessageBoxAsync (AlertWindow::WarningIcon,
-                                          "Error",
-                                          "File: " + f + " doesn't seems to contain any sysex data");
+    if (sz <= 0 || syx_data[0] != 0xF0) {
+        auto& language = AVDexedLanguageService::getInstance();
+        AVShowMessage(AlertWindow::WarningIcon, language.text("error"),
+                      language.format("sysexNoData", {{"path", cart.getFullPathName()}}), getActiveEditor());
         return;
     }
     sysexComm.send(MidiMessage(syx_data, sz));
@@ -173,63 +197,91 @@ File DexedAudioProcessor::dexedAppDir;
 File DexedAudioProcessor::dexedCartDir;
 
 void DexedAudioProcessor::resolvAppDir() {
+    const auto executable = File::getSpecialLocation(File::currentExecutableFile);
+    Array<File> legacyAppDirs;
+
+    // Preserve the original portable layouts as migration sources. The new
+    // writable location is product-scoped under AV Vibes. Existing legacy data is copied, never moved or
+    // deleted, so other installations remain untouched.
     #if JUCE_MAC || JUCE_IOS
-        File parent = File::getSpecialLocation(File::currentExecutableFile).getParentDirectory().getParentDirectory().getParentDirectory().getSiblingFile("Dexed");
-    
-        if ( parent.isDirectory() ) {
-            dexedAppDir = parent;
-        } else {
-            dexedAppDir = File("~/Library/Application Support/DigitalSuburban/Dexed");
-        }
-    #elif JUCE_WINDOWS
-        if ( File::getSpecialLocation(File::currentExecutableFile).getSiblingFile("Dexed").isDirectory() ) {
-            dexedAppDir = File::getSpecialLocation(File::currentExecutableFile).getSiblingFile("Dexed");
-        } else {
-            dexedAppDir = File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("DigitalSuburban").getChildFile("Dexed");
-        }
+        const auto portableLegacy = executable.getParentDirectory().getParentDirectory()
+                                             .getParentDirectory().getSiblingFile("Dexed");
     #else
-        if ( File::getSpecialLocation(File::currentExecutableFile).getSiblingFile("Dexed").isDirectory() ) {
-            dexedAppDir = File::getSpecialLocation(File::currentExecutableFile).getSiblingFile("Dexed");
-        } else {
-            char *xdgHome = getenv("XDG_DATA_HOME");
-            if ( xdgHome == nullptr ) {
-                dexedAppDir = File("~/.local/share").getChildFile("DigitalSuburban").getChildFile("Dexed");
-            } else {
-                dexedAppDir = File(xdgHome).getChildFile("DigitalSuburban").getChildFile("Dexed");
-            }
-        }
+        const auto portableLegacy = executable.getSiblingFile("Dexed");
     #endif
-    
-    if ( ! dexedAppDir.exists() ) {
-        dexedAppDir.createDirectory();
-        // ==========================================================================
-        // For older versions, we move the Dexed.xml config file
-        // This code will be removed in 0.9.0
-        File cfgFile = dexedAppDir.getParentDirectory().getChildFile("Dexed.xml");
-        if ( cfgFile.exists() )
-            cfgFile.moveFileTo(dexedAppDir.getChildFile("Dexed.xml"));
-        // *-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-
-        // ==========================================================================
+    if (portableLegacy.isDirectory())
+        legacyAppDirs.addIfNotAlreadyThere(portableLegacy);
+
+    #if JUCE_MAC || JUCE_IOS
+        const File platformDataRoot("~/Library/Application Support");
+    #elif JUCE_WINDOWS
+        const auto platformDataRoot = File::getSpecialLocation(File::userApplicationDataDirectory);
+    #else
+        const auto xdgDataHome = juce::SystemStats::getEnvironmentVariable("XDG_DATA_HOME", {});
+        const auto platformDataRoot = xdgDataHome.isNotEmpty() && File::isAbsolutePath(xdgDataHome)
+            ? File(xdgDataHome) : File("~/.local/share");
+    #endif
+    const auto legacyDigitalSuburbanDir = platformDataRoot.getChildFile("DigitalSuburban").getChildFile("Dexed");
+    legacyAppDirs.addIfNotAlreadyThere(legacyDigitalSuburbanDir);
+    legacyAppDirs.addIfNotAlreadyThere(File::getSpecialLocation(File::userApplicationDataDirectory)
+                                         .getChildFile("DigitalSuburban").getChildFile("Dexed"));
+
+    dexedAppDir = platformDataRoot.getChildFile("AV Vibes").getChildFile("AV Dexed");
+    dexedAppDir.createDirectory();
+
+    const auto migrationMarker = dexedAppDir.getChildFile(".legacy-data-migration-v1");
+    if (!migrationMarker.existsAsFile()) {
+        bool migrationSucceeded = true;
+        // Early local builds used JUCE's generic app-data location, which on
+        // macOS is ~/Library rather than Application Support. Copy that fork
+        // data too, including native presets, without transferring its marker.
+        const auto earlyForkDirectory = File::getSpecialLocation(File::userApplicationDataDirectory)
+                                            .getChildFile("AV Vibes").getChildFile("AV Dexed");
+        if (earlyForkDirectory != dexedAppDir)
+            migrationSucceeded &= copyMissingFilesRecursively(earlyForkDirectory, dexedAppDir);
+        const auto newSettings = dexedAppDir.getChildFile("Dexed.xml");
+        for (const auto& legacyDir : legacyAppDirs) {
+            if (legacyDir == dexedAppDir)
+                continue;
+
+            if (!newSettings.existsAsFile()) {
+                const auto oldSettings = legacyDir.getChildFile("Dexed.xml");
+                if (oldSettings.existsAsFile())
+                    migrationSucceeded &= oldSettings.copyFileTo(newSettings);
+            }
+
+            // Very old releases kept this file one directory above the data folder.
+            if (!newSettings.existsAsFile()) {
+                const auto oldParentSettings = legacyDir.getParentDirectory().getChildFile("Dexed.xml");
+                if (oldParentSettings.existsAsFile())
+                    migrationSucceeded &= oldParentSettings.copyFileTo(newSettings);
+            }
+
+            migrationSucceeded &= copyMissingFilesRecursively(legacyDir.getChildFile("Cartridges"),
+                                                              dexedAppDir.getChildFile("Cartridges"));
+        }
+        if (migrationSucceeded)
+            migrationMarker.replaceWithText("completed");
+        else
+            DXLOG("Legacy data migration incomplete; original files retained and copy will retry on next launch");
     }
     
     dexedCartDir = dexedAppDir.getChildFile("Cartridges");
 
-    if ( ! dexedCartDir.exists() ) {
-        // Initial setup, we unzip the built-in cartridges
-        dexedCartDir.createDirectory();
-        File synprezFmDir = dexedCartDir.getChildFile("SynprezFM");
-        synprezFmDir.createDirectory();
-        
-        MemoryInputStream *mis = new MemoryInputStream(BinaryData::builtin_pgm_zip, BinaryData::builtin_pgm_zipSize, false);
-        ZipFile *builtin_pgm = new ZipFile(mis, true);
-        
-        for(int i=0;i<builtin_pgm->getNumEntries();i++) {
-            if ( builtin_pgm->getEntry(i)->filename == "Dexed_01.syx" ) {
-                builtin_pgm->uncompressEntry(i, dexedCartDir);
-            } else {
-                builtin_pgm->uncompressEntry(i, synprezFmDir);
-            }
+    dexedCartDir.createDirectory();
+    File synprezFmDir = dexedCartDir.getChildFile("SynprezFM");
+    MemoryInputStream *mis = new MemoryInputStream(BinaryData::builtin_pgm_zip,
+                                                    BinaryData::builtin_pgm_zipSize, false);
+    ZipFile *builtin_pgm = new ZipFile(mis, true);
+
+    for (int i = 0; i < builtin_pgm->getNumEntries(); ++i) {
+        const auto& entryName = builtin_pgm->getEntry(i)->filename;
+        const auto targetDirectory = entryName == "Dexed_01.syx" ? dexedCartDir : synprezFmDir;
+        const auto targetFile = targetDirectory.getChildFile(entryName);
+        if (!targetFile.existsAsFile()) {
+            targetDirectory.createDirectory();
+            builtin_pgm->uncompressEntry(i, targetDirectory);
         }
-        delete builtin_pgm;
     }
+    delete builtin_pgm;
 }

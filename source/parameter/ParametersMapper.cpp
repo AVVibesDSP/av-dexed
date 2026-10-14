@@ -37,8 +37,13 @@ const std::vector<MetaParameterID> dxParameters = {
     IDs::pitchEgRate.idx(1),
     IDs::pitchEgRate.idx(2),
     IDs::pitchEgRate.idx(3),
+    IDs::pitchEgLevel.idx(0),           // pos: 130
+    IDs::pitchEgLevel.idx(1),
+    IDs::pitchEgLevel.idx(2),
+    IDs::pitchEgLevel.idx(3),
     IDs::algorithm,                  // pos: 134
     IDs::feedback,                   // pos: 135
+    IDs::oscKeySync,                 // pos: 136
     IDs::lfoRate,                    // pos: 137
     IDs::lfoDelay,                   // pos: 138
     IDs::lfoPmDepth,                 // pos: 139
@@ -90,9 +95,7 @@ void DexedAudioProcessor::mapParameters() {
     });
 
     parameters.mapTo(IDs::monoMode.name, [this](float newValue) {
-        command.push([](DexedAudioProcessor &proc) {
-            proc.resetMonoMode();
-        });
+        avMonoResetRequested.store(true, std::memory_order_relaxed);
     });
 
     // Modulation parameters - Wheel
@@ -195,6 +198,64 @@ void DexedAudioProcessor::mapParameters() {
     parameters.mapTo(IDs::pitchStep.name, [this](float newValue) {
         controllers.pitch_step = static_cast<int>(newValue);
     });
+
+    parameters.mapTo(IDs::masterVolume.name, [this](float newValue) {
+        masterVolumeValue.store(juce::jlimit(0.0f, AVMasterMaximumGain, newValue), std::memory_order_relaxed);
+    });
+
+    parameters.mapTo(IDs::pan.name, [this](float newValue) {
+        panValue.store(juce::jlimit(0.0f, 1.0f, newValue), std::memory_order_relaxed);
+    });
+    parameters.mapTo(IDs::avDelayTempo.name, [this](float value) {
+        avDelayTempoValue.store(juce::jlimit(20.0f, 999.0f, value), std::memory_order_relaxed);
+    });
+    parameters.mapTo(IDs::avReverbBypass.name, [this](float value) { effects.setReverbBypass(value > 0.5f); });
+    parameters.mapTo(IDs::avDelayBypass.name, [this](float value) { effects.setDelayBypass(value > 0.5f); });
+    parameters.mapTo(IDs::avChorusBypass.name, [this](float value) { effects.setChorusBypass(value > 0.5f); });
+
+    parameters.mapTo(IDs::reverbAmount.name, [this](float value) { effects.setReverbAmount(value); });
+    parameters.mapTo(IDs::reverbSize.name, [this](float value) { effects.setReverbSize(value); });
+    parameters.mapTo(IDs::reverbPreDelay.name, [this](float value) {
+        effects.setReverbPreDelay(value / AVDexedReverb::maxPredelayMs);
+    });
+    parameters.mapTo(IDs::reverbDamping.name, [this](float value) { effects.setReverbDamping(value); });
+    parameters.mapTo(IDs::delayAmount.name, [this](float value) { effects.setDelayAmount(value); });
+    parameters.mapTo(IDs::delaySync.name, [this](float value) { effects.setDelaySync(value > 0.5f); });
+    parameters.mapTo(IDs::delayDivisionLeft.name, [this](float value) { effects.setDelayDivisionLeft(static_cast<int>(std::lround(value))); });
+    parameters.mapTo(IDs::delayDivisionRight.name, [this](float value) { effects.setDelayDivisionRight(static_cast<int>(std::lround(value))); });
+    parameters.mapTo(IDs::delayTimeLeft.name, [this](float value) { effects.setDelayTimeLeft(value); });
+    parameters.mapTo(IDs::delayTimeRight.name, [this](float value) { effects.setDelayTimeRight(value); });
+    parameters.mapTo(IDs::delayFeedback.name, [this](float value) { effects.setDelayFeedback(value); });
+    parameters.mapTo(IDs::delayDamping.name, [this](float value) { effects.setDelayDamping(value); });
+    parameters.mapTo(IDs::chorusAmount.name, [this](float value) { effects.setChorusAmount(value); });
+    parameters.mapTo(IDs::chorusMode.name, [this](float value) { effects.setChorusMode(static_cast<int>(std::lround(value))); });
+    parameters.mapTo(IDs::chorusRate.name, [this](float value) { effects.setChorusRate(value); });
+    parameters.mapTo(IDs::chorusDepth.name, [this](float value) { effects.setChorusDepth(value); });
+    parameters.mapTo(IDs::chorusSpread.name, [this](float value) { effects.setChorusSpread(value); });
+
+    const auto valueFor = [this](const MetaParameterID& id) {
+        auto* parameter = parameters.getParameter(id.name);
+        return parameter != nullptr ? parameter->convertFrom0to1(parameter->getValue()) : 0.0f;
+    };
+    masterVolumeValue.store(valueFor(IDs::masterVolume), std::memory_order_relaxed);
+    panValue.store(valueFor(IDs::pan), std::memory_order_relaxed);
+    effects.setReverbAmount(valueFor(IDs::reverbAmount));
+    effects.setReverbSize(valueFor(IDs::reverbSize));
+    effects.setReverbPreDelay(valueFor(IDs::reverbPreDelay) / AVDexedReverb::maxPredelayMs);
+    effects.setReverbDamping(valueFor(IDs::reverbDamping));
+    effects.setDelayAmount(valueFor(IDs::delayAmount));
+    effects.setDelaySync(valueFor(IDs::delaySync) > 0.5f);
+    effects.setDelayDivisionLeft(static_cast<int>(std::lround(valueFor(IDs::delayDivisionLeft))));
+    effects.setDelayDivisionRight(static_cast<int>(std::lround(valueFor(IDs::delayDivisionRight))));
+    effects.setDelayTimeLeft(valueFor(IDs::delayTimeLeft));
+    effects.setDelayTimeRight(valueFor(IDs::delayTimeRight));
+    effects.setDelayFeedback(valueFor(IDs::delayFeedback));
+    effects.setDelayDamping(valueFor(IDs::delayDamping));
+    effects.setChorusAmount(valueFor(IDs::chorusAmount));
+    effects.setChorusMode(static_cast<int>(std::lround(valueFor(IDs::chorusMode))));
+    effects.setChorusRate(valueFor(IDs::chorusRate));
+    effects.setChorusDepth(valueFor(IDs::chorusDepth));
+    effects.setChorusSpread(valueFor(IDs::chorusSpread));
 }
 
 int DexedAudioProcessor::getNumPrograms() {
@@ -205,16 +266,21 @@ int DexedAudioProcessor::getCurrentProgram() {
     return currentProgram;
 }
 
+void DexedAudioProcessor::setCurrentProgramSelection(int index) {
+    currentProgram = juce::jlimit(0, 31, index);
+    programChanged.set(true);
+}
+
 void DexedAudioProcessor::setCurrentProgram(int index) {
-    index = index > 31 ? 31 : index;
+    index = juce::jlimit(0, 31, index);
     Program program = currentCart.unpackProgram(index);
     applyProgram(program);
     currentProgram = index;
+    avKnownPresetOrigin.store(true, std::memory_order_relaxed);
 }
 
 const String DexedAudioProcessor::getProgramName(int index) {
-    if (index >= 32)
-        index = 31;
+    index = juce::jlimit(0, 31, index);
     return programNames[index];
 }
 
@@ -222,6 +288,12 @@ void DexedAudioProcessor::changeProgramName(int index, const String& newName) {
 }
 
 void DexedAudioProcessor::setDxParameter(int offset, uint8_t value) {
+    if (offset == IDs::on.pos) {
+        for (int op = 0; op < 6; ++op)
+            if (auto* parameter = parameters.getParameter(IDs::on.op(op).name))
+                parameter->setValueNotifyingHost((value & (1U << (5 - op))) != 0 ? 1.0f : 0.0f);
+        return;
+    }
     // Route the change through the APVTS parameter: the mapped listener updates
     // the model/voice (and echoes sysex out via setDxValue) while the bound UI
     // control follows automatically. Uses the same value conversion as

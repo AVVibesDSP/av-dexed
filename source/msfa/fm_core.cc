@@ -12,6 +12,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified by AV Vibes, 2026 (AV Dexed): carrier detection used for voice
+ * state and the operator glow.
  */
 
 #ifdef VERBOSE
@@ -135,5 +138,9 @@ void FmCore::render(int32_t *output, FmOpParams *params, int algorithm, int32_t 
 }
 
 bool FmCore::isCarrier(int algorithm, int op) {
-  return (algorithms[algorithm].ops[op] & FmOperatorFlags::OUT_BUS_ADD) != 0;
+  // A carrier adds into the main output (no bus selected), the same test
+  // n_out() uses. OUT_BUS_ADD alone also matches modulators that add into a
+  // bus (e.g. OP5 in algorithm 15), which kept silent voices "playing".
+  const int flags = algorithms[algorithm].ops[op];
+  return (flags & (OUT_BUS_ONE | OUT_BUS_TWO | OUT_BUS_ADD)) == OUT_BUS_ADD;
 }

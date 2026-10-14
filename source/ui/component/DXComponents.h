@@ -83,27 +83,36 @@ private:
 };
 //==============================================================================
 
-class ComboBoxImage : public ComboBox {
-    Image items;
-    int itemHeight;
-    PopupMenu popup;
-    int itemPos[4];
+class VectorChoiceBox : public ComboBox, private juce::ChangeListener {
 public:
-    ComboBoxImage();
+    enum class Preview { waveform, leftScale, rightScale };
+    explicit VectorChoiceBox(Preview preview);
+    ~VectorChoiceBox() override;
 
-    virtual void paint(Graphics &g) override;
-    virtual void showPopup() override;
-    void setImage(Image image);
-    void setImage(Image image, int pos[]);
+    void paint(Graphics &g) override;
+    void resized() override;
 
     std::unique_ptr<AccessibilityHandler> createAccessibilityHandler() override {
         return std::make_unique<ComboBoxAccessibilityHandlerFix> (*this);
     }
+private:
+    Preview previewType;
+    void AVRefreshLanguage();
+    void changeListenerCallback(juce::ChangeBroadcaster*) override;
+};
 
+class CurveSelector final : public VectorChoiceBox {
+public:
+    explicit CurveSelector(bool left) : VectorChoiceBox(left ? Preview::leftScale : Preview::rightScale) {}
+};
+
+class WaveformSelector final : public VectorChoiceBox {
+public:
+    WaveformSelector() : VectorChoiceBox(Preview::waveform) {}
 };
 
 class ProgramSelector : public ComboBox {
-    float accum_wheel;
+    float accum_wheel = 0.0f;
 public:
     ProgramSelector() {
         setWantsKeyboardFocus(true);
@@ -124,6 +133,7 @@ class DXSlider : public Slider {
 public:
     DXSlider(const String& componentName) : Slider(componentName) {
         setWantsKeyboardFocus(true);
+        setVelocityModeParameters(1.0, 1, 0.0, true, ModifierKeys::shiftModifier);
     }
 
     bool keyPressed(const KeyPress &key) override {

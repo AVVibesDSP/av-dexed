@@ -33,6 +33,7 @@
 #include "msfa/tuning.h"
 #include "PluginData.h"
 #include "PluginFx.h"
+#include "effects/AVDexedFxChain.h"
 #include "midi/SysexComm.h"
 #include "engine/EngineMkI.h"
 #include "engine/EngineOpl.h"
@@ -71,8 +72,11 @@ class MidiCCHandler;
 //==============================================================================
 /**
 */
-class DexedAudioProcessor  : public AudioProcessor, public MidiInputCallback, public clap_juce_extensions::clap_properties
+class DexedAudioProcessor  : public AudioProcessor, public MidiInputCallback, public clap_juce_extensions::clap_properties, private juce::Timer
 {
+    enum class SetupMode { userData, isolatedTest };
+    explicit DexedAudioProcessor(SetupMode setupMode);
+
     static const int MAX_ACTIVE_NOTES = 16;
     ProcessorVoice voices[MAX_ACTIVE_NOTES];
     int currentNote;
@@ -93,6 +97,9 @@ class DexedAudioProcessor  : public AudioProcessor, public MidiInputCallback, pu
      * Plugin fx (the filter)
      */
     PluginFx fx;
+    AVDexedFxChain effects;
+    std::atomic<bool> fxResetRequested { false };
+    juce::AudioBuffer<float> stereoFxBuffer;
 
     /**
      * This flag is used in the audio thread to know if the voice has changed
@@ -102,6 +109,33 @@ class DexedAudioProcessor  : public AudioProcessor, public MidiInputCallback, pu
 
     bool normalizeDxVelocity;
     bool sendSysexChange;
+    std::atomic<float> masterVolumeValue { 1.0f };
+    std::atomic<float> panValue { 0.5f };
+    std::atomic<float> avDelayTempoValue { 120.0f };
+    std::atomic<int> avKeyboardPitch { 8192 }, avKeyboardMod { 0 };
+    std::atomic<int> avKeyboardPitchPending { -1 }, avKeyboardModPending { -1 };
+    std::atomic<bool> avPanicRequested { false };
+    std::atomic<bool> avMonoResetRequested { false };
+    static constexpr int AVSysExQueueSize = 8, AVSysExPacketSize = 4104;
+    struct AVSysExPacket { std::array<uint8_t, AVSysExPacketSize> bytes {}; int size = 0; std::atomic<size_t> sequence { 0 }; };
+    std::array<AVSysExPacket, AVSysExQueueSize> avSysExPackets;
+    std::atomic<size_t> avSysExWrite { 0 };
+    size_t avSysExRead = 0;
+    std::atomic<int> avDroppedSysEx { 0 };
+    static constexpr int AVMidiOutputQueueSize = 8, AVMidiOutputBatchBytes = 65536;
+    struct AVMidiOutputBatch { juce::MidiBuffer buffer; std::atomic<int> state { 0 }; };
+    std::array<AVMidiOutputBatch, AVMidiOutputQueueSize> avMidiOutputBatches;
+    int avMidiOutputRead = 0, avMidiOutputWrite = 0;
+    bool enqueueAVSysEx(const uint8_t* data, int size) noexcept;
+    void handleAVSysExNow(const uint8_t* data, int size);
+    void flushAVPendingSysEx();
+    void timerCallback() override;
+    std::atomic<float> avAudioCpuPercent { 0.0f };
+    std::atomic<float> avOutputPeakL { 0.0f }, avOutputPeakR { 0.0f };
+    std::atomic<int> avActiveVoices { 0 };
+    void finishAVAudioMeter(juce::int64 startTicks, int samples) noexcept;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> masterVolumeSmoother;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> panSmoother;
     
     void processMidiMessage(const MidiMessage *msg);
     void keydown(uint8_t chan, uint8_t pitch, uint8_t velo);
@@ -135,8 +169,38 @@ class DexedAudioProcessor  : public AudioProcessor, public MidiInputCallback, pu
 
     void valueTreeChildAdded(ValueTree& parentTree, ValueTree& childWhichHasBeenAdded);
 public :
+    static constexpr float AVMasterMaximumGain = 15.848932f; // +24 dB; 0 remains exact mute.
+#if defined(AVDEXED_TESTING)
+    struct TestMode {};
+    explicit DexedAudioProcessor(TestMode);
+    void flushAVPendingSysExForTesting() { flushAVPendingSysEx(); }
+#endif
     DexedApvts parameters;
     Program activeProgram;
+    // Musical preset context belongs to the processor, so destroying an editor
+    // cannot discard a Unicode name, origin, or the loaded-content reference.
+    juce::String getAVPresetName() const;
+    juce::String getAVPresetId() const;
+    juce::File getAVPresetPath() const;
+    bool hasAVKnownPresetOrigin() const noexcept { return avKnownPresetOrigin.load(std::memory_order_relaxed); }
+    void setAVPresetContext(const juce::String& name, const juce::String& id, const juce::File& file);
+    void captureAVPresetBaseline() noexcept;
+    bool isAVPresetModified() const noexcept;
+    juce::MemoryBlock createAVNativePresetState(const juce::String& name, const juce::String& id);
+    bool loadAVStateInformation(const void* data, int sizeInBytes);
+    void setAVKeyboardPitch(int value) noexcept { avKeyboardPitchPending.store(juce::jlimit(0, 16383, value), std::memory_order_relaxed); }
+    void setAVKeyboardMod(int value) noexcept { avKeyboardModPending.store(juce::jlimit(0, 127, value), std::memory_order_relaxed); }
+    int getAVKeyboardPitch() const noexcept { return avKeyboardPitch.load(std::memory_order_relaxed); }
+    int getAVKeyboardMod() const noexcept { return avKeyboardMod.load(std::memory_order_relaxed); }
+    float getAVAudioCpuPercent() const noexcept { return avAudioCpuPercent.load(std::memory_order_relaxed); }
+    std::pair<float, float> consumeAVOutputPeaks() noexcept {
+        return { avOutputPeakL.exchange(0.0f, std::memory_order_relaxed),
+                 avOutputPeakR.exchange(0.0f, std::memory_order_relaxed) };
+    }
+    int getAVActiveVoices() const noexcept { return avActiveVoices.load(std::memory_order_relaxed); }
+    int getAVDroppedSysExCount() const noexcept {
+        return avDroppedSysEx.load(std::memory_order_relaxed) + sysexComm.getAVDroppedOutputCount();
+    }
     std::unique_ptr<MidiCCHandler> midiCCMapper;
 
     // in MIDI units (0x4000 is neutral)
@@ -162,7 +226,10 @@ public :
     int getEngineType();
     void setEngineType(int rs);
 
-    void loadCartridge(Cartridge &cart);
+    void loadCartridge(const Cartridge& cart);
+    bool hasExternalCartridgeContext() const noexcept {
+        return activeFileCartridge.getFullPathName().isNotEmpty();
+    }
 
     //==============================================================================
     DexedAudioProcessor();
@@ -173,6 +240,7 @@ public :
     void releaseResources() override;
     void processBlock (AudioSampleBuffer& buffer, MidiBuffer& midiMessages) override;
     void panic();
+    void requestAVPanic() noexcept { avPanicRequested.store(true, std::memory_order_relaxed); }
     void resetMonoMode();
     
     void copyToClipboard(int srcOp);
@@ -202,6 +270,7 @@ public :
     int getNumPrograms() override;
     int getCurrentProgram() override;
     void setCurrentProgram(int index) override;
+    void setCurrentProgramSelection(int index);
     const String getProgramName (int index) override;
     void changeProgramName(int index, const String& newName) override;
     void resetToInitVoice() ;
@@ -228,10 +297,9 @@ public :
 
     CommandFifo<DexedAudioProcessor> command;
 
-    // sysex messages queued (from the command fifo, on the audio thread) to be
-    // flushed to the host/DAW at the end of processBlock
-    std::vector<MidiMessage> outputMidiMessageQueue;
-    void queueOutputMidiMessage(const MidiMessage &message);
+    // Message-thread producer; render consumes prepared buffers by swapping
+    // their storage into the host buffer, without constructing MIDI messages.
+    bool queueAVMidiOutputBatch(const juce::MidiBuffer& messages);
 
     void applyProgram(const Program &program);
 
@@ -265,6 +333,13 @@ public :
     std::string currentKBMData = "";
     // TUNING STUFF ====================================================
 private:
+    uint64_t getAVMusicalFingerprint(const juce::String* nativeName = nullptr) const noexcept;
+    juce::String avPresetName;
+    juce::String avPresetId;
+    juce::File avPresetPath;
+    std::atomic<bool> avPresetContextCurrent { false };
+    std::atomic<bool> avKnownPresetOrigin { true };
+    std::atomic<uint64_t> avPresetBaseline { 0 };
     int32_t nextKeydownSeq;;
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DexedAudioProcessor)

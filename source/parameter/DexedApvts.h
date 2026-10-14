@@ -5,10 +5,12 @@
 class DexedApvts : public juce::AudioProcessorValueTreeState {
     std::vector<std::unique_ptr<juce::AudioProcessorParameter::Listener>> callbacks;
 public:
+    // Saved-state format id (inherited from DEXED 1.1.0), not the product version.
     static constexpr char MODEL_VERSION[] = "1.1.0";
 
     mutable bool pushToParameterInProgress = false;
     juce::ValueTree rootVt;
+    std::array<juce::RangedAudioParameter*, 6> avOperatorSwitchParameters {};
 
     DexedApvts(juce::AudioProcessor& processorToConnectTo, juce::UndoManager* undoManagerToUse);
 

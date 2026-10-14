@@ -24,6 +24,7 @@
 #include "JuceHeader.h"
 #include "PluginData.h"
 #include "../DXLookNFeel.h"
+#include "../AVDexedTheme.h"
 
 class ProgramListBox;
 class ProgramListBoxListener {
@@ -65,7 +66,7 @@ public:
     }
 };
 
-class ProgramLabel : public Component, public DragAndDropTarget {
+class ProgramLabel : public Component, public DragAndDropTarget, public SettableTooltipClient {
     ProgramListBox *pgmListBox;
     bool inDrag = false;
 
@@ -77,33 +78,26 @@ public:
         this->idx = idx;
         setWantsKeyboardFocus(true);
         setExplicitFocusOrder(idx+1);
+        setRepaintsOnMouseActivity(true);
     }
 
     void paint(Graphics &g) override {
-        if ( inDrag ) {
-            g.fillAll(DXLookNFeel::background);
-            return;
-        }
-
         if ( pgmListBox->hasContent == false )
             return;
-
-        if ( idx == pgmListBox->activePgm ) {
-            g.setGradientFill(ColourGradient(DXLookNFeel::fillColour.brighter(3.0f), 0.0f, 0.0f, DXLookNFeel::fillColour.darker(0.5f), 0.0f, getHeight(), false));
-        } else if ( getCurrentlyFocusedComponent() == this ) {
-            g.setColour(DXLookNFeel::fillColour);
-        } else {
-            if ( idx % 2 == 0 ) {
-                auto alternateColour = DXLookNFeel::lightBackground.interpolatedWith (getLookAndFeel().findColour(ListBox::textColourId), 0.75f);
-                g.setColour(alternateColour);
-            } else {
-                auto alternateColour = DXLookNFeel::lightBackground.interpolatedWith (getLookAndFeel().findColour(ListBox::textColourId), 0.15f);
-                g.setColour(alternateColour);
-            }
+        // Same language as the Play list: neutral 12% cells, the loaded program
+        // in the ocean row highlight, hover at 21% of it.
+        const auto bounds = getLocalBounds().toFloat().reduced(1.0f);
+        const bool active = idx == pgmListBox->activePgm;
+        AVDexedTheme::fillBox(g, bounds, 6.0f, false, idx % 2 == 0 ? 1.0f : 0.7f);
+        if (active) AVDexedTheme::fillRowHighlight(g, bounds, 1.0f);
+        else if (isMouseOver() || inDrag) AVDexedTheme::fillRowHighlight(g, bounds, 0.21f);
+        const auto text = getLocalBounds().toFloat().reduced(8.0f, 1.0f);
+        if (active) AVDexedTheme::drawOceanText(g, getProgramName(), AVDexedTheme::font(12.0f, "SemiBold"), text, Justification::centredLeft);
+        else AVDexedTheme::drawGreyText(g, getProgramName(), AVDexedTheme::font(12.0f, "Medium"), text, Justification::centredLeft);
+        if (AVDexedTheme::showsFocus(*this) || inDrag) {
+            g.setColour(AVDexedTheme::oceanHighlight);
+            g.drawRoundedRectangle(bounds, 6.0f, 1.3f);
         }
-        g.fillAll();
-        g.setColour(Colours::black);
-        g.drawFittedText(getProgramName(), 0, 0, getWidth(), getHeight(), Justification::centred, true);
     }
 
     void focusGained(FocusChangeType cause) override {
@@ -115,7 +109,7 @@ public:
     }
 
     String getProgramName() {
-        return pgmListBox->cartContent.getProgramName(idx);
+        return pgmListBox->hasContent ? pgmListBox->cartContent.getProgramName(idx) : String();
     }
 
     void loadProgram() {
@@ -187,6 +181,7 @@ public:
         jassert(dest);
 
         MemoryBlock* block = dragSourceDetails.description.getBinaryData();
+        if (block == nullptr || block->getSize() != 128) return;
         if ( pgmListBox->listener != nullptr )
             pgmListBox->listener->programDragged(pgmListBox, idx, (char *)block->getData());
 

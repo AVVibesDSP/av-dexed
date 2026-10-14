@@ -22,6 +22,8 @@
 #include "../PluginEditor.h"
 #include "../DXLookNFeel.h"
 #include "CartManager.h"
+#include "../AVDexedLanguage.h"
+#include "../AVDexedTheme.h"
 #include "PluginData.h"
 
 #include <fstream>
@@ -180,6 +182,8 @@ CartManager::CartManager(DexedAudioProcessorEditor *editor) : Component("CartMan
 
     activeCartName.reset(new CartridgeFileDisplay());
     addAndMakeVisible(activeCartName.get());
+    AVDexedLanguageService::getInstance().addChangeListener(this);
+    AVRefreshLanguage();
 
     focusOrder.push_back(cartBrowser.get());
     //focusOrder.push_back(browserCart.get());
@@ -199,17 +203,18 @@ CartManager::CartManager(DexedAudioProcessorEditor *editor) : Component("CartMan
  *
  * I've removed this since it only works on the DX7 II. TBC.
  *
-    addAndMakeVisible(getDXPgmButton = new TextButton("GET DX7 PGM"));
+    addAndMakeVisible(getDXPgmButton = new TextButton("GET DEXED VOICE"));
     getDXPgmButton->setBounds(656, 545, 100, 30);
     getDXPgmButton->addListener(this);
 
-    addAndMakeVisible(getDXCartButton = new TextButton("GET DX7 CART"));
+    addAndMakeVisible(getDXCartButton = new TextButton("GET DEXED BANK"));
     getDXCartButton->setBounds(755, 545, 100, 30);
     getDXCartButton->addListener(this);
  */
 }
 
 CartManager::~CartManager() {
+    AVDexedLanguageService::getInstance().removeChangeListener(this);
     timeSliceThread->stopThread(500);
     cartBrowser.reset(NULL);
     cartBrowserList.reset(NULL);
@@ -220,38 +225,82 @@ std::unique_ptr<ComponentTraverser> CartManager::createKeyboardFocusTraverser() 
 }
 
 void CartManager::resized() {
-    float activeSize = 100;
-
-    activeCart->setBounds(14, 402, activeSize * 8, 96);
-    browserCart->setBounds(activeSize * 6 + 15, 10, activeSize * 2, 385);
-    cartBrowser->setBounds(14, 10, activeSize * 6 - 4, 385);
-    closeButton->setBounds(4, getHeight() - 40, 70, 30);
-    saveButton->setBounds(144, getHeight() - 40, 70, 30);
-    loadButton->setBounds(74, getHeight() - 40, 70, 30);
-    fileMgrButton->setBounds(214, getHeight() - 40, 90, 30);
-    activeCartName->setBounds(getWidth() - 8 - 300, getHeight() - 40, 300, 30);
+    const int inset = 16;
+    const int top = 44;
+    const int bottom = getHeight() - 56;
+    const int activeHeight = jlimit(128, 156, getHeight() / 4);
+    const int activeY = bottom - activeHeight;
+    const int previewWidth = jmax(280, getWidth() * 36 / 100);
+    const int upperHeight = jmax(120, activeY - top - 32);
+    cartBrowser->setBounds(inset, top, getWidth() - previewWidth - inset * 3, upperHeight);
+    browserCart->setBounds(getWidth() - inset - previewWidth, top, previewWidth, upperHeight);
+    activeCart->setBounds(inset, activeY, getWidth() - inset * 2, activeHeight);
+    const int buttonY = getHeight() - 42;
+    closeButton->setBounds(inset, buttonY, 92, 30);
+    loadButton->setBounds(inset + 100, buttonY, 104, 30);
+    saveButton->setBounds(inset + 212, buttonY, 104, 30);
+    fileMgrButton->setBounds(inset + 324, buttonY, 136, 30);
+    activeCartName->setBounds(inset + 474, buttonY, jmax(80, getWidth() - inset * 2 - 474), 30);
 }
 
-void CartManager::paint(Graphics &g) {
-    g.fillAll(DXLookNFeel::lightBackground);
+void CartManager::paint(Graphics& g) {
+    AVDexedTheme::panel(g, getLocalBounds().toFloat(), 10.0f);
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto heading = AVDexedTheme::font(15.0f, "SemiBold");
+    AVDexedTheme::drawGreyText(g, language.text("bankFiles"), heading,
+                               Rectangle<int>(16, 10, cartBrowser->getWidth(), 28).toFloat(), Justification::centredLeft);
+    AVDexedTheme::drawGreyText(g, language.text("bankPreview"), heading,
+                               Rectangle<int>(browserCart->getX(), 10, browserCart->getWidth(), 28).toFloat(), Justification::centredLeft);
+    AVDexedTheme::drawGreyText(g, language.text("currentBank"), heading,
+                               Rectangle<int>(16, activeCart->getY() - 30, getWidth() - 32, 28).toFloat(), Justification::centredLeft);
+    // Neutral wells behind the file tree and the preview, instead of black holes.
+    AVDexedTheme::fillBox(g, cartBrowser->getBounds().toFloat().expanded(2.0f), 6.0f, false, 0.6f);
+    AVDexedTheme::fillBox(g, browserCart->getBounds().toFloat().expanded(2.0f), 6.0f, false, 0.6f);
+}
+
+void CartManager::changeListenerCallback(ChangeBroadcaster*) { AVRefreshLanguage(); }
+
+void CartManager::AVRefreshLanguage() {
+    auto& language = AVDexedLanguageService::getInstance();
+    closeButton->setButtonText(language.text("close"));
+    loadButton->setButtonText(language.text("load"));
+    saveButton->setButtonText(language.text("save"));
+    fileMgrButton->setButtonText(language.text("showDirectory"));
+    cartBrowser->setTitle(language.text("bankBrowser"));
+    activeCart->setTitle(language.text("activePrograms"));
+    browserCart->setTitle(language.text("browserPrograms"));
+    for (auto* button : { closeButton.get(), loadButton.get(), saveButton.get(), fileMgrButton.get() }) {
+        button->setTitle(button->getButtonText());
+        button->setWantsKeyboardFocus(true);
+    }
+    repaint();
 }
 
 void CartManager::updateCartFilename() {
     activeCartName->setCartrdigeFile(mainWindow->processor->activeFileCartridge);
 }
 
-void CartManager::programSelected(ProgramListBox *source, int pos) {
-    if ( source == activeCart.get() ) {
-        browserCart->setActive(-1);
-        mainWindow->processor->setCurrentProgram(pos);
-        mainWindow->processor->updateHostDisplay();
-    } else {
-        Program program = source->getCurrentCart().unpackProgram(pos);
-        activeCart->setActive(-1);
-        browserCart->setActive(pos);
-        repaint();
-        mainWindow->processor->applyProgram(program);
-    }
+void CartManager::programSelected(ProgramListBox* source, int pos) {
+    if (pos < 0 || pos >= 32) return;
+    const bool currentBank = source == activeCart.get();
+    auto selectedCart = source->getCurrentCart();
+    const auto sourceFile = cartBrowser->getSelectedFile();
+    const auto safe = Component::SafePointer<CartManager>(this);
+    mainWindow->requestPresetReplacement([safe, selectedCart, sourceFile, pos, currentBank]() mutable {
+        if (safe == nullptr) return;
+        auto* editor = safe->mainWindow;
+        if (!currentBank) {
+            editor->processor->loadCartridge(selectedCart);
+            editor->processor->activeFileCartridge = sourceFile;
+            safe->activeCart->setCartridge(editor->processor->currentCart);
+        }
+        safe->browserCart->setActive(-1);
+        editor->processor->setCurrentProgram(pos);
+        editor->processor->updateHostDisplay();
+        editor->updateUI();
+        safe->updateCartFilename();
+        safe->repaint();
+    });
 }
 
 void CartManager::buttonClicked(juce::Button *buttonThatWasClicked) {
@@ -261,7 +310,7 @@ void CartManager::buttonClicked(juce::Button *buttonThatWasClicked) {
     }
 
     if ( buttonThatWasClicked == loadButton.get() ) {
-        fileChooser = std::make_unique<FileChooser>("Import original DX sysex...", File::getSpecialLocation(File::SpecialLocationType::userDocumentsDirectory), "*.syx;*.SYX;*.*", true);
+        fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("importBankTitle"), File::getSpecialLocation(File::SpecialLocationType::userDocumentsDirectory), "*.syx;*.SYX;*.*", true);
 
         fileChooser->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
                                  [this](const FileChooser& fc) {
@@ -316,23 +365,26 @@ void CartManager::fileClicked(const File& file, const MouseEvent& e) {
     if ( e.mods.isPopupMenu()) {
         PopupMenu menu;
 
-        menu.addItem(1000, "Open location");
+        menu.addItem(1000, AVDexedLanguageService::getInstance().text("openLocation"));
         if ( ! file.isDirectory() ) {
-            menu.addItem(1010, "Send sysex cartridge to DX7");
+            menu.addItem(1010, AVDexedLanguageService::getInstance().text("sendBank"));
         }
         menu.addSeparator();
-        menu.addItem(1020, "Refresh");
+        menu.addItem(1020, AVDexedLanguageService::getInstance().text("refresh"));
 
-        menu.showMenuAsync(PopupMenu::Options(), [this, file](int result) {
+        const auto safe = Component::SafePointer<CartManager>(this);
+        menu.setLookAndFeel(&getLookAndFeel());
+        menu.showMenuAsync(PopupMenu::Options().withTargetComponent(this), [safe, file](int result) {
+            if (safe == nullptr) return;
             switch(result) {
             case 1000:
                 file.revealToUser();
                 break;
             case 1010 :
-                mainWindow->processor->sendSysexCartridge(file);
+                safe->mainWindow->processor->sendSysexCartridge(file);
                 break;
             case 1020:
-                cartBrowserList->refresh();
+                safe->cartBrowserList->refresh();
                 break;
             }
         });
@@ -341,7 +393,7 @@ void CartManager::fileClicked(const File& file, const MouseEvent& e) {
 }
 
 void CartManager::setActiveProgram(int idx, String activeName) {
-    if ( activeCart->programNames[idx] == activeName ) {
+    if (idx >= 0 && idx < activeCart->programNames.size() && activeCart->programNames[idx] == activeName) {
         activeCart->setActive(idx);
         browserCart->setActive(-1);
     }
@@ -364,7 +416,9 @@ void CartManager::selectionChanged() {
     Cartridge browserSysex;
     int rc = browserSysex.load(file);
     if ( rc < 0 ) {
-        AlertWindow::showMessageBoxAsync (AlertWindow::WarningIcon, "Error", "Unable to open file");
+        auto& language = AVDexedLanguageService::getInstance();
+        AVShowMessage(AlertWindow::WarningIcon, language.text("error"),
+                      language.format("bankOpenError", {{"path", file.getFullPathName()}}), this);
         return;
     }
 
@@ -380,17 +434,23 @@ void CartManager::selectionChanged() {
 void CartManager::programRightClicked(ProgramListBox *source, int pos) {
     PopupMenu menu;
 
-    menu.addItem(1000, "Send program '" + source->programNames[pos] + "' to DX7");
+    menu.addItem(1000, AVDexedLanguageService::getInstance().format("sendVoice", {{ "name", source->programNames[pos] }}));
 
     if ( source == activeCart.get() )
-        menu.addItem(1010, "Send current sysex cartridge to DX7");
+        menu.addItem(1010, AVDexedLanguageService::getInstance().text("sendCurrentBank"));
 
-    menu.showMenuAsync(PopupMenu::Options(), [this, source, pos](int result) {
+    const auto safe = Component::SafePointer<CartManager>(this);
+    const auto safeSource = Component::SafePointer<ProgramListBox>(source);
+    menu.setLookAndFeel(&getLookAndFeel());
+    menu.showMenuAsync(PopupMenu::Options().withTargetComponent(source), [safe, safeSource, pos](int result) {
+        if (safe == nullptr || safeSource == nullptr) return;
+        auto* source = safeSource.getComponent();
+        auto* mainWindow = safe->mainWindow;
         switch(result)  {
             case 1000: {
                 Program program;
 
-                if ( source == activeCart.get() ) {
+                if ( source == safe->activeCart.get() ) {
                     program = mainWindow->processor->currentCart.unpackProgram(pos);
                 } else {
                     program = source->getCurrentCart().unpackProgram(pos);
@@ -411,26 +471,31 @@ void CartManager::programRightClicked(ProgramListBox *source, int pos) {
     });
 }
 
-void CartManager::programDragged(ProgramListBox *destListBox, int dest, char *packedPgm) {
-    if ( destListBox == activeCart.get() ) {
-        char *sysex = mainWindow->processor->currentCart.getRawVoice();
-        memcpy(sysex+(dest*128), packedPgm, 128);
+void CartManager::programDragged(ProgramListBox* destListBox, int dest, char* packedPgm) {
+    if (packedPgm == nullptr || dest < 0 || dest >= 32) return;
+    if (destListBox == activeCart.get()) {
+        const auto previous = mainWindow->processor->currentCart;
+        auto updated = previous;
+        updated.setPackedProgram(dest, packedPgm);
+        mainWindow->playView.carryAVBankMetadata(previous, updated);
+        mainWindow->processor->loadCartridge(updated);
+        mainWindow->processor->updateHostDisplay();
         mainWindow->updateUI();
     } else {
-        File file = cartBrowser->getSelectedFile();
-
-        if ( ! file.exists() )
-            return;
-
-        if ( file.isDirectory() )
-            return;
-        if ( file.getSize() != 4104 && file.getSize() != 4096 )
-            return;
-
+        const auto file = cartBrowser->getSelectedFile();
+        if (!file.existsAsFile()) return;
         Cartridge cart;
-        cart.load(file);
-        cart.setPackedProgram(dest, packedPgm);;
-        cart.saveVoice(file);
+        if (cart.load(file) != 0) return;
+        const auto previous = cart;
+        cart.setPackedProgram(dest, packedPgm);
+        if (cart.saveVoice(file) <= 0) {
+            auto& language = AVDexedLanguageService::getInstance();
+            auto* alert = new AVAlertWindow(language.text("saveError"), language.format("writeError", {{"path", file.getFullPathName()}}), AlertWindow::WarningIcon);
+            alert->addButton(language.text("ok"), 1, KeyPress(KeyPress::returnKey), KeyPress(KeyPress::escapeKey));
+            alert->enterModalState(true, nullptr, true);
+            return;
+        }
+        mainWindow->playView.carryAVBankMetadata(previous, cart);
         browserCart->setCartridge(cart);
     }
 }
@@ -457,9 +522,9 @@ bool CartManager::keyPressed(const KeyPress& key, Component* originatingComponen
 }
 
 void CartManager::showSysexConfigMsg() {
-    AlertWindow::showMessageBoxAsync (AlertWindow::WarningIcon, "Warning", "The DX7 midi interface is not configured correctly.\n\n"
-            "These buttons are used to 'ask' the DX7 to send the current program/cartridge.\n\n" 
-            "In order to use this correctly, you need to connect your midi in and midi out of your DX7 to a midi interface and configure this midi interface with the [PARM] dialog. THIS ONLY WORKS ON A DX7-II");
+    auto& language = AVDexedLanguageService::getInstance();
+    AVShowMessage(AlertWindow::WarningIcon, language.text("warning"),
+                  language.text("sysexConfigurationWarning"), this);
 }
 
 // unused stuff from FileBrowserListener

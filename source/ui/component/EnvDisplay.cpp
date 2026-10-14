@@ -1,4 +1,5 @@
 #include "EnvDisplay.h"
+#include "../AVDexedTheme.h"
 #include "../DXLookNFeel.h"
 #include "parameter/Model.h"
 #include "msfa/pitchenv.h"
@@ -166,7 +167,7 @@ void EnvDisplay::paint(Graphics &g) {
     int x, y;
 
     Path p;
-    p.startNewSubPath(0, 32);
+    p.startNewSubPath(0, h);
 
     // 0
     x = 0;
@@ -211,16 +212,13 @@ void EnvDisplay::paint(Graphics &g) {
     // 5
     p.lineTo( (d[0]+d[1]+d[2]+keyoff+d[3])*w, h - h / 99.0 * levels[3] );
 
-    p.lineTo(96,32);
-    p.lineTo(0, 32);
+    p.lineTo(getWidth(), h);
+    p.lineTo(0, h);
 
-    g.setColour(DXLookNFeel::fillColour);
+    g.setGradientFill(ColourGradient(AVDexedTheme::oceanTop, 0, 0, AVDexedTheme::oceanBottom, 0, float(h), false));
     g.fillPath(p);
 
-    g.setColour(Colour(0xFFFFFFFF));
-    String len;
-    len << ((int) vPos);
-    g.drawText(len, 5, 1, 72, 14, Justification::left, true);
+
 }
 
 PitchEnvDisplay::PitchEnvDisplay(DexedApvts &apvts) {
@@ -231,6 +229,7 @@ PitchEnvDisplay::PitchEnvDisplay(DexedApvts &apvts) {
 }
 
 void PitchEnvDisplay::paint(Graphics &g) {
+    g.addTransform(AffineTransform::scale(float(getWidth()) / 96.0f, float(getHeight()) / 32.0f));
     g.setColour(juce::Colours::white);
 
     float dist[4];

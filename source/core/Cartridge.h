@@ -12,6 +12,7 @@ void exportSysexPgm(uint8_t *dest, const uint8_t *src);
 class Cartridge {
     uint8_t voiceData[SYSEX_SIZE];
     uint8_t perfData[SYSEX_SIZE];
+    bool hasData = false;
 
     void setHeader() {
         uint8_t voiceHeader[] = SYSEX_HEADER;
@@ -21,11 +22,15 @@ class Cartridge {
     }
 
 public:
-    Cartridge() { }
+    Cartridge() {
+        memset(voiceData, 0, sizeof(voiceData));
+        memset(perfData, 0, sizeof(perfData));
+    }
 
     Cartridge(const Cartridge &cpy) {
         memcpy(voiceData, cpy.voiceData, SYSEX_SIZE);
         memcpy(perfData, cpy.perfData, SYSEX_SIZE);
+        hasData = cpy.hasData;
     }
 
     int load(juce::File f) {
@@ -57,6 +62,7 @@ public:
      */
     int load(const uint8_t *stream, int size);
     int saveVoice(juce::File f);
+    bool containsData() const { return hasData; }
 
     void saveVoice(uint8_t *sysex) {
         setHeader();
@@ -73,6 +79,10 @@ public:
         return (char *) voiceData;
     }
 
+    const char *getVoiceSysex() const {
+        return (const char *) voiceData;
+    }
+
     void getProgramNames(juce::StringArray &dest) {
         dest.clear();
         for (int i = 0; i < 32; i++)
@@ -87,12 +97,18 @@ public:
     Cartridge operator =(const Cartridge other) {
         memcpy(voiceData, other.voiceData, SYSEX_SIZE);
         memcpy(perfData, other.perfData, SYSEX_SIZE);
+        hasData = other.hasData;
         return *this;
     }
 
     void setPackedProgram(int idx, char *src) {
+        if (idx < 0 || idx >= 32 || src == nullptr)
+            return;
         memcpy(getRawVoice() + (idx * 128), src, 128);
+        hasData = true;
     }
+
+    bool packProgram(const uint8_t *src, int idx, const juce::String& name);
 
     Program unpackProgram(int idx);
 };

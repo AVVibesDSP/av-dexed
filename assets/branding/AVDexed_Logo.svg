@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 130" width="560" height="130">
+  <!-- User-provided AV Dexed lettering. Geometry preserved; project gradients adapted. -->
+  <defs>
+    <linearGradient id="avGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#248FC7"/>
+      <stop offset="100%" stop-color="#0B3558"/>
+    </linearGradient>
+    <linearGradient id="dexedGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#E0E0E0"/>
+      <stop offset="100%" stop-color="#9A9A9A"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(18, 0) skewX(-10)">
+    <g fill="url(#dexedGrad)" fill-rule="evenodd">
+      <path d="M 228 22 L 240 22 C 258 22, 268 34, 268 66 C 268 98, 258 110, 240 110 L 190 110 L 190 98 L 210 58 L 210 94 L 236 94 C 246 94, 249 85, 249 66 C 249 47, 246 38, 236 38 L 220 38 Z"/>
+      <path d="M 332 92 L 332 96 C 332 106, 324 110, 307 110 L 296 110 C 284 110, 278 102, 278 88 L 278 68 C 278 54, 284 46, 296 46 L 316 46 C 328 46, 334 54, 334 68 L 334 83 L 294 83 L 294 91 C 294 95, 297 97, 303 97 L 317 97 C 324 97, 328 95, 332 92 Z M 294 71 L 318 71 L 318 65 C 318 60, 315 58, 309 58 L 303 58 C 297 58, 294 60, 294 65 Z"/>
+      <path d="M 345 46 L 363 46 L 372 63 L 381 46 L 399 46 L 381 78 L 400 110 L 382 110 L 372 92 L 362 110 L 344 110 L 363 78 Z"/>
+      <path d="M 464 92 L 464 96 C 464 106, 456 110, 439 110 L 428 110 C 416 110, 410 102, 410 88 L 410 68 C 410 54, 416 46, 428 46 L 448 46 C 460 46, 466 54, 466 68 L 466 83 L 426 83 L 426 91 C 426 95, 429 97, 435 97 L 449 97 C 456 97, 460 95, 464 92 Z M 426 71 L 450 71 L 450 65 C 450 60, 447 58, 441 58 L 435 58 C 429 58, 426 60, 426 65 Z"/>
+      <path d="M 518 22 L 534 22 L 534 110 L 496 110 C 484 110, 478 102, 478 88 L 478 68 C 478 54, 484 46, 496 46 L 518 46 Z M 494 66 L 494 90 C 494 95, 497 97, 503 97 L 518 97 L 518 59 L 503 59 C 497 59, 494 61, 494 66 Z"/>
+    </g>
+    <g fill="url(#avGrad)" fill-rule="evenodd">
+      <path d="M 30 110 L 74 22 L 98 22 L 142 110 L 120 110 L 110 90 L 62 90 L 52 110 Z M 86 44 L 71 74 L 101 74 Z"/>
+      <path d="M 106 22 L 150 110 L 174 110 L 218 22 L 196 22 L 162 90 L 128 22 Z"/>
+    </g>
+  </g>
+</svg>

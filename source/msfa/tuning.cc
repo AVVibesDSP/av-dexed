@@ -1,3 +1,6 @@
+// Modified by AV Vibes, 2026 (AV Dexed): tuning errors are returned to the
+// caller instead of opening alert windows from the audio or host thread.
+
 #include "tuning.h"
 
 #include <iostream>
@@ -8,7 +11,6 @@
 #include <sstream>
 #include <vector>
 
-#include <juce_gui_basics/juce_gui_basics.h>
 
 struct StandardTuning : public TuningState {
     StandardTuning() {
@@ -54,16 +56,13 @@ std::shared_ptr<TuningState> createStandardTuning()
     return std::make_shared<StandardTuning>();
 }
 
-std::shared_ptr<TuningState> createTuningFromSCLData( const std::string &scl )
+std::shared_ptr<TuningState> createTuningFromSCLData( const std::string &scl, std::string* error )
 {
     Tunings::Scale s;
     try {
         s = Tunings::parseSCLData(scl);
     } catch (const std::exception& e) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::AlertIconType::WarningIcon,
-            "Error parsing SCL data for SCL tuning",
-            e.what(),
-            "OK");
+        if (error != nullptr) *error = e.what();
         return nullptr;
     }
 
@@ -71,26 +70,20 @@ std::shared_ptr<TuningState> createTuningFromSCLData( const std::string &scl )
     try {
         res->tuning = Tunings::Tuning(s);
     } catch (const std::exception& e) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::AlertIconType::WarningIcon,
-            "Error creating tuning for SCL tuning",
-            e.what(),
-            "OK");
+        if (error != nullptr) *error = e.what();
         res = nullptr;
     }
 
     return res;
 }
 
-std::shared_ptr<TuningState> createTuningFromKBMData( const std::string &kbm )
+std::shared_ptr<TuningState> createTuningFromKBMData( const std::string &kbm, std::string* error )
 {
     Tunings::KeyboardMapping k;
     try {
         k = Tunings::parseKBMData(kbm);        
     } catch (const std::exception& e) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::AlertIconType::WarningIcon,
-            "Error parsing KBM data for KBM tuning",
-            e.what(),
-            "OK");
+        if (error != nullptr) *error = e.what();
         return nullptr;
     }
 
@@ -98,26 +91,20 @@ std::shared_ptr<TuningState> createTuningFromKBMData( const std::string &kbm )
     try {
         res->tuning = Tunings::Tuning(k);
     } catch (const std::exception& e) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::AlertIconType::WarningIcon,
-            "Error creating tuning for KBM tuning",
-            e.what(),
-            "OK");
+        if (error != nullptr) *error = e.what();
         res = nullptr;
     }
 
     return res;
 }
 
-std::shared_ptr<TuningState> createTuningFromSCLAndKBMData( const std::string &sclData, const std::string &kbmData )
+std::shared_ptr<TuningState> createTuningFromSCLAndKBMData( const std::string &sclData, const std::string &kbmData, std::string* error )
 {
     Tunings::Scale s;
     try {
         s = Tunings::parseSCLData(sclData);
     } catch (const std::exception& e) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::AlertIconType::WarningIcon,
-            "Error parsing SCL data for SCL/KBM tuning",
-            e.what(),
-            "OK");
+        if (error != nullptr) *error = e.what();
         return nullptr;
     }
 
@@ -125,10 +112,7 @@ std::shared_ptr<TuningState> createTuningFromSCLAndKBMData( const std::string &s
     try {
         k = Tunings::parseKBMData(kbmData);        
     } catch (const std::exception& e) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::AlertIconType::WarningIcon,
-            "Error parsing KBM data for SCL/KBM tuning",
-            e.what(),
-            "OK");
+        if (error != nullptr) *error = e.what();
         return nullptr;
     }
     
@@ -136,10 +120,7 @@ std::shared_ptr<TuningState> createTuningFromSCLAndKBMData( const std::string &s
     try {
         res->tuning = Tunings::Tuning(s, k);
     } catch (const std::exception& e) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::AlertIconType::WarningIcon,
-            "Error creating tuning for SCL/KBM tuning",
-            e.what(),
-            "OK");
+        if (error != nullptr) *error = e.what();
         res = nullptr;
     }
     return res;
