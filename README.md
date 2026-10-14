@@ -1,10 +1,21 @@
-# AV Dexed
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/AVDexed_Logo.svg">
+    <img src="doc/images/AVDexed_Logo_light.svg" alt="AV Dexed" width="420">
+  </picture>
+</h1>
 
 AV Dexed is a free, unofficial fork of [Dexed](https://github.com/asb2m10/dexed), the DX7-style FM synthesizer by
 Pascal Gauthier (Digital Suburban). It keeps Dexed's FM engine and all of its classic editing, and adds a simpler
 interface for people who just want to play and sound good.
 
 **Version 0.1.0 — public preview.** Source code only for now; no binaries are published yet.
+
+<p align="center">
+  <img src="doc/images/av-dexed-play.png" alt="AV Dexed Play view: sound browser, FM algorithm and effect knobs" width="49%">
+  <img src="doc/images/av-dexed-advanced.png" alt="AV Dexed Advanced view: the six operators and global parameters" width="49%">
+</p>
+<p align="center"><em>Play</em> &nbsp;·&nbsp; <em>Advanced</em></p>
 
 > AV Dexed is a modified version of Dexed 1.1.0 (asb2m10/dexed, base commit `eebb748`), modified by AV Vibes since
 > October 2026; the git history shows every change. It is not affiliated with or endorsed by Pascal Gauthier /
