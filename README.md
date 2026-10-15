@@ -12,7 +12,7 @@ interface for people who just want to play and sound good.
 **Version 0.2.0 — public preview.** macOS: download the `.dmg` from
 [Releases](https://github.com/AVVibesDSP/av-dexed/releases/latest) (macOS 11 or later, Intel and Apple silicon; app, VST3, AU
 and CLAP). It is not signed or notarized by Apple yet: open `1 - HOW TO OPEN - CÓMO ABRIR.txt` in the disk image
-first. Windows and Linux: build from source.
+first. Windows and Linux: build from source (on Windows the build also makes an installer, see [Windows](#windows)).
 
 <p align="center">
   <img src="doc/images/av-dexed-play.png" alt="AV Dexed Play view: sound browser, FM algorithm and effect knobs" width="49%">
@@ -72,9 +72,31 @@ cmake --build build --config Release
 Targets: Standalone, VST3 and CLAP, plus AU on macOS. Results are in `build/source/AVDexed_artefacts/`. Plugins are not
 copied into your plugin folders unless you add `-DDEXED_COPY_PLUGIN_AFTER_BUILD=ON`. The `libs/JUCE` submodule is
 JUCE 8.0.14; to use another JUCE 8 checkout, pass `-DDEXED_JUCE_PATH=/path/to/JUCE`. Add `-DDEXED_BUILD_TESTS=ON` to
-build the regression tests. AV Dexed is developed and tested on macOS; Linux and Windows builds are untested.
-`Dexed.jucer` is not maintained — use CMake. The macOS installer is made with
+build the regression tests. AV Dexed is developed and tested on macOS and also builds and runs on Windows 11 (see
+below); Linux builds are untested. `Dexed.jucer` is not maintained — use CMake. The macOS installer is made with
 [packaging/macos/build_installer.sh](packaging/macos/README.md).
+
+### Windows
+
+Tested on Windows 11 x64 with Visual Studio 2026 (workload *Desktop development with C++*, which includes CMake). In
+a *Developer PowerShell for VS 2026*:
+
+```sh
+cmake -S . -B build-release -G "Visual Studio 18 2026" -A x64
+cmake --build build-release --config Release
+```
+
+Visual Studio chooses the configuration when building (`--config Release`), so `CMAKE_BUILD_TYPE` is not needed.
+Build the regression tests in another folder, because they change the plugin build: the same two lines with
+`-B build -DDEXED_BUILD_TESTS=ON` and `build`, then `ctest --test-dir build -C Release`. The standalone app can use
+ASIO drivers as well as Windows Audio and DirectSound (JUCE's bundled ASIO SDK, under its GPLv3 option).
+
+With [Inno Setup](https://jrsoftware.org/isinfo.php) 6.3 or newer installed, add `--target installer` to the build line
+to make `build-release/installer/AVDexed-<version>-win.exe` (and a `.zip` of the same files). In English or Spanish,
+it installs the VST3 in `C:\Program Files\Common Files\VST3`, the CLAP in `C:\Program Files\Common Files\CLAP` and the
+app in `C:\Program Files\AV Dexed`. Setup and Uninstall never touch the sounds and settings in
+`%APPDATA%\AV Vibes\AV Dexed`. The installer is not signed yet: if Windows says "Windows protected your PC", choose
+*More info*, then *Run anyway*.
 
 ## License
 
@@ -110,7 +132,11 @@ AV Dexed es un fork **gratuito y no oficial** de [Dexed](https://github.com/asb2
 DX7 de Pascal Gauthier (Digital Suburban). Conserva el motor FM de Dexed y toda su edición clásica, y agrega una
 interfaz más sencilla para quien solo quiere tocar y que suene bien.
 
-**Versión 0.2.0, vista previa pública.** Por ahora solo se publica el código; todavía no hay instaladores.
+**Versión 0.2.0, vista previa pública.** macOS: descarga el `.dmg` de
+[Releases](https://github.com/AVVibesDSP/av-dexed/releases/latest) (macOS 11 o posterior, Intel y Apple silicon; app,
+VST3, AU y CLAP). Todavía no está firmado ni notarizado por Apple: abre primero
+`1 - HOW TO OPEN - CÓMO ABRIR.txt`. Windows y Linux: compílalo desde el código (en Windows la compilación también
+crea un instalador, ver [Windows](#windows)).
 
 AV Dexed es una versión modificada de Dexed 1.1.0 (commit base `eebb748`), modificada por AV Vibes desde octubre de
 2026; el historial de git muestra cada cambio. No está afiliado ni cuenta con el respaldo de Pascal Gauthier / Digital
@@ -119,14 +145,16 @@ Suburban. Reporta los problemas de AV Dexed en este repositorio, no en el proyec
 - **Play:** buscador de sonidos con favoritos y carpetas reales, el algoritmo FM al centro (cada operador brilla mientras
   suena y se abre en Advanced con un clic), Volumen, Paneo, Corte, Reverb, Delay y Chorus.
 - **Biblioteca de carpetas reales:** cada carpeta del buscador es una carpeta en el disco
-  (`~/Library/Application Support/AV Vibes/AV Dexed`), y al revés. Arrastra bancos `.syx`, sonidos `.avdexpreset` o
-  carpetas completas sobre AV Dexed (o usa *Importar banco*) y se copian ahí.
+  (`~/Library/Application Support/AV Vibes/AV Dexed`; en Windows, `%APPDATA%\AV Vibes\AV Dexed`), y al revés.
+  Arrastra bancos `.syx`, sonidos `.avdexpreset` o carpetas completas sobre AV Dexed (o usa *Importar banco*) y se
+  copian ahí.
 - **Cada sonido guarda su volumen, paneo, corte y efectos**, también las voces de un banco `.syx` (van dentro del
   mismo archivo, en un mensaje SysEx extra que un DX7 ignora).
 - **Advanced:** todos los parámetros clásicos de Dexed.
 - **Ajustes:** salida de audio, instrumento, entradas MIDI, asignaciones de CC (con invertir), SysEx y Acerca de.
 - **Español e inglés.** Identificadores y carpeta de datos propios: se puede instalar junto al Dexed original.
 
-Para compilar, sigue los pasos de **Build** de arriba. Licencia: GNU GPL versión 3 o posterior, **sin ninguna
+Para compilar, sigue los pasos de **Build** de arriba (en Windows, los de **Windows**, que también hacen el
+instalador; no toca tus sonidos ni ajustes). Licencia: GNU GPL versión 3 o posterior, **sin ninguna
 garantía**; consulta [LICENSE](LICENSE) y los [avisos de terceros](doc/THIRD_PARTY_NOTICES.md). Yamaha y DX7 son marcas
 registradas de Yamaha Corporation; AV Dexed no está afiliado con Yamaha.

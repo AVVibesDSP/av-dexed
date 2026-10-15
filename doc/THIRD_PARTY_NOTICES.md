@@ -16,6 +16,7 @@ changed say so in their header or appear in the git history.
 | Dexed | everything not listed below (upstream files keep their own notices) | GPL-3.0-or-later |
 | msfa (music-synthesizer-for-android), © 2012 Google Inc. and contributors | `source/msfa` | Apache-2.0 (full text in `source/msfa/LICENSE`) |
 | JUCE 8.0.14 | `libs/JUCE` (submodule) | AGPLv3 open-source option (combined under GPLv3 section 13) or commercial; JUCE's own bundled SDKs are listed in `libs/JUCE/LICENSE.md` |
+| Steinberg ASIO SDK, © Steinberg Media Technologies GmbH (bundled with JUCE; ASIO is a trademark of Steinberg) | `libs/JUCE/modules/juce_audio_devices/native/asio`, compiled into the Windows build | GPL-3.0 option of its dual license (`LICENSE.txt` there) |
 | MTS-ESP client, © 2021 ODDSound Ltd. | `libs/MTS-ESP` (submodule) | permissive (see its `LICENSE`) |
 | tuning-library, © Paul Walker | `libs/tuning-library` (submodule) | MIT |
 | surgesynthteam_tuningui, © Paul Walker | `libs/surgesynthteam_tuningui` (submodule) | MIT |

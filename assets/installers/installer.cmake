@@ -26,6 +26,17 @@ if (APPLE)
     package(AU)
 endif()
 
+if (WIN32)
+    # The VST3 and CLAP folders also hold the linker's import library (.lib, .exp): not for users.
+    get_target_property(product_name ${PROJECT_NAME} JUCE_PRODUCT_NAME)
+    add_custom_command(
+            TARGET dist
+            POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -f "${DIST_DIR}/${product_name}.lib" "${DIST_DIR}/${product_name}.exp"
+            VERBATIM
+    )
+endif()
+
 add_dependencies(installer dist)
 
 if (APPLE)
@@ -37,7 +48,11 @@ else()
 endif()
 
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
+get_property(multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if (WIN32 AND multi_config)
+    # Visual Studio picks the configuration when building (--config Release), not with CMAKE_BUILD_TYPE.
+    set(VERSION_NAME "$<IF:$<CONFIG:Release>,${PROJECT_VERSION},${PROJECT_VERSION}-NIGHTLY-${BUILD_ID}>")
+elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(VERSION_NAME ${PROJECT_VERSION})
 else()
     set(VERSION_NAME ${PROJECT_VERSION}-NIGHTLY-${BUILD_ID})
@@ -72,7 +87,8 @@ if (APPLE)
     )
 elseif (WIN32)
     message(STATUS "Configuring for windows installer")
-    find_program(INNOSETUP_COMPILER_EXECUTABLE iscc)
+    find_program(INNOSETUP_COMPILER_EXECUTABLE iscc
+            PATHS "C:/Program Files (x86)/Inno Setup 6" "$ENV{LOCALAPPDATA}/Programs/Inno Setup 6")
 
     if(
             NOT INNOSETUP_COMPILER_EXECUTABLE
@@ -94,18 +110,34 @@ elseif (WIN32)
                 INSTALL_SCRIPT "${CMAKE_SOURCE_DIR}/assets/installers/windows/installer.iss"
         )
 
+        # Spanish licence page: the unofficial summary, then the official English text (as on macOS).
+        set(license_es "${CMAKE_BINARY_DIR}/installer-license-es.txt")
+        file(READ "${CMAKE_SOURCE_DIR}/packaging/macos/resources/license-es.txt" license_es_summary)
+        file(READ "${CMAKE_SOURCE_DIR}/LICENSE" license_gpl)
+        file(WRITE "${license_es}" "${license_es_summary}${license_gpl}")
+
+        get_target_property(generated_sources ${PROJECT_NAME} JUCE_GENERATED_SOURCES_DIRECTORY)
+        set(icon_arg "")
+        if (EXISTS "${generated_sources}/icon.ico")
+            set(icon_arg "/DIcon=${generated_sources}/icon.ico")
+        endif()
+
+        # The files are named after the product ("AV Dexed.vst3"), the setup file after the project.
         add_custom_command(
                 TARGET installer
                 POST_BUILD
                 WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
                 COMMAND ${CMAKE_COMMAND} -E make_directory installer
                 COMMAND innosetup::compiler
-                /O"${CMAKE_BINARY_DIR}/installer" /DName="${PROJECT_NAME}"
-                /DNameCondensed="${PROJECT_NAME}" /DVersion="${VERSION_NAME}"
+                "/O${CMAKE_BINARY_DIR}/installer" "/DName=${product_name}"
+                "/DNameCondensed=${PROJECT_NAME}" "/DVersion=${VERSION_NAME}"
                 /DVST3 /DSA /DCLAP
-                /DLicense="${CMAKE_SOURCE_DIR}/LICENSE"
-                /DStagedAssets="${DIST_DIR}"
-                /DData="${CMAKE_SOURCE_DIR}/assets/installers/windows" "$<TARGET_PROPERTY:innosetup::compiler,INSTALL_SCRIPT>"
+                "/DLicense=${CMAKE_SOURCE_DIR}/LICENSE"
+                "/DLicenseEs=${license_es}"
+                ${icon_arg}
+                "/DStagedAssets=${DIST_DIR}"
+                "$<TARGET_PROPERTY:innosetup::compiler,INSTALL_SCRIPT>"
+                VERBATIM
         )
     endif()
 endif()
