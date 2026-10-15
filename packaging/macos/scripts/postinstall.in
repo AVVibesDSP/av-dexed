@@ -1,0 +1,10 @@
+#!/bin/sh
+# AV Dexed installer, after @BUNDLE@ is copied (runs as root).
+# Without a Developer ID the bundle loses the download quarantine and is signed
+# here, on this Mac (ad hoc), so macOS and the hosts load it. With one,
+# build_installer.sh leaves that step out.
+BUNDLE="$2/@BUNDLE@"
+[ -d "$BUNDLE" ] || exit 0
+@SIGNSTEP@
+@EXTRA@
+exit 0

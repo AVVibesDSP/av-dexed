@@ -9,7 +9,10 @@ AV Dexed is a free, unofficial fork of [Dexed](https://github.com/asb2m10/dexed)
 Pascal Gauthier (Digital Suburban). It keeps Dexed's FM engine and all of its classic editing, and adds a simpler
 interface for people who just want to play and sound good.
 
-**Version 0.2.0 — public preview.** Source code only for now; no binaries are published yet.
+**Version 0.2.0 — public preview.** macOS: download `AV Dexed 0.2.0 macOS.dmg` from
+[Releases](https://github.com/AVVibesDSP/av-dexed/releases) (macOS 11 or later, Intel and Apple silicon; app, VST3, AU
+and CLAP). It is not signed or notarized by Apple yet: open `1 - HOW TO OPEN - CÓMO ABRIR.txt` in the disk image
+first. Windows and Linux: build from source.
 
 <p align="center">
   <img src="doc/images/av-dexed-play.png" alt="AV Dexed Play view: sound browser, FM algorithm and effect knobs" width="49%">
@@ -70,7 +73,8 @@ Targets: Standalone, VST3 and CLAP, plus AU on macOS. Results are in `build/sour
 copied into your plugin folders unless you add `-DDEXED_COPY_PLUGIN_AFTER_BUILD=ON`. The `libs/JUCE` submodule is
 JUCE 8.0.14; to use another JUCE 8 checkout, pass `-DDEXED_JUCE_PATH=/path/to/JUCE`. Add `-DDEXED_BUILD_TESTS=ON` to
 build the regression tests. AV Dexed is developed and tested on macOS; Linux and Windows builds are untested.
-`Dexed.jucer` is not maintained — use CMake.
+`Dexed.jucer` is not maintained — use CMake. The macOS installer is made with
+[packaging/macos/build_installer.sh](packaging/macos/README.md).
 
 ## License
 

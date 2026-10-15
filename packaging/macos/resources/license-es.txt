@@ -1,0 +1,19 @@
+LICENCIA DE AV DEXED: RESUMEN EN ESPAÑOL (NO OFICIAL)
+
+AV Dexed es software libre bajo la Licencia Pública General de GNU (GNU GPL), versión 3 o posterior. Es una versión modificada de Dexed, que también usa la GPL.
+
+En pocas palabras:
+
+- Puedes usar AV Dexed gratis y para lo que quieras, también para música comercial. La música que hagas con él es tuya: la licencia no aplica a lo que creas con el programa.
+- Puedes copiarlo y compartirlo, siempre con esta misma licencia.
+- Puedes estudiar y cambiar el código. Si compartes una versión modificada, también va bajo la GPL y con su código fuente.
+- Se entrega «tal cual», sin garantía de ningún tipo.
+
+Este resumen solo es para ayudarte a entenderla y no tiene validez legal. La licencia que vale es el texto oficial en inglés, que va completo abajo y también está en https://www.gnu.org/licenses/gpl-3.0.html
+
+Código fuente: https://github.com/AVVibesDSP/av-dexed
+
+========================================
+TEXTO OFICIAL (INGLÉS)
+========================================
+

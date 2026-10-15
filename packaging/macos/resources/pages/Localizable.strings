@@ -1,0 +1,11 @@
+/* AV Dexed installer: titles of distribution.xml. The same in every language
+   folder, so they are English everywhere; the descriptions add Spanish. */
+"INSTALLER_TITLE" = "AV Dexed @VERSION@";
+"CHOICE_APP" = "AV Dexed (app)";
+"CHOICE_APP_DESCRIPTION" = "The standalone app, no DAW needed. Installed in Applications.\n\nLa aplicación que funciona sola, sin DAW. Se instala en Aplicaciones.";
+"CHOICE_VST3" = "VST3 plug-in";
+"CHOICE_VST3_DESCRIPTION" = "For Ableton Live, Cubase, Studio One, Reaper, Bitwig and others. Installed in /Library/Audio/Plug-Ins/VST3.\n\nPara Ableton Live, Cubase, Studio One, Reaper, Bitwig y otros. Se instala en /Library/Audio/Plug-Ins/VST3.";
+"CHOICE_AU" = "Audio Unit (AU) plug-in";
+"CHOICE_AU_DESCRIPTION" = "For Logic Pro, GarageBand and MainStage. Installed in /Library/Audio/Plug-Ins/Components.\n\nPara Logic Pro, GarageBand y MainStage. Se instala en /Library/Audio/Plug-Ins/Components.";
+"CHOICE_CLAP" = "CLAP plug-in";
+"CHOICE_CLAP_DESCRIPTION" = "For Bitwig, Reaper and other DAWs with CLAP. Installed in /Library/Audio/Plug-Ins/CLAP.\n\nPara Bitwig, Reaper y otros DAW con CLAP. Se instala en /Library/Audio/Plug-Ins/CLAP.";

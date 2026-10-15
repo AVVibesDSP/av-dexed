@@ -1,0 +1,43 @@
+HOW TO OPEN THE INSTALLER
+=========================
+
+AV Dexed is not signed by Apple yet, so a plain double-click is
+blocked. Do this instead:
+
+macOS 14 or earlier
+  Right-click "2 - AV Dexed @VERSION@.pkg" → Open → Open.
+
+macOS 15 or later
+  1. Double-click "2 - AV Dexed @VERSION@.pkg". macOS blocks it:
+     close the message.
+  2. Open System Settings → Privacy & Security.
+  3. Scroll down, click "Open Anyway" and confirm with your
+     password.
+
+Which macOS do I have? Apple menu → About This Mac.
+
+More details: "3 - READ ME - LÉEME.txt".
+
+
+======================================================================
+
+
+CÓMO ABRIR EL INSTALADOR
+========================
+
+AV Dexed todavía no está firmado por Apple, así que con doble clic
+tu Mac no lo deja abrir. Haz esto:
+
+macOS 14 o anterior
+  Clic derecho en «2 - AV Dexed @VERSION@.pkg» → Abrir → Abrir.
+
+macOS 15 o posterior
+  1. Doble clic en «2 - AV Dexed @VERSION@.pkg». macOS lo bloquea:
+     cierra el aviso.
+  2. Abre Configuración del Sistema → Privacidad y seguridad.
+  3. Baja hasta el final, haz clic en «Abrir de todos modos» y
+     confirma con tu contraseña.
+
+¿Qué macOS tengo? Menú Apple → Acerca de esta Mac.
+
+Más detalles: «3 - READ ME - LÉEME.txt».

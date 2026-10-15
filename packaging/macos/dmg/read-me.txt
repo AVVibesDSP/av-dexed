@@ -1,0 +1,135 @@
+AV Dexed for macOS / para macOS
+===============================
+
+[ENGLISH]  ·  [ESPAÑOL abajo]
+
+
+READ ME BEFORE INSTALLING
+-------------------------
+
+AV Dexed is a free, open-source DX7-style FM synthesizer based on
+Dexed.
+
+1. Not signed by Apple yet
+
+   For now I have no Apple developer certificate, so AV Dexed is not
+   signed or notarized. macOS will say it cannot verify the
+   developer. It is not malware: the code is free and you can review
+   it (point 4).
+
+2. How to open the installer
+
+   - macOS 14 or earlier: right-click "2 - AV Dexed @VERSION@.pkg" →
+     Open → Open.
+   - macOS 15 or later: double-click the .pkg and close the message
+     that blocks it. Then open System Settings → Privacy & Security,
+     scroll to the message about the installer, click "Open Anyway"
+     and confirm with your password.
+   - If right-click does not let you (macOS 11 to 14): after the
+     blocked double-click, click "Open Anyway" in System Preferences →
+     Security & Privacy → General (11 and 12) or in System Settings →
+     Privacy & Security (13 and 14).
+
+3. What the installer does
+
+   - In the "Installation Type" step, tick or untick each format:
+       - AV Dexed (app): /Applications
+       - VST3 plug-in: /Library/Audio/Plug-Ins/VST3
+       - Audio Unit (AU) plug-in: /Library/Audio/Plug-Ins/Components
+       - CLAP plug-in: /Library/Audio/Plug-Ins/CLAP
+   - Asks for your administrator password, because it installs into
+     system folders.
+   - When it finishes, it removes the download quarantine and signs
+     what it installed on your Mac (local, ad-hoc signature), so
+     macOS and your DAW open it.
+   - It does not touch your sounds or settings:
+     ~/Library/Application Support/AV Vibes/AV Dexed
+
+   Requirements: macOS 11 (Big Sur) or later, Intel or Apple silicon
+   Mac.
+
+4. The code is free
+
+   AV Dexed is licensed under the GNU GPL v3. You can review the
+   code, or build the plug-ins and the app yourself, from:
+
+       https://github.com/AVVibesDSP/av-dexed
+
+   The build steps are in the repository's README.
+
+5. Uninstall
+
+   Double-click "4 - Uninstall - Desinstalar.command" (if macOS
+   blocks it, see point 2). It asks for your password and removes the
+   app and the plug-ins. Your sounds and settings stay.
+
+AV Dexed is a modified version of Dexed (Pascal Gauthier / Digital
+Suburban); it is not affiliated with or endorsed by them. Yamaha and
+DX7 are registered trademarks of Yamaha Corporation.
+
+
+======================================================================
+
+
+LÉEME ANTES DE INSTALAR
+-----------------------
+
+AV Dexed es un sintetizador FM estilo DX7, gratuito y de código
+abierto, hecho a partir de Dexed.
+
+1. Todavía no está firmado por Apple
+
+   Por ahora no tengo certificado de desarrollador de Apple, así que
+   AV Dexed no está firmado ni notarizado. macOS va a decir que no
+   puede comprobar quién lo hizo. No es un virus: el código es libre
+   y lo puedes revisar (punto 4).
+
+2. Cómo abrir el instalador
+
+   - macOS 14 o anterior: clic derecho en «2 - AV Dexed @VERSION@.pkg»
+     → Abrir → Abrir.
+   - macOS 15 o posterior: doble clic en el .pkg y cierra el aviso
+     que lo bloquea. Luego abre Configuración del Sistema →
+     Privacidad y seguridad, baja hasta el aviso sobre el instalador,
+     haz clic en «Abrir de todos modos» y confirma con tu contraseña.
+   - Si el clic derecho no te deja (macOS 11 a 14): después del doble
+     clic bloqueado, haz clic en «Abrir de todos modos» en Preferencias
+     del Sistema → Seguridad y privacidad → General (11 y 12) o en
+     Configuración del Sistema → Privacidad y seguridad (13 y 14).
+
+3. Qué hace el instalador
+
+   - En el paso «Tipo de instalación» marca o desmarca cada formato:
+       - AV Dexed (aplicación): /Applications
+       - Plugin VST3: /Library/Audio/Plug-Ins/VST3
+       - Plugin Audio Unit (AU): /Library/Audio/Plug-Ins/Components
+       - Plugin CLAP: /Library/Audio/Plug-Ins/CLAP
+   - Pide tu contraseña de administrador, porque instala en carpetas
+     del sistema.
+   - Al terminar, quita la cuarentena de descarga y firma en tu Mac
+     (firma local, «ad hoc») lo que instaló, para que macOS y tu DAW
+     lo abran.
+   - No toca tus sonidos ni tus ajustes:
+     ~/Library/Application Support/AV Vibes/AV Dexed
+
+   Requisitos: macOS 11 (Big Sur) o posterior, Mac con Intel o con
+   Apple silicon.
+
+4. El código es libre
+
+   AV Dexed está bajo la licencia GNU GPL v3. Puedes revisar el
+   código, o compilar el plugin y la aplicación por tu cuenta, desde:
+
+       https://github.com/AVVibesDSP/av-dexed
+
+   Los pasos para compilar están en el README del repositorio.
+
+5. Desinstalar
+
+   Haz doble clic en «4 - Uninstall - Desinstalar.command» (si macOS
+   lo bloquea, sigue el punto 2). Pide tu contraseña y quita la
+   aplicación y los plugins. Tus sonidos y ajustes se quedan.
+
+AV Dexed es una versión modificada de Dexed (Pascal Gauthier /
+Digital Suburban); no está afiliado ni respaldado por ellos. Yamaha y
+DX7 son marcas registradas de Yamaha Corporation.

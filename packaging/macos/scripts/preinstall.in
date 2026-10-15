@@ -1,0 +1,9 @@
+#!/bin/sh
+# AV Dexed installer, before @BUNDLE@ is copied (runs as root).
+# $2 is the folder it goes into. An older copy is removed first, so no file of
+# a previous version stays inside the new bundle.
+BUNDLE="$2/@BUNDLE@"
+case "$BUNDLE" in
+    */"@BUNDLE@") [ -d "$BUNDLE" ] && /bin/rm -rf "$BUNDLE" ;;
+esac
+exit 0

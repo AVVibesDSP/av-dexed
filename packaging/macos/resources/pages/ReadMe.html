@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 13px -apple-system, "Helvetica Neue", sans-serif; line-height: 1.5; margin: 0 4px; color: #1d1d1f; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 10px; }
+  h2 { font-size: 14px; font-weight: 600; margin: 14px 0 4px; }
+  .ocean { color: #0a5fe0; }
+  .lang { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #86868b; margin: 0 0 6px; }
+  hr { border: 0; border-top: 1px solid rgba(128, 128, 128, 0.35); margin: 22px 0 16px; }
+  code { font: 12px ui-monospace, Menlo, monospace; }
+  ul { padding-left: 20px; margin: 6px 0; }
+  li.last { margin-bottom: 12px; }   /* the installer ignores the margin of ul */
+  a { color: #0a5fe0; }
+  .small { font-size: 11px; opacity: 0.75; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #f2f2f2; }
+    .ocean, a { color: #4c9bff; }
+  }
+</style>
+</head>
+<body>
+<p class="lang">ENGLISH · ESPAÑOL ABAJO ↓</p>
+<h1>Before installing <span class="ocean">AV Dexed</span> @VERSION@</h1>
+<h2>What is installed, and where</h2>
+<p>In the “Installation Type” step, tick or untick each format:</p>
+<ul>
+  <li><b>AV Dexed</b> (app): <code>/Applications</code></li>
+  <li><b>VST3</b>: <code>/Library/Audio/Plug-Ins/VST3</code></li>
+  <li><b>Audio Unit (AU)</b>: <code>/Library/Audio/Plug-Ins/Components</code></li>
+  <li class="last"><b>CLAP</b>: <code>/Library/Audio/Plug-Ins/CLAP</code></li>
+</ul>
+<p>If another version is there, this one replaces it.</p>
+<h2>What the installer does</h2>
+<ul>
+  <li>Asks for your administrator password, because it installs into system folders.</li>
+  <li>When it finishes, it removes the download quarantine and signs what it installed on your Mac (local,
+ad-hoc signature), so macOS and your DAW open it. AV Dexed is not signed by Apple yet.</li>
+  <li class="last">It does not touch your sounds or settings: <code>~/Library/Application Support/AV Vibes/AV Dexed</code></li>
+</ul>
+<h2>Requirements</h2>
+<p>macOS 11 (Big Sur) or later, Intel or Apple silicon Mac.</p>
+<h2>Free code</h2>
+<p>AV Dexed is licensed under the GNU GPL v3. You can review the code, or build the plug-ins and the app
+yourself, from <a href="https://github.com/AVVibesDSP/av-dexed">github.com/AVVibesDSP/av-dexed</a>.</p>
+<h2>Uninstall</h2>
+<p>Open <b>4 - Uninstall - Desinstalar.command</b> on the disk image (.dmg). It removes the app and the plug-ins; your sounds and
+settings stay.</p>
+<p class="small">AV Dexed is a modified version of Dexed (Pascal Gauthier / Digital Suburban); it is not affiliated
+with or endorsed by them. Yamaha and DX7 are registered trademarks of Yamaha Corporation.</p>
+<hr>
+<p class="lang">ESPAÑOL</p>
+<h1>Antes de instalar <span class="ocean">AV Dexed</span> @VERSION@</h1>
+<h2>Qué se instala y dónde</h2>
+<p>En el paso «Tipo de instalación» marca o desmarca cada formato:</p>
+<ul>
+  <li><b>AV Dexed</b> (aplicación): <code>/Applications</code></li>
+  <li><b>VST3</b>: <code>/Library/Audio/Plug-Ins/VST3</code></li>
+  <li><b>Audio Unit (AU)</b>: <code>/Library/Audio/Plug-Ins/Components</code></li>
+  <li class="last"><b>CLAP</b>: <code>/Library/Audio/Plug-Ins/CLAP</code></li>
+</ul>
+<p>Si ya tenías otra versión, se reemplaza por esta.</p>
+<h2>Qué hace el instalador</h2>
+<ul>
+  <li>Pide tu contraseña de administrador, porque instala en carpetas del sistema.</li>
+  <li>Al terminar, quita la cuarentena de descarga y firma en tu Mac (firma local, «ad hoc») lo que instaló,
+para que macOS y tu DAW lo abran. AV Dexed todavía no está firmado por Apple.</li>
+  <li class="last">No toca tus sonidos ni tus ajustes: <code>~/Library/Application Support/AV Vibes/AV Dexed</code></li>
+</ul>
+<h2>Requisitos</h2>
+<p>macOS 11 (Big Sur) o posterior, Mac con Intel o con Apple silicon.</p>
+<h2>Código libre</h2>
+<p>AV Dexed está bajo la licencia GNU GPL v3. Puedes revisar el código, o compilar el plugin y la aplicación
+por tu cuenta, desde <a href="https://github.com/AVVibesDSP/av-dexed">github.com/AVVibesDSP/av-dexed</a>.</p>
+<h2>Desinstalar</h2>
+<p>Abre <b>4 - Uninstall - Desinstalar.command</b> de la imagen de disco (.dmg). Quita la aplicación y los plugins; tus sonidos y
+ajustes se quedan.</p>
+<p class="small">AV Dexed es una versión modificada de Dexed (Pascal Gauthier / Digital Suburban); no está afiliado
+ni respaldado por ellos. Yamaha y DX7 son marcas registradas de Yamaha Corporation.</p>
+</body>
+</html>

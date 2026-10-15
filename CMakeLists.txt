@@ -1,4 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
+# The oldest macOS AV Dexed runs on (Apple silicon starts at 11). It must be set
+# before project(); without it the build only runs on the builder's own macOS.
+# FORCE fills an empty value left in an older build folder; a value the builder
+# passes (-DCMAKE_OSX_DEPLOYMENT_TARGET=...) is kept.
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
+endif()
 project(AVDexed VERSION 0.2.0)
 
 option(DEXED_BUILD_TESTS "Build AV Dexed regression tests" OFF)
@@ -16,12 +23,10 @@ else()
     add_definitions("-DDEXED_ID=${BUILD_ID}")
 endif()
 
-#Minimum MacOS target, set globally
-# set(CMAKE_OSX_DEPLOYMENT_TARGET "10.9" CACHE STRING "Minimum OS X deployment version" FORCE)
-
 # Release is universal unless the builder picks architectures (-DCMAKE_OSX_ARCHITECTURES=arm64).
+# project() already left an empty CMAKE_OSX_ARCHITECTURES in the cache, so FORCE.
 if (CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT CMAKE_OSX_ARCHITECTURES)
-    set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "")
+    set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures" FORCE)
 endif()
 
 #static linking in Windows

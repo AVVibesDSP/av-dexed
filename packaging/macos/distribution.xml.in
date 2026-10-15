@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AV Dexed installer. @VERSION@ is filled in by build_installer.sh; the
+     titles in capitals come from Localizable.strings. en.lproj and es.lproj hold
+     the same English-first pages; only License.txt differs. -->
+<installer-gui-script minSpecVersion="2">
+    <title>INSTALLER_TITLE</title>
+    <welcome file="Welcome.html" mime-type="text/html"/>
+    <readme file="ReadMe.html" mime-type="text/html"/>
+    <license file="License.txt" mime-type="text/plain"/>
+    <conclusion file="Conclusion.html" mime-type="text/html"/>
+    <background file="background.tiff" mime-type="image/tiff" alignment="bottomleft" scaling="none"/>
+    <background-darkAqua file="background-dark.tiff" mime-type="image/tiff" alignment="bottomleft" scaling="none"/>
+
+    <options customize="always" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <allowed-os-versions>
+        <os-version min="11.0"/>
+    </allowed-os-versions>
+
+    <choices-outline>
+        <line choice="app"/>
+        <line choice="vst3"/>
+        <line choice="au"/>
+        <line choice="clap"/>
+    </choices-outline>
+
+    <choice id="app" title="CHOICE_APP" description="CHOICE_APP_DESCRIPTION" start_selected="true">
+        <pkg-ref id="org.avvibes.avdexed.pkg.app"/>
+    </choice>
+    <choice id="vst3" title="CHOICE_VST3" description="CHOICE_VST3_DESCRIPTION" start_selected="true">
+        <pkg-ref id="org.avvibes.avdexed.pkg.vst3"/>
+    </choice>
+    <choice id="au" title="CHOICE_AU" description="CHOICE_AU_DESCRIPTION" start_selected="true">
+        <pkg-ref id="org.avvibes.avdexed.pkg.au"/>
+    </choice>
+    <choice id="clap" title="CHOICE_CLAP" description="CHOICE_CLAP_DESCRIPTION" start_selected="true">
+        <pkg-ref id="org.avvibes.avdexed.pkg.clap"/>
+    </choice>
+
+    <pkg-ref id="org.avvibes.avdexed.pkg.app" version="@VERSION@" onConclusion="none">AVDexed-app.pkg</pkg-ref>
+    <pkg-ref id="org.avvibes.avdexed.pkg.vst3" version="@VERSION@" onConclusion="none">AVDexed-vst3.pkg</pkg-ref>
+    <pkg-ref id="org.avvibes.avdexed.pkg.au" version="@VERSION@" onConclusion="none">AVDexed-au.pkg</pkg-ref>
+    <pkg-ref id="org.avvibes.avdexed.pkg.clap" version="@VERSION@" onConclusion="none">AVDexed-clap.pkg</pkg-ref>
+</installer-gui-script>
