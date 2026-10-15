@@ -380,7 +380,8 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
     // A session saved before the sound files were renamed (.dexedpreset) finds
     // the new name, but only when that file holds the same sound: a name clash
     // at the rename left the old sound as "<name> 2" (the browser finds it by id).
-    avPresetPath = presetPath.isEmpty() ? juce::File() : juce::File(presetPath);
+    // A path from another OS ("/Users/..." on Windows) is no file here.
+    avPresetPath = presetPath.isEmpty() || ! juce::File::isAbsolutePath(presetPath) ? juce::File() : juce::File(presetPath);
     if (const auto renamed = AVDexedLibrary::remapPresetPath(avPresetPath); renamed != avPresetPath) {
         juce::String renamedId;
         juce::MemoryBlock renamedData;

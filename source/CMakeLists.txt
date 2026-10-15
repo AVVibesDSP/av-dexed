@@ -120,6 +120,7 @@ target_compile_definitions(${BaseTargetName} PUBLIC
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_JACK=$<IF:$<BOOL:${Jack_FOUND}>,1,0>
     JUCE_ALSA=$<IF:$<BOOL:${DEXED_ALSA}>,1,0>
+    JUCE_ASIO=$<IF:$<PLATFORM_ID:Windows>,1,0> # Windows audio interfaces (JUCE bundles the GPLv3 ASIO SDK)
     JUCE_MODAL_LOOPS_PERMITTED=0 # needed for FileBrowser in CartManager
     JUCE_REPORT_APP_USAGE=0
     JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
@@ -149,6 +150,9 @@ PUBLIC
     juce::juce_recommended_lto_flags
 )
 
+# The UI text is UTF-8; without this MSVC reads it in the build machine's code page.
+target_compile_options(${BaseTargetName} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
 if(DEXED_BUILD_TESTS)
     target_compile_definitions(${BaseTargetName} PRIVATE AVDEXED_TESTING=1)
     juce_add_console_app(AVDexedRegressionTests
@@ -174,6 +178,7 @@ if(DEXED_BUILD_TESTS)
         JUCE_USE_CURL=0
         AVDEXED_TESTING=1)
     target_compile_features(AVDexedRegressionTests PRIVATE cxx_std_20)
+    target_compile_options(AVDexedRegressionTests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
     target_link_libraries(AVDexedRegressionTests PRIVATE
         ${BaseTargetName}
         juce::juce_audio_basics

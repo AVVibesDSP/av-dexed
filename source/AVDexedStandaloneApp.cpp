@@ -99,7 +99,8 @@ public:
         }
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu(this);
-#else
+#elif ! JUCE_WINDOWS
+        // Windows: no unthemed JUCE bar in the window; Settings stay on the gear.
         if (mainWindow) mainWindow->setMenuBar(this);
 #endif
         if (mainWindow != nullptr) {
@@ -115,7 +116,7 @@ public:
     void shutdown() override {
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu(nullptr);
-#else
+#elif ! JUCE_WINDOWS
         if (mainWindow) mainWindow->setMenuBar(nullptr);
 #endif
         AVDexedStandaloneAccess::AVDeviceManager = nullptr;

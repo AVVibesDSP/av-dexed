@@ -56,8 +56,27 @@ juce::MemoryBlock createNativePresetState(DexedAudioProcessor& processor, const 
 juce::String avPresetFileStem(const juce::String& name) {
     auto stem = juce::File::createLegalFileName(name.trim()).trim();
     while (stem.startsWithChar('.')) stem = stem.substring(1).trimStart();
+#if JUCE_WINDOWS
+    // Windows refuses control characters (a pasted tab) in file names.
+    juce::String cleaned;
+    for (auto c : stem)
+        if (c >= 32 && c != 127) cleaned << juce::String::charToString(c);
+    stem = cleaned.trim();
+    // Windows device names stay devices even with an extension ("AUX.avdexpreset").
+    static const juce::StringArray devices { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6",
+                                             "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6",
+                                             "LPT7", "LPT8", "LPT9" };
+    if (devices.contains(stem.upToFirstOccurrenceOf(".", false, false).trim(), true)) return {};
+#endif
     return AVDexedLibrary::isIgnoredName(stem) ? juce::String() : stem;
 }
+
+#if JUCE_WINDOWS
+// One pattern, so the Windows save dialog appends ".syx" (its filters ignore case).
+constexpr const char* avBankSaveFilter = "*.syx";
+#else
+constexpr const char* avBankSaveFilter = "*.syx;*.SYX";
+#endif
 
 /** A library folder as the picker shows it ("Pianos / Rhodes"). */
 juce::String avFolderDisplayName(const juce::File& folder, const juce::File& root) {
@@ -500,7 +519,7 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
         const float dx = static_cast<float>(screenDelta.x);
         const float dy = static_cast<float>(screenDelta.y);
         const float step = (width * dx + height * dy) / (width * width + height * height);
-        processor->setZoomFactor(jlimit(0.80f, 1.6f, resizeFactorAtStart + step));
+        processor->setZoomFactor(jlimit(AVMinZoom, 1.6f, resizeFactorAtStart + step));
         resetSize();
     };
     resizeGrip.onResizeEnd = [this] { processor->savePreference(); };
@@ -518,7 +537,7 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     if (auto* display = Desktop::getInstance().getDisplays().getPrimaryDisplay()) {
         const auto fit = jmin(float(display->userArea.getWidth() - 32) / WINDOW_SIZE_X,
                               float(display->userArea.getHeight() - 64) / WINDOW_SIZE_Y);
-        processor->setZoomFactor(jlimit(0.80f, 1.6f, jmin(processor->getZoomFactor(), fit)));
+        processor->setZoomFactor(jlimit(AVMinZoom, 1.6f, jmin(processor->getZoomFactor(), fit)));
     }
     resetSize();
     showAVDexedPlayView(true, false);
@@ -984,7 +1003,7 @@ void DexedAudioProcessorEditor::commitCart(Cartridge cart, const File& file) {
 
 void DexedAudioProcessorEditor::saveCart() {
     fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("exportBankTitle"),
-                                                AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir), "*.syx;*.SYX", true);
+                                                AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir), avBankSaveFilter, true);
     fileChooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
                              [this](const FileChooser& fc) {
                                  if ( fc.getResults().isEmpty() )
@@ -1940,7 +1959,7 @@ void DexedAudioProcessorEditor::storeProgramResponse(AlertWindow *dialog, int re
 
             if (action == 1) {
                 fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("destinationSysex"),
-                                                            AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir), "*.syx;*.SYX", true);
+                                                            AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir), avBankSaveFilter, true);
                 fileChooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
                                          [this, adoptStoredBank, writeStoredBank, destSysex](const FileChooser& fc) {
                                              if (fc.getResults().isEmpty()) {
@@ -2273,13 +2292,13 @@ void DexedAudioProcessorEditor::AVLayoutFrame() {
 }
 
 void DexedAudioProcessorEditor::resetSize() {
-    const float factor = jlimit(0.80f, 1.6f, processor->getZoomFactor());
+    const float factor = jlimit(AVMinZoom, 1.6f, processor->getZoomFactor());
     processor->setZoomFactor(factor);
     const int logicalHeight = processor->showKeyboard ? WINDOW_SIZE_Y : WINDOW_SIZE_Y - 112;
     frameComponent.setBounds(0, 0, WINDOW_SIZE_X, logicalHeight);
     frameComponent.setTransform(AffineTransform::scale(factor));
     AVLayoutFrame();
-    setResizeLimits(roundToInt(WINDOW_SIZE_X * 0.80f), roundToInt(logicalHeight * 0.80f),
+    setResizeLimits(roundToInt(WINDOW_SIZE_X * AVMinZoom), roundToInt(logicalHeight * AVMinZoom),
                     roundToInt(WINDOW_SIZE_X * 1.6f), roundToInt(logicalHeight * 1.6f));
     if (auto* constrainer = getConstrainer())
         constrainer->setFixedAspectRatio(double(WINDOW_SIZE_X) / logicalHeight);
@@ -2289,7 +2308,7 @@ void DexedAudioProcessorEditor::resetSize() {
 
 void DexedAudioProcessorEditor::resized() {
     if (processor == nullptr || getWidth() <= 0) return;
-    const float factor = jlimit(0.80f, 1.6f, float(getWidth()) / WINDOW_SIZE_X);
+    const float factor = jlimit(AVMinZoom, 1.6f, float(getWidth()) / WINDOW_SIZE_X);
     frameComponent.setTransform(AffineTransform::scale(factor));
     if (!approximatelyEqual(factor, processor->getZoomFactor())) {
         processor->setZoomFactor(factor);

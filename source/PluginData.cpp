@@ -458,9 +458,16 @@ void DexedAudioProcessor::resolvAppDir() {
 
     const auto libraryMarker = dexedAppDir.getChildFile(".library-layout-v2");
     const auto migrationMarker = dexedAppDir.getChildFile(".legacy-data-migration-v1");
+   #if JUCE_WINDOWS
+    // No CFFIXED_USER_HOME here: the legacy sources are the real %APPDATA%,
+    // so a test data folder (AVDEXED_DATA_DIR) never imports them.
+    const bool importLegacyData = dexedAppDir == platformDataRoot.getChildFile("AV Vibes").getChildFile("AV Dexed");
+   #else
+    const bool importLegacyData = true;
+   #endif
     // A library already in the 0.2.0 layout never pulls old banks in again
     // (the user may have deleted them on purpose).
-    if (!migrationMarker.existsAsFile() && !libraryMarker.existsAsFile()) {
+    if (importLegacyData && !migrationMarker.existsAsFile() && !libraryMarker.existsAsFile()) {
         bool migrationSucceeded = true;
         // Early local builds used JUCE's generic app-data location, which on
         // macOS is ~/Library rather than Application Support. Copy that fork

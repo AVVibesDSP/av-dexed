@@ -269,6 +269,11 @@ public:
     static constexpr float AVTopBarAxis = 47.0f;  // shared centre line of the top bar
     static const int WINDOW_SIZE_X = 1440;
     static const int WINDOW_SIZE_Y = 940;
+#if JUCE_WINDOWS
+    static constexpr float AVMinZoom = 0.60f;   // 1440x940 at 0.8 does not fit 1080p at 150 % scaling
+#else
+    static constexpr float AVMinZoom = 0.80f;
+#endif
 
 #if defined(AVDEXED_TESTING)
     friend bool AVRenderUIEvidence(const juce::File& directory);

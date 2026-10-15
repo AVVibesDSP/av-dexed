@@ -9,6 +9,8 @@
 //   CFFIXED_USER_HOME=<copy home> AVDEXED_DATA_DIR=<copy home>/Library/Application Support/AV Vibes/AV Dexed
 //   AVDexedRegressionTests --qa-library <output folder>
 // It refuses to run on anything under the real home's Library.
+// On Windows: AVDEXED_DATA_DIR=<copy outside %APPDATA%> AVDexedRegressionTests --qa-library <output folder>;
+// anything in (or containing) %APPDATA% is refused.
 
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
@@ -22,6 +24,48 @@
 bool AVRunLibraryQA(const juce::File& outputDirectory) {
     using namespace juce;
     const auto dataDirectory = SystemStats::getEnvironmentVariable("AVDEXED_DATA_DIR", {});
+#if JUCE_WINDOWS
+    // No CFFIXED_USER_HOME here: the real data lives in %APPDATA%\AV Vibes\AV Dexed,
+    // and %APPDATA% (like ~/Library) also holds the original Dexed's data.
+    const auto realAppData = File::getSpecialLocation(File::userApplicationDataDirectory);
+    const auto realVendorFolder = realAppData.getChildFile("AV Vibes");
+    bool refused = dataDirectory.isEmpty() || ! File::isAbsolutePath(dataDirectory);
+    if (! refused) {
+        const File copy(dataDirectory);
+        // Only a plain local "X:\..." path: no UNC or \\?\ forms, no drive-relative
+        // "C:folder", no part Win32 would trim ("Roaming." names Roaming).
+        const auto full = copy.getFullPathName();
+        refused = ! (full.length() >= 3 && full[1] == ':' && full[2] == '\\');
+        for (const auto& part : StringArray::fromTokens(full, "\\", ""))
+            refused = refused || part.endsWithChar('.') || part.endsWithChar(' ');
+        // Junctions and links (also Windows' own, e.g. "Application Data") may lead
+        // into %APPDATA% and cannot always be resolved: refuse any on the way. Short
+        // names: compare where the folder (or its nearest existing parent) really is.
+        auto existing = copy;
+        while (! existing.isDirectory() && existing.getParentDirectory() != existing)
+            existing = existing.getParentDirectory();
+        bool throughLink = false;
+        for (auto part = existing; part.getParentDirectory() != part; part = part.getParentDirectory())
+            throughLink |= part.isSymbolicLink();
+        const auto onDisk = existing.getLinkedTarget(), appDataOnDisk = realAppData.getLinkedTarget();
+        refused = refused || throughLink || ! existing.isOnHardDisk()   // mapped network drives are not resolved
+               || copy == realAppData || copy.isAChildOf(realAppData) || realAppData.isAChildOf(copy)
+               || onDisk == appDataOnDisk || onDisk.isAChildOf(appDataOnDisk)
+               || (existing == copy && appDataOnDisk.isAChildOf(onDisk));
+    }
+    if (refused) {
+        std::cerr << "QA refused: AVDEXED_DATA_DIR must be a plain local folder outside the real %APPDATA%, without links.\n";
+        return false;
+    }
+    outputDirectory.createDirectory();
+    // The copy's saved paths still name the real folder; point them at the copy.
+    const auto realData = realVendorFolder.getChildFile("AV Dexed").getFullPathName();
+#else
+#if ! JUCE_MAC
+    // The guard below only knows ~/Library; Linux keeps its data elsewhere.
+    std::cerr << "QA refused: --qa-library runs on macOS and Windows only.\n";
+    return false;
+#endif
     const char* realHome = std::getenv("HOME");
     if (dataDirectory.isEmpty() || ! File::isAbsolutePath(dataDirectory) || realHome == nullptr
         || File(dataDirectory).isAChildOf(File(String(realHome)).getChildFile("Library"))) {
@@ -32,6 +76,7 @@ bool AVRunLibraryQA(const juce::File& outputDirectory) {
     // The copy's saved paths still name the real folder; in real use they name
     // the data folder itself, so point them at the copy (never at the original).
     const auto realData = String(realHome) + "/Library/Application Support/AV Vibes/AV Dexed";
+#endif
     const auto copiedPreferences = File(dataDirectory).getChildFile("Dexed.xml");
     if (copiedPreferences.existsAsFile())
         copiedPreferences.replaceWithText(copiedPreferences.loadFileAsString().replace(realData, dataDirectory));
@@ -127,14 +172,21 @@ bool AVRunLibraryQA(const juce::File& outputDirectory) {
                 if (auto stream = effectFile.createOutputStream()) PNGImageFormat().writeImageToStream(withEffect, *stream);
                 std::cout << "Rendered " << effectFile.getFullPathName() << '\n';
                 completed = true;
+#if !JUCE_MAC
+                MessageManager::getInstance()->stopDispatchLoop();
+#endif
             });
         };
         Timer::callAfterDelay(200, finish);
+#if JUCE_MAC
         // Console app: no NSApp run loop. Pump the CF run loop JUCE's messages use
         // (as the UI evidence does) until the checks above have run.
         const auto hardDeadline = Time::getMillisecondCounterHiRes() + 30000;
         while (! completed && Time::getMillisecondCounterHiRes() < hardDeadline)
             CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+#else
+        MessageManager::getInstance()->runDispatchLoop();
+#endif
         passed &= completed;
         editor.reset();
         processor.releaseResources();

@@ -256,6 +256,11 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     scalingFactor->setJustificationType (juce::Justification::centredLeft);
     scalingFactor->setTextWhenNothingSelected (juce::String());
     scalingFactor->setTextWhenNoChoicesAvailable (AVDexedLanguageService::getInstance().text("noChoices"));
+#if JUCE_WINDOWS
+    // Windows allows 60 % (AVMinZoom) for 1080p screens at 150 % scaling.
+    scalingFactor->addItem("60 %", 8);
+    scalingFactor->addItem("70 %", 9);
+#endif
     scalingFactor->addItem("80 %", 1);
     scalingFactor->addItem("90 %", 2);
     scalingFactor->addItem("100 %", 3);
@@ -724,7 +729,7 @@ bool ParamDialog::getDialogValues(Controllers &c, SysexComm &mgr, bool *showKey,
 
     *showKey = showKeyboard->getToggleState();
 
-    *dpiScaleFactor = jlimit(0.80f, 1.6f, scalingFactor->getText().getFloatValue() / 100.0f);
+    *dpiScaleFactor = jlimit(DexedAudioProcessorEditor::AVMinZoom, 1.6f, scalingFactor->getText().getFloatValue() / 100.0f);
     return ret;
 }
 
