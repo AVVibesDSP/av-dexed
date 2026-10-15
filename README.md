@@ -19,10 +19,20 @@ interface for people who just want to play and sound good.
 - **Linux:** build from source.
 
 <p align="center">
-  <img src="doc/images/av-dexed-play.png" alt="AV Dexed Play view: sound browser, FM algorithm and effect knobs" width="49%">
-  <img src="doc/images/av-dexed-advanced.png" alt="AV Dexed Advanced view: the six operators and global parameters" width="49%">
+  <img src="doc/images/screenshot-play.png" alt="AV Dexed Play view: sound browser, FM algorithm and effect knobs" width="49%">
+  <img src="doc/images/screenshot-advanced.png" alt="AV Dexed Advanced view: the six operators and global parameters" width="49%">
 </p>
 <p align="center"><em>Play</em> &nbsp;·&nbsp; <em>Advanced</em></p>
+<p align="center">
+  <img src="doc/images/screenshot-settings-audio.png" alt="Settings, Audio: general volume, output, sample rate and buffer size" width="32%">
+  <img src="doc/images/screenshot-settings-instrument.png" alt="Settings, Instrument: pitch bend, interface scale, controller modulation, tuning and MPE" width="32%">
+  <img src="doc/images/screenshot-settings-midi.png" alt="Settings, MIDI: MIDI inputs and CC assignments with MIDI learn" width="32%">
+</p>
+<p align="center">
+  <img src="doc/images/screenshot-settings-sysex.png" alt="Settings, SysEx: dedicated SysEx ports and channel" width="32%">
+  <img src="doc/images/screenshot-settings-about.png" alt="Settings, About: version, credits and language" width="32%">
+</p>
+<p align="center"><em>Settings: Audio · Instrument · MIDI · SysEx · About</em></p>
 
 > AV Dexed is a modified version of Dexed 1.1.0 (asb2m10/dexed, base commit `eebb748`), modified by AV Vibes since
 > October 2026; the git history shows every change. It is not affiliated with or endorsed by Pascal Gauthier /
