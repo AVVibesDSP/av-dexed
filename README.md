@@ -10,7 +10,7 @@ Pascal Gauthier (Digital Suburban). It keeps Dexed's FM engine and all of its cl
 interface for people who just want to play and sound good.
 
 **Version 0.2.0 — public preview.** Download it from
-[Releases](https://github.com/AVVibesDSP/av-dexed/releases/latest):
+[Releases - DESCARGA AQUÍ](https://github.com/AVVibesDSP/av-dexed/releases/latest):
 
 - **macOS:** the `.dmg` (macOS 11 or later, Intel and Apple silicon; app, VST3, AU and CLAP). It is not signed or
   notarized by Apple yet: open `1 - HOW TO OPEN - CÓMO ABRIR.txt` in the disk image first.
