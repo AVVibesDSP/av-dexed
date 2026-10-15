@@ -25,9 +25,14 @@
 #include "midi/SysexComm.h"
 #include "midi/MidiCCHandler.h"
 #include "window/TuningShow.h"
+#include "../core/AVDexedLibrary.h"
 #include "../debugger/Logger.h"
 #include "math.h"
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <fstream>
+#include <map>
 #include <memory>
 
 #include "../msfa/fm_op_kernel.h"
@@ -46,6 +51,184 @@ juce::MemoryBlock createNativePresetState(DexedAudioProcessor& processor, const 
                                          const juce::String& name = {}) {
     return processor.createAVNativePresetState(name.isEmpty() ? processor.getAVPresetName() : name, presetId);
 }
+
+/** A sound name as a file name ("" when nothing usable is left). */
+juce::String avPresetFileStem(const juce::String& name) {
+    auto stem = juce::File::createLegalFileName(name.trim()).trim();
+    while (stem.startsWithChar('.')) stem = stem.substring(1).trimStart();
+    return AVDexedLibrary::isIgnoredName(stem) ? juce::String() : stem;
+}
+
+/** A library folder as the picker shows it ("Pianos / Rhodes"). */
+juce::String avFolderDisplayName(const juce::File& folder, const juce::File& root) {
+    return folder.getRelativePathFrom(root).replaceCharacter('\\', '/').replace("/", " / ");
+}
+
+/** Inside the library and visible there: not in a hidden folder of the root
+    (.deleted, .migration-backup…), which the browser never shows. */
+bool avIsInVisibleLibrary(const juce::File& file, const juce::File& root) {
+    if (root == juce::File() || ! file.isAChildOf(root))
+        return false;
+    for (auto item = file; item != root && item.isAChildOf(root); item = item.getParentDirectory())
+        if (AVDexedLibrary::isIgnoredName(item.getFileName()))
+            return false;
+    return true;
+}
+
+/** At most `limit` names, then "… (+N)": a dropped folder full of single-voice
+    dumps must not grow a dialog taller than the editor. */
+juce::String avNameList(const juce::StringArray& names, int limit = 6) {
+    if (names.size() <= limit)
+        return names.joinIntoString(", ");
+    juce::StringArray shown(names);
+    shown.removeRange(limit, shown.size() - limit);
+    return shown.joinIntoString(", ") + juce::String::fromUTF8(", … (+") + juce::String(names.size() - limit) + ")";
+}
+
+bool avIsBankPath(const juce::String& path) { return path.endsWithIgnoreCase(".syx"); }
+bool avIsPresetPath(const juce::String& path) {
+    // A string test: callers also pass bare file names, which are not paths.
+    return path.endsWithIgnoreCase(AVDexedLibrary::presetExtension) || path.endsWithIgnoreCase(AVDexedLibrary::legacyPresetExtension);
+}
+bool avIsTuningPath(const juce::String& path) { return path.endsWithIgnoreCase(".scl") || path.endsWithIgnoreCase(".kbm"); }
+
+/** Every dragged item is a single sound (.avdexpreset), not a bank or folder. */
+bool avAllSounds(const juce::StringArray& files) {
+    return ! files.isEmpty() && std::all_of(files.begin(), files.end(), [](const juce::String& path) {
+        return avIsPresetPath(path) && ! juce::File(path).isDirectory();
+    });
+}
+
+using AVSettingValues = std::map<juce::String, float>;
+
+/** What a slot plays with, by the processor's rule (applyAVSoundSettings): its
+    own entry while it still holds that voice, else the first entry with the
+    same voice (moved or duplicated in the bank), else the defaults (empty). */
+AVSettingValues avSettingsHeard(const AVDexedLibrary::BankSettings& settings, juce::uint64 voice, int slot) {
+    if (const auto own = settings.find(slot); own != settings.end() && own->second.voice == voice)
+        return own->second.values;
+    for (const auto& [index, entry] : settings)
+        if (entry.voice == voice)
+            return entry.values;
+    return {};
+}
+
+/** The same settings, within what a bank file keeps (6 decimals in its JSON). */
+bool avSameSettings(const AVSettingValues& a, const AVSettingValues& b) {
+    if (a.size() != b.size())
+        return false;
+    for (const auto& [id, value] : a) {
+        const auto other = b.find(id);
+        if (other == b.end() || std::abs(other->second - value) > 1.0e-4f * juce::jmax(1.0f, std::abs(value)))
+            return false;
+    }
+    return true;
+}
+
+/** `settings` with `slot` of `bank` set to `values` (empty = defaults), every
+    other slot playing exactly as before. Settings follow their voice by hash,
+    so changing one entry can change what a duplicate of that voice finds: such
+    a slot gets an entry of its own. The rule of "Guardar"
+    (DexedAudioProcessor::saveAVSoundToBank); at most 32 pins. */
+AVDexedLibrary::BankSettings avSettingsWithSlot(AVDexedLibrary::BankSettings settings, const Cartridge& bank,
+                                               int slot, const AVSettingValues& values) {
+    std::array<juce::uint64, 32> voices {};
+    std::array<AVSettingValues, 32> heard;
+    for (size_t index = 0; index < 32; ++index) {
+        voices[index] = AVDexedLibrary::voiceHash(bank, static_cast<int>(index));
+        heard[index] = avSettingsHeard(settings, voices[index], static_cast<int>(index));
+    }
+    const auto stored = static_cast<size_t>(slot);
+    heard[stored] = values;
+    if (values.empty())
+        settings.erase(slot);
+    else
+        settings[slot] = { voices[stored], values };
+    for (bool pinned = true; pinned;) {
+        pinned = false;
+        for (size_t index = 0; index < 32; ++index) {
+            if (avSettingsHeard(settings, voices[index], static_cast<int>(index)) != heard[index]) {
+                settings[static_cast<int>(index)] = { voices[index], heard[index] };
+                pinned = true;
+            }
+        }
+    }
+    return settings;
+}
+
+/** The notice for a bank write that failed: AVWriteBankFile never rewrites an
+    archive of several banks (64 KB or more) nor other data larger than a bank,
+    and that is said as such (nothing changed), not as a disk error. */
+juce::String avBankWriteError(const juce::File& file) {
+    auto& language = AVDexedLanguageService::getInstance();
+    Cartridge onDisk;
+    const bool keptAsItIs = file.existsAsFile()
+        && (file.getSize() >= 65535 || (file.getSize() > SYSEX_SIZE && ! AVDexedLibrary::readBank(file, onDisk)));
+    return keptAsItIs ? language.format("bankNotRewritable", {{"bank", file.getFileName()}})
+                      : language.format("writeError", {{"path", file.getFullPathName()}});
+}
+
+/** Every dragged item is a bank, a preset or a folder (whose sounds are added). */
+bool avAllImportable(const juce::StringArray& files) {
+    return ! files.isEmpty() && std::all_of(files.begin(), files.end(), [](const juce::String& path) {
+        return avIsBankPath(path) || avIsPresetPath(path) || juce::File(path).isDirectory();
+    });
+}
+
+struct AVImportFiles {
+    juce::Array<juce::File> banks, presets;
+    juce::String folderName;   // the first dropped folder: the suggested library folder
+};
+
+/** The banks and presets among `items`, looking inside folders. Hidden and
+    system entries (.DS_Store, __MACOSX…) are skipped, and the walk is bounded so
+    dropping a huge folder cannot hang the editor. */
+AVImportFiles avCollectImportFiles(const juce::Array<juce::File>& items) {
+    using namespace juce;
+    AVImportFiles found;
+    const auto add = [&found](const File& file) {
+        const auto name = file.getFileName();
+        if (AVDexedLibrary::isIgnoredName(name)) return;
+        if (avIsBankPath(name)) found.banks.addIfNotAlreadyThere(file);
+        else if (avIsPresetPath(name)) found.presets.addIfNotAlreadyThere(file);
+    };
+    for (const auto& item : items) {
+        if (! item.isDirectory()) { add(item); continue; }
+        if (found.folderName.isEmpty()) found.folderName = item.getFileName();
+        int visited = 0;
+        for (const auto& entry : RangedDirectoryIterator(item, true, "*", File::findFiles | File::ignoreHiddenFiles,
+                                                         File::FollowSymlinks::noCycles)) {
+            if (++visited > 20000) break;
+            const auto file = entry.getFile();
+            const auto parts = StringArray::fromTokens(file.getRelativePathFrom(item), "/\\", {});
+            if (std::none_of(parts.begin(), parts.end(), [](const String& part) { return AVDexedLibrary::isIgnoredName(part); }))
+                add(file);
+        }
+    }
+    const auto byPath = [](const File& a, const File& b) {
+        return a.getFullPathName().compareNatural(b.getFullPathName(), false) < 0;
+    };
+    std::sort(found.banks.begin(), found.banks.end(), byPath);
+    std::sort(found.presets.begin(), found.presets.end(), byPath);
+    return found;
+}
+
+// Footer notice timing (ms): GOZO's toast fades, held for about 3 s in all.
+constexpr double noticeFadeIn = 83.0, noticeHoldUntil = 2800.0, noticeFadeOut = 200.0, helpFadeIn = 117.0;
+
+/** "AV Vibes" under the logo. */
+juce::Font avIdentityFont() { return AVDexedTheme::font(13.0f, "SemiBold"); }
+
+/** A sound arrow's name: 0 "Sonido anterior", 1 "Siguiente sonido". */
+juce::String avPresetStepName(int step) {
+    return AVDexedLanguageService::getInstance().text(step == 0 ? "previousSound" : "nextSound");
+}
+
+// The adoption of 0.1.0's external sounds runs once per process: idle until an
+// editor queues it, started once its job runs. A job dropped unstarted (the
+// editor closed at once, e.g. a host probing the view) leaves it idle again.
+constexpr int avAdoptionIdle = 0, avAdoptionQueued = 1, avAdoptionStarted = 2;
+std::atomic<int> avAdoptionState { avAdoptionIdle };
 }
 
 AVDexedPanicButton::AVDexedPanicButton() {
@@ -89,13 +272,20 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
       midiKeyboard (ownerFilter->keyboardState),
       playView (*ownerFilter),
       cartManager(this), global(*ownerFilter, this) {
+    ownerFilter->setAVEditorOpen(true);   // learned arrow presses now walk this editor's list
     processor = ownerFilter;
     auto& language = AVDexedLanguageService::getInstance();
-    language.configure(processor->dexedAppDir);
+    language.configure(DexedAudioProcessor::getPreferencesFile());
     language.addChangeListener(this);
 
     setExplicitFocusOrder(1);
 
+    // The frame holds the keyboard when no control does. Without it, JUCE hands
+    // the focus to the first control (the Play tab) whenever the window gets it,
+    // the top bar is clicked or a view hides the focused knob; Return then
+    // switched tabs, and an arrow key lit the tab's ring.
+    frameComponent.setWantsKeyboardFocus(true);
+    frameComponent.setTitle("AV Dexed");   // a screen reader names it when it holds the focus
     frameComponent.setBounds(0, 0, WINDOW_SIZE_X, WINDOW_SIZE_Y);
     addAndMakeVisible(&frameComponent);
     setLookAndFeel(&*lookAndFeel);
@@ -131,9 +321,12 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     playTabButton.onClick = [this] { showAVDexedPlayView(true); };
     playTabButton.getProperties().set("AVTab", true);
     advancedTabButton.getProperties().set("AVTab", true);
-    // GOZO tabs switch on mouse down.
+    // GOZO tabs switch on mouse down. A click leaves the keyboard where it was
+    // (Tab still reaches them).
     playTabButton.setTriggeredOnMouseDown(true);
     advancedTabButton.setTriggeredOnMouseDown(true);
+    playTabButton.setMouseClickGrabsKeyboardFocus(false);
+    advancedTabButton.setMouseClickGrabsKeyboardFocus(false);
     advancedTabButton.onClick = [this] { showAVDexedPlayView(false); };
     saveButton.onClick = [this] {
         auto& language = AVDexedLanguageService::getInstance();
@@ -143,8 +336,9 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
         Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
         menu.setLookAndFeel(&getLookAndFeel());
         menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&saveButton), [safeThis](int result) {
-            if (safeThis != nullptr && result > 0)
-                safeThis->saveNativePreset(result == 2);
+            if (safeThis == nullptr) return;
+            if (result == 1) safeThis->AVSaveSound();
+            else if (result == 2) safeThis->AVSaveSoundAs();
         });
     };
     if (auto svg = XmlDocument::parse(String::fromUTF8(BinaryData::AVDexed_SaveIcon_svg, BinaryData::AVDexed_SaveIcon_svgSize))) {
@@ -176,8 +370,9 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     modifiedLabel.setBounds(782, 10, 98, 38);
     frameComponent.addChildComponent(modifiedLabel);
 
-    playView.onSaveRequested = [this] { saveNativePreset(false); };
-    playView.onSaveAsRequested = [this] { saveNativePreset(true); };
+    playView.onSaveRequested = [this] { AVSaveSound(); };
+    playView.onSaveAsRequested = [this] { AVSaveSoundAs(); };
+    playView.onNotice = [this](const String& text) { showAVFooterNotice(text); };
     playView.onPresetLoadRequested = [this](const File& file) {
         loadNativePreset(file);
     };
@@ -189,16 +384,28 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
         });
     };
     playView.onImportBankRequested = [this] {
-        fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("importBankTitle"), processor->dexedCartDir,
-                                                    "*.syx;*.SYX", true);
-        fileChooser->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
-                                 [this](const FileChooser& chooser) {
-            if (!chooser.getResults().isEmpty())
-                loadCart(chooser.getResult());
+        // Banks usually arrive in Downloads; the copy goes into the library.
+        // (Whole folders are added by dragging them: a native chooser cannot
+        // offer files and folders together on every platform.)
+        auto start = File::getSpecialLocation(File::userHomeDirectory).getChildFile("Downloads");
+        if (! start.isDirectory()) start = File::getSpecialLocation(File::userDocumentsDirectory);
+        fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("importBankTitle"), start,
+                                                    String("*.syx;*.SYX;") + AVDexedLibrary::presetWildcards, true);
+        Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+        fileChooser->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles
+                                     | FileBrowserComponent::canSelectMultipleItems,
+                                 [safeThis](const FileChooser& chooser) {
+            if (safeThis != nullptr && ! chooser.getResults().isEmpty())
+                safeThis->importBanks(chooser.getResults());
         });
     };
+    playView.onPromptRequested = [this](AVDexedPromptOverlay::Options options, AVDexedPromptOverlay::Result result) {
+        showAVPrompt(std::move(options), std::move(result));
+    };
+    playView.onPresetStepLearnRequested = [this](int step) { AVLearnPresetStep(step); };
     frameComponent.addAndMakeVisible(playView);
     frameComponent.addAndMakeVisible(playView.getPresetNavigator());
+    frameComponent.addChildComponent(AVDropOverlay);
     playView.onOperatorSelected = [this](int op) {
         showAVDexedPlayView(false);
         if (isPositiveAndBelow(op, 6) && operators[op] != nullptr) {
@@ -219,7 +426,8 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     frameComponent.addAndMakeVisible(midiKeyboard);
     midiKeyboard.setScrollButtonsVisible(false);
     midiKeyboard.setWantsKeyboardFocus(true);
-    midiKeyboard.setKeyPressBaseOctave(2);
+    // The computer keys play from C2, the lowest key on screen.
+    midiKeyboard.setKeyPressBaseOctave(AVKeyboardAnchor / 12);
     for (auto* wheel : {&AVPitchWheel, &AVModWheel}) {
         frameComponent.addAndMakeVisible(*wheel);
         wheel->setSliderStyle(Slider::LinearVertical);
@@ -230,6 +438,16 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     AVPitchWheel.setRange(0, 16383, 1);
     AVPitchWheel.setValue(8192, dontSendNotification);
     AVPitchWheel.setDoubleClickReturnValue(true, 8192);
+    // The raw 14-bit value (8192 at rest) is what MIDI carries; the footer and
+    // screen readers show the bend itself: 0 at rest, −8192 … +8191.
+    AVPitchWheel.textFromValueFunction = [](double value) {
+        const int bend = roundToInt(value) - 8192;
+        return bend > 0 ? "+" + String(bend) : bend < 0 ? String::fromUTF8("−") + String(-bend) : String("0");
+    };
+    AVPitchWheel.valueFromTextFunction = [](const String& text) {
+        const auto bend = text.replace(String::fromUTF8("−"), "-").retainCharacters("0123456789-").getIntValue();
+        return double(jlimit(0, 16383, bend + 8192));
+    };
     AVPitchWheel.onValueChange = [this] { processor->setAVKeyboardPitch(int(AVPitchWheel.getValue())); };
     AVModWheel.setRange(0, 127, 1);
     AVModWheel.setDoubleClickReturnValue(true, 0);
@@ -270,6 +488,9 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     global.parmButton->onClick = [this]() { parmShow(); };
     global.initButton->onClick = [this]() { initProgram(); };
     global.storeButton->onClick = [this]() { storeProgram(); };
+    // "AV Dexed" in Advanced: About inside Settings (blurred, fixed), not the
+    // old desktop window.
+    global.onAboutRequested = [this] { showAVSettingsPage(AVDexedSettingsPanel::AVPage::about); };
 
     resizeGrip.onResizeStart = [this] { resizeFactorAtStart = processor->getZoomFactor(); };
     resizeGrip.onResizeDrag = [this](Point<int> screenDelta) {
@@ -304,20 +525,38 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     applyLanguage();
     addKeyListener(this);
     addMouseListener(&focusModality, true);
+    Desktop::getInstance().addFocusChangeListener(this);
     if (JUCEApplicationBase::isStandaloneApp())
         AVDexedStandaloneAccess::AVShowProductSettings = [this] { parmShow(); };
     updateUI();
     startTimer(20);
+    AVPresetStepPoll.startTimer(20);
+    AVAdoptExternalSoundsOnce();
 }
 
 DexedAudioProcessorEditor::~DexedAudioProcessorEditor() {
+    processor->setAVEditorOpen(false);
     if (JUCEApplicationBase::isStandaloneApp())
         AVDexedStandaloneAccess::AVShowProductSettings = {};
     PopupMenu::dismissAllActiveMenus();  // their LookAndFeel belongs to this editor
     removeMouseListener(&focusModality);
+    Desktop::getInstance().removeFocusChangeListener(this);
+    if (AVSoundKeysTarget != nullptr) AVSoundKeysTarget->removeKeyListener(&AVSoundKeys);
     stopTimer();
+    AVPresetStepPoll.stopTimer();
+    if (AVStepLearn >= 0) processor->cancelAVPresetStepLearn();
     processor->midiCCMapper->cancelMapping();
     if (AVSettingsOverlay) Desktop::getInstance().getAnimator().cancelAnimation(AVSettingsOverlay.get(), false);
+    // Closed dialogs may still be fading out: their proxy images live in the
+    // frame and must go with it.
+    for (auto& prompt : AVPrompts)
+        Desktop::getInstance().getAnimator().cancelAnimation(prompt.get(), false);
+    AVPrompts.clear();
+    // Waits for a running adoption (it only copies a few small files); one
+    // still queued is dropped and the next editor tries again.
+    AVAdoptionPool.reset();
+    int queued = avAdoptionQueued;
+    avAdoptionState.compare_exchange_strong(queued, avAdoptionIdle);
     midiKeyboard.releaseAVUINotes();
     Desktop::getInstance().getAnimator().cancelAnimation(&classicView, false);
     Desktop::getInstance().getAnimator().cancelAnimation(&playView, false);
@@ -347,13 +586,37 @@ void DexedAudioProcessorEditor::paint (Graphics& g) {
         return;
     if (AVBrandSymbol)
         AVBrandSymbol->drawWithin(g, Rectangle<float>(30, AVTopBarAxis - 22.0f, 186, 44), RectanglePlacement::xLeft | RectanglePlacement::yMid, 1.0f);
-    const auto identity = AVDexedTheme::font(13.0f, "SemiBold");
-    AVDexedTheme::drawGreyText(g, "AV Vibes", identity, {33, AVTopBarAxis + 22.0f, 80, 18}, Justification::centredLeft);
-    const float ruleX = 33.0f + GlyphArrangement::getStringWidth(identity, "AV Vibes") + 8.0f;
-    AVDexedTheme::fillBox(g, {ruleX, AVTopBarAxis + 30.0f, 56.0f, 2.0f}, 0.0f, false, 3.0f);
+    const auto identity = AVGetIdentityLayout();
+    AVDexedTheme::drawGreyText(g, "AV Vibes", avIdentityFont(), identity.text, Justification::centredLeft);
+    AVDexedTheme::fillBox(g, identity.rule, 0.0f, false, 3.0f);
     // Separator between the tabs.
     const auto separator = Rectangle<float>(float(playTabButton.getRight()) + 10.0f, AVTopBarAxis - 13.0f, 2.0f, 26.0f);
     AVDexedTheme::fillBox(g, separator, 0.0f, false, 4.0f);
+}
+
+DexedAudioProcessorEditor::AVIdentityLayout DexedAudioProcessorEditor::AVGetIdentityLayout() {
+    static const auto layout = [] {
+        const auto font = avIdentityFont();
+        AVIdentityLayout result;
+        result.text = { 33.0f, AVTopBarAxis + 22.0f, 80.0f, 18.0f };
+        // drawText centres the line box (ascent + descent) in its area, which
+        // puts the baseline here.
+        const float baseline = result.text.getCentreY() - font.getHeight() * 0.5f + font.getAscent();
+        // The rule's centre is the middle of the x-height, measured on the
+        // glyph "x" itself; Montserrat draws its own dashes there. The middle of
+        // the line box, used before, sits about 1 px higher: next to "ibes"
+        // (the letters beside the rule) it read as off-centre.
+        GlyphArrangement xGlyph;
+        xGlyph.addLineOfText(font, "x", 0.0f, 0.0f);   // baseline at y = 0
+        Path ink;
+        xGlyph.createPath(ink);
+        const float centre = baseline + ink.getBounds().getCentreY();
+        const float x = result.text.getX() + GlyphArrangement::getStringWidth(font, "AV Vibes") + 8.0f;
+        // 2 px tall, on whole pixels so it stays crisp at 100 %.
+        result.rule = { x, std::round(centre - 1.0f), 56.0f, 2.0f };
+        return result;
+    }();
+    return layout;
 }
 
 void DexedAudioProcessorEditor::showAVDexedPlayView(bool showPlay, bool animate) {
@@ -399,6 +662,7 @@ void DexedAudioProcessorEditor::showAVDexedPlayView(bool showPlay, bool animate)
 
 void DexedAudioProcessorEditor::applyLanguage() {
     auto& language = AVDexedLanguageService::getInstance();
+    AVDropOverlay.setHint(language.text("dropBanksHere"));
     playTabButton.setButtonText(language.text("play"));
     advancedTabButton.setButtonText(language.text("advanced"));
     saveButton.setButtonText(language.text("save"));
@@ -453,36 +717,43 @@ void DexedAudioProcessorEditor::requestPresetReplacement(std::function<void()> r
     }
 
     auto& language = AVDexedLanguageService::getInstance();
-    auto* dialog = new AVAlertWindow(language.text("saveChangesTitle"),
-                                   language.text("saveChanges"), AlertWindow::QuestionIcon, this);
-    dialog->addButton(language.text("save"), 1, KeyPress(KeyPress::returnKey));
-    dialog->addButton(language.text("discard"), 2, KeyPress());
-    dialog->addButton(language.text("cancel"), 0, KeyPress(KeyPress::escapeKey));
+    AVDexedPromptOverlay::Options options;
+    options.title = language.text("saveChangesTitle");
+    options.message = language.text("saveChanges");
+    options.confirmText = language.text("save");
+    options.altText = language.text("discard");
+    options.cancelText = language.text("cancel");
+    // "Guardar" can rewrite a bank voice in its file: Return (pressed while
+    // arrowing through sounds) must never choose it.
+    options.returnConfirms = false;
+    options.onAlt = [replacement] { replacement(); };
     Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
-    dialog->enterModalState(true, ModalCallbackFunction::create(
-        [safeThis, replacement = std::move(replacement)](int response) mutable {
+    showAVPrompt(std::move(options), [safeThis, replacement](bool confirmed, const String&) {
+        if (safeThis == nullptr)
+            return;
+        if (!confirmed) {
+            safeThis->updateUI();
+            return;
+        }
+        // The same "Guardar" as the Save button; the new sound loads only once
+        // the current one is safely saved.
+        safeThis->AVSaveSound([safeThis, replacement](bool saved) {
             if (safeThis == nullptr)
                 return;
-            if (response == 1) {
-                safeThis->saveNativePreset(false, [safeThis, replacement = std::move(replacement)](bool saved) mutable {
-                    if (safeThis == nullptr)
-                        return;
-                    if (saved)
-                        replacement();
-                    else
-                        safeThis->updateUI();
-                });
-            } else if (response == 2) {
+            if (saved)
                 replacement();
-            } else {
+            else
                 safeThis->updateUI();
-            }
-        }), true);
+        });
+    });
 }
 
 void DexedAudioProcessorEditor::cartShow() {
     stopTimer();
     cartManager.resetActiveSysex();
+    cartManager.refreshFiles();
+    // A save while it was closed ("Guardar" in Play) may have changed the previewed bank.
+    cartManager.reloadPreview();
     cartManagerCover.setBounds(classicView.getLocalBounds());
     cartManager.setBounds(16, 16, cartManagerCover.getWidth() - 32, cartManagerCover.getHeight() - 32);
     cartManager.updateCartFilename();
@@ -494,6 +765,33 @@ std::unique_ptr<ComponentTraverser> DexedAudioProcessorEditor::createFocusTraver
     return std::make_unique<FocusTraverser>();
 }
 
+std::unique_ptr<ComponentTraverser> DexedAudioProcessorEditor::createKeyboardFocusTraverser() {
+    // The frame holds the keyboard when no control does, but it is not a stop
+    // of the Tab cycle: one with no ring, where nothing seems focused.
+    struct SkipFrame final : public KeyboardFocusTraverser {
+        explicit SkipFrame(Component& frameToSkip) : frame(frameToSkip) {}
+        Component* getNextComponent(Component* current) override {
+            auto* next = KeyboardFocusTraverser::getNextComponent(current);
+            return next == &frame ? KeyboardFocusTraverser::getNextComponent(next) : next;
+        }
+        Component* getPreviousComponent(Component* current) override {
+            auto* previous = KeyboardFocusTraverser::getPreviousComponent(current);
+            return previous == &frame ? KeyboardFocusTraverser::getPreviousComponent(previous) : previous;
+        }
+        Component* getDefaultComponent(Component* parent) override {
+            auto* first = KeyboardFocusTraverser::getDefaultComponent(parent);
+            return first == &frame ? KeyboardFocusTraverser::getNextComponent(first) : first;
+        }
+        std::vector<Component*> getAllComponents(Component* parent) override {
+            auto all = KeyboardFocusTraverser::getAllComponents(parent);
+            all.erase(std::remove(all.begin(), all.end(), &frame), all.end());
+            return all;
+        }
+        Component& frame;
+    };
+    return std::make_unique<SkipFrame>(frameComponent);
+}
+
 void DexedAudioProcessorEditor::loadCart(File file) {
     auto& language = AVDexedLanguageService::getInstance();
     Cartridge cart;
@@ -501,23 +799,163 @@ void DexedAudioProcessorEditor::loadCart(File file) {
     int rc = cart.load(file);
 
     if ( rc < 0 ) {
-        AVShowMessage(AlertWindow::WarningIcon, language.text("presetError"),
-                      language.format("bankOpenError", {{"path", file.getFullPathName()}}), this);
+        showAVNotice(language.text("presetError"), language.format("bankOpenError", {{"path", file.getFullPathName()}}));
         return;
     }
 
     if ( rc != 0 ) {
-        AlertWindow::showOkCancelBox(AlertWindow::QuestionIcon, language.text("invalidBankTitle"),
-                                     language.text("invalidBank") + " " + language.text("invalidBankQuestion"),
-                                     language.text("loadRandom"), language.text("cancel"), this,
-                                     ModalCallbackFunction::create([this, cart, file](int result) {
-                                         if ( result != 0 )
-                                             applyCart(cart, file);
-                                     }));
+        AVDexedPromptOverlay::Options options;
+        options.title = language.text("invalidBankTitle");
+        options.message = language.text("invalidBank") + " " + language.text("invalidBankQuestion");
+        options.confirmText = language.text("loadRandom");
+        options.cancelText = language.text("cancel");
+        options.returnConfirms = false;   // random data only when chosen on purpose
+        Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+        showAVPrompt(std::move(options), [safeThis, cart, file](bool confirmed, const String&) {
+            if (safeThis != nullptr && confirmed)
+                safeThis->applyCart(cart, file);
+        });
         return;
     }
 
     applyCart(cart, file);
+}
+
+void DexedAudioProcessorEditor::importBanks(const Array<File>& files) {
+    if (files.isEmpty()) return;
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+    const auto found = avCollectImportFiles(files);
+    if (found.banks.isEmpty() && found.presets.isEmpty()) {
+        // Neither banks nor sounds were found: the neutral "Importar".
+        showAVNotice(language.text("importAction"), language.text("importNothing"));
+        return;
+    }
+    // A file in a hidden folder of the root (.deleted, .migration-backup) is
+    // not really in the library: it is copied like one from outside.
+    Array<File> outside;
+    for (const auto* list : { &found.banks, &found.presets })
+        for (const auto& file : *list)
+            if (! avIsInVisibleLibrary(file, root)) outside.add(file);
+    if (outside.isEmpty()) {
+        // Everything is in the library already: nothing to copy, nothing to ask.
+        AVOpenImportedSounds(found.banks, found.presets, {}, {}, {});
+        return;
+    }
+
+    // As in GOZO: ask the folder first, then copy (an accidental cancel never
+    // leaves a copied file without a home). Suggested: the dropped folder, else
+    // the first bank; presets alone go to the folder being browsed or "User Presets".
+    auto suggestion = found.folderName;
+    for (const auto& bank : found.banks)
+        if (suggestion.isEmpty() && ! avIsInVisibleLibrary(bank, root)) suggestion = bank.getFileNameWithoutExtension();
+    if (suggestion.isEmpty()) {
+        const auto selected = playView.getSelectedLibraryFolder();
+        suggestion = selected.isDirectory() && selected.getParentDirectory() == root && ! AVDexedLibrary::isReadOnly(selected, root)
+            ? selected.getFileName() : String(AVDexedLibrary::userPresetsFolderName);
+    }
+    const bool onlyBanks = std::all_of(outside.begin(), outside.end(), [](const File& file) { return avIsBankPath(file.getFileName()); });
+    AVDexedPromptOverlay::Options options;
+    // "Importar banco" only for banks; single sounds (alone or mixed with
+    // banks) get the neutral "Importar".
+    options.title = language.text(onlyBanks ? "importBank" : "importAction");
+    if (outside.size() == 1)
+        options.message = onlyBanks ? language.format("importFolderQuestion", {{"bank", outside.getFirst().getFileName()}})
+                                    : language.format("importFolderQuestionOne", {{"name", outside.getFirst().getFileName()}});
+    else
+        options.message = language.format(onlyBanks ? "importFolderQuestionMany" : "importFolderQuestionFiles",
+                                          {{"count", String(outside.size())}});
+    options.hasEditor = true;
+    options.editorText = AVDexedLibrary::sanitizeFolderName(suggestion);
+    options.placeholder = language.text("folderName");
+    options.maxLength = 48;
+    options.confirmText = language.text("importAction");
+    options.cancelText = language.text("cancel");
+    options.validate = [root](const String& text) {
+        auto& lang = AVDexedLanguageService::getInstance();
+        const auto name = AVDexedLibrary::sanitizeFolderName(text);
+        if (name.isEmpty()) return lang.text("folderNameInvalid");
+        if (AVDexedLibrary::isReadOnly(AVDexedLibrary::folderNamed(root, name), root)) return lang.text("packFolderReadOnly");
+        return String();
+    };
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    showAVPrompt(std::move(options), [safeThis, found, root](bool confirmed, const String& text) {
+        if (safeThis == nullptr || ! confirmed) return;
+        auto& lang = AVDexedLanguageService::getInstance();
+        const auto folder = AVDexedLibrary::folderNamed(root, AVDexedLibrary::sanitizeFolderName(text));
+        using Status = AVDexedLibrary::ImportResult::Status;
+        Array<File> banks, presets;
+        StringArray refused, failed;
+        int added = 0, alreadyThere = 0;   // sounds copied; files the folder already held
+        AVDexedLibrary::FolderIndex folderContents;   // the folder is read once for the whole batch
+        const auto take = [&](const File& file, bool isBank) {
+            auto& list = isBank ? banks : presets;
+            if (avIsInVisibleLibrary(file, root)) { list.add(file); return; }   // already in the library: stays where it is
+            const auto result = isBank ? AVDexedLibrary::importBank(file, folder, &folderContents)
+                                       : AVDexedLibrary::importPreset(file, folder, &folderContents);
+            if (result.status == Status::notABank) refused.add(file.getFileName());
+            else if (result.status == Status::failed) failed.add(file.getFileName());
+            else {
+                // Content the folder already held is reused (it still loads),
+                // but it was not added: only real copies count.
+                list.add(result.file);
+                if (result.status == Status::copied) added += isBank ? 32 : 1;
+                else ++alreadyThere;
+            }
+        };
+        for (const auto& bank : found.banks) take(bank, true);
+        for (const auto& preset : found.presets) take(preset, false);
+        if (added > 0)
+            safeThis->showAVFooterNotice(lang.format(added == 1 ? "importedNoticeOne" : "importedNotice",
+                                                     {{"folder", folder.getFileName()}, {"count", String(added)}}));
+        else if (alreadyThere > 0)
+            safeThis->showAVFooterNotice(lang.format("alreadyInFolder", {{"folder", folder.getFileName()}}));
+        safeThis->AVOpenImportedSounds(banks, presets, added > 0 || alreadyThere > 0 ? folder : File(), refused, failed);
+    });
+}
+
+void DexedAudioProcessorEditor::AVOpenImportedSounds(const Array<File>& banks, const Array<File>& presets,
+                                                     const File& folder, StringArray refused, StringArray failed) {
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+    // The sound that loads: preferably one that landed in `folder` (the one shown).
+    const auto inFolder = [&folder](const File& file) { return folder == File() || file.getParentDirectory() == folder; };
+    File firstBank;
+    Cartridge firstCart;
+    for (const auto& bank : banks) {
+        Cartridge cart;
+        if (! AVDexedLibrary::readBank(bank, cart))
+            refused.addIfNotAlreadyThere(bank.getFileName());
+        else if (firstBank == File() || (inFolder(bank) && ! inFolder(firstBank))) { firstBank = bank; firstCart = cart; }
+    }
+    File firstPreset;
+    for (const auto& preset : presets)
+        if (firstPreset == File() || (inFolder(preset) && ! inFolder(firstPreset))) firstPreset = preset;
+    const auto first = firstBank != File() ? firstBank : firstPreset;
+    const auto shown = folder != File() ? folder : first.getParentDirectory();
+    if (first != File() && shown.isAChildOf(root))
+        playView.showLibraryFolder(shown.getRelativePathFrom(root).replaceCharacter('\\', '/'));
+    else
+        playView.refreshLibrary();
+    if (cartManagerCover.isVisible()) cartManager.refreshFiles();
+    if (firstBank != File())
+        applyCart(firstCart, firstBank);
+    else if (firstPreset != File())
+        loadNativePreset(firstPreset);
+    // Told after the load (and its save-changes question), never on top of it.
+    if (! refused.isEmpty() || ! failed.isEmpty()) {
+        String message;
+        if (! refused.isEmpty()) message << language.format("importNotBanks", {{"names", avNameList(refused)}});
+        if (! failed.isEmpty()) {
+            if (message.isNotEmpty()) message << "\n";
+            message << language.format("importFailed", {{"names", avNameList(failed)}});
+        }
+        // Worded as banks only when no single sound (.dexedpreset) was involved.
+        const auto isSound = [](const String& name) { return avIsPresetPath(name); };
+        const bool soundsInvolved = ! presets.isEmpty() || std::any_of(refused.begin(), refused.end(), isSound)
+                                    || std::any_of(failed.begin(), failed.end(), isSound);
+        showAVNotice(language.text(soundsInvolved ? "importAction" : "importBank"), message);
+    }
 }
 
 void DexedAudioProcessorEditor::applyCart(Cartridge cart, File file) {
@@ -527,31 +965,40 @@ void DexedAudioProcessorEditor::applyCart(Cartridge cart, File file) {
 }
 
 void DexedAudioProcessorEditor::commitCart(Cartridge cart, const File& file) {
-    processor->loadCartridge(cart);
+    // The bank and its file first: setCurrentProgram applies the per-sound
+    // settings embedded in that file. `cart` was read before the save-changes
+    // prompt: when "Guardar" there wrote into this very file, the file is newer.
+    processor->setActiveBank(AVDexedLibrary::currentBankOf(file, cart), file);
     rebuildProgramCombobox();
     processor->setCurrentProgram(0);
     global.programs->setSelectedId(processor->getCurrentProgram()+1, dontSendNotification);
     processor->updateHostDisplay();
 
-    processor->activeFileCartridge = file;
     playView.setActiveUserPreset({});
     playView.updateBank();
     refreshPresetHeader();
+    // The bank manager's "Based on" label: every load path ends here, after any
+    // prompt, and the editor timer that refreshes it is stopped while it is open.
+    cartManager.updateCartFilename();
 }
 
 void DexedAudioProcessorEditor::saveCart() {
-    fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("exportBankTitle"), processor->dexedCartDir, "*.syx;*.SYX", true);
+    fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("exportBankTitle"),
+                                                AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir), "*.syx;*.SYX", true);
     fileChooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
                              [this](const FileChooser& fc) {
                                  if ( fc.getResults().isEmpty() )
                                      return;
+                                 if (AVRefuseReadOnlyDestination(fc.getResult()))
+                                     return;
                                  Cartridge snapshot(processor->currentCart);
                                  snapshot.packProgram(processor->activeProgram.getRawData(), processor->getCurrentProgram(),
                                                       processor->activeProgram.getName());
-                                 if (snapshot.saveVoice(fc.getResult()) <= 0) {
-                                     AVShowMessage(AlertWindow::WarningIcon, AVDexedLanguageService::getInstance().text("saveError"),
-                                                   AVDexedLanguageService::getInstance().format("writeError", {{"path", fc.getResult().getFullPathName()}}), this);
+                                 if (! AVWriteBankFile(snapshot, fc.getResult())) {
+                                     showAVNotice(AVDexedLanguageService::getInstance().text("saveError"), avBankWriteError(fc.getResult()));
+                                     return;
                                  }
+                                 cartManager.reloadPreview();
                              });
 }
 
@@ -599,6 +1046,7 @@ public:
     void resized() override {
         AVPanel->setBounds(Rectangle<int>(1180, 650).withCentre(getLocalBounds().withTrimmedBottom(30).getCentre()));
     }
+    AVDexedSettingsPanel& AVGetPanel() noexcept { return *AVPanel; }
     bool keyPressed(const KeyPress& key) override { return AVPanel->keyPressed(key); }
     void mouseDown(const MouseEvent& event) override {
         if (!AVPanel->getBounds().contains(event.getPosition()) && AVClose) AVClose();
@@ -640,9 +1088,7 @@ void DexedAudioProcessorEditor::parmShow() {
         safeThis->resetSize();
         if (!opened) {
             auto& language = AVDexedLanguageService::getInstance();
-            auto* alert = new AVAlertWindow(language.text("midiInterface"), language.text("midiPortsError"), AlertWindow::WarningIcon);
-            alert->addButton(language.text("ok"), 1, KeyPress(KeyPress::returnKey), KeyPress(KeyPress::escapeKey));
-            alert->enterModalState(true, nullptr, true);
+            safeThis->showAVNotice(language.text("midiInterface"), language.text("midiPortsError"));
         }
     };
     actions.tuningAction = [safeThis](ParamDialog* dialog, ParamDialog::TuningAction action) {
@@ -658,12 +1104,277 @@ void DexedAudioProcessorEditor::parmShow() {
     const auto closeOverlay = actions.close;
     AVSettingsOverlay = std::make_unique<AVDexedSettingsOverlay>(std::move(backdrop),
         std::make_unique<AVDexedSettingsPanel>(*processor, std::move(actions)), closeOverlay);
-    // Added hidden: ComponentAnimator::fadeIn() does nothing to a component that
-    // is already visible and opaque, which left only the fade-out working.
+    // Added hidden and faded in BEFORE enterModalState(), which makes it visible:
+    // ComponentAnimator::fadeIn() does nothing to a component that is already
+    // visible and opaque, which left only the fade-out working.
     frameComponent.addChildComponent(*AVSettingsOverlay);
     AVSettingsOverlay->setBounds(frameComponent.getLocalBounds());
-    AVSettingsOverlay->enterModalState(true);
     Desktop::getInstance().getAnimator().fadeIn(AVSettingsOverlay.get(), 100);
+    AVSettingsOverlay->enterModalState(true);
+}
+
+void DexedAudioProcessorEditor::showAVSettingsPage(AVDexedSettingsPanel::AVPage page) {
+    parmShow();
+    if (auto* overlay = dynamic_cast<AVDexedSettingsOverlay*>(AVSettingsOverlay.get()))
+        overlay->AVGetPanel().AVShowPage(page);
+}
+
+AVDexedPromptOverlay* DexedAudioProcessorEditor::showAVPrompt(AVDexedPromptOverlay::Options options, AVDexedPromptOverlay::Result result) {
+    midiKeyboard.releaseAVUINotes();
+    AVDropOverlay.hide(true);
+    AVReleaseFinishedPrompts();
+    // A dialog opened from another one's result, or while another still fades
+    // out, would otherwise photograph that dialog: it reuses the first backdrop.
+    const bool promptFading = std::any_of(AVPrompts.begin(), AVPrompts.end(), [](const auto& prompt) { return prompt->isFinishing(); });
+    if ((! AVInPromptResult && ! promptFading) || ! AVPromptBackdrop.isValid())
+        AVPromptBackdrop = createComponentSnapshot(getLocalBounds()).rescaled(frameComponent.getWidth(), frameComponent.getHeight());
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    if (options.altText.isNotEmpty()) {
+        auto onAlt = std::move(options.onAlt);
+        options.onAlt = [safeThis, onAlt] {
+            if (safeThis != nullptr) safeThis->AVDeliverPromptCallback(onAlt);
+        };
+    }
+    auto prompt = std::make_unique<AVDexedPromptOverlay>(frameComponent, AVPromptBackdrop, std::move(options),
+        [safeThis, result](bool confirmed, const String& text) {
+            if (safeThis != nullptr)
+                safeThis->AVDeliverPromptCallback([&result, confirmed, &text] { if (result) result(confirmed, text); });
+        });
+    auto* raw = prompt.get();
+    AVPrompts.push_back(std::move(prompt));
+    raw->present();
+    return raw;
+}
+
+void DexedAudioProcessorEditor::showAVMidiLearn(Component& control, RangedAudioParameter& parameter) {
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto id = parameter.getParameterID();
+    const auto name = control.getTitle().isNotEmpty() ? control.getTitle() : language.parameterName(id, parameter.getName(100));
+    AVDexedPromptOverlay::Options options;
+    options.title = language.text("learnMidiTitle");
+    options.message = language.format("midiLearnMessage", {{"parameter", name}});
+    // A single pill, Cancel: the dialog only waits for the controller.
+    options.confirmText = language.text("cancel");
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    // Every way out of the dialog ends here: Cancel, Escape and a click outside
+    // stop this Learn. After a learned CC the handler waits for nothing.
+    const Component::SafePointer<AVDexedPromptOverlay> prompt = showAVPrompt(std::move(options), [safeThis, id](bool, const String&) {
+        if (safeThis == nullptr) return;
+        auto& mapper = *safeThis->processor->midiCCMapper;
+        if (mapper.getAVLearningParameterId() == id) mapper.cancelMapping();
+    });
+    processor->midiCCMapper->startMapping(&parameter, [safeThis, prompt, name] {
+        if (safeThis == nullptr) return;
+        if (prompt != nullptr) prompt->dismiss();
+        const auto cc = safeThis->processor->midiCCMapper->getAVLastLearnedCC();
+        safeThis->showAVFooterNotice(AVDexedLanguageService::getInstance().format("learnComplete",
+                                                                                  {{"cc", String(cc)}, {"parameter", name}}));
+    });
+}
+
+void DexedAudioProcessorEditor::AVLearnPresetStep(int step) {
+    // One Learn at a time: a menu answered late (behind another dialog) must
+    // not stack a second waiting dialog or take over the running Learn.
+    if (! isPositiveAndBelow(step, 2) || hasAVPromptOpen() || isCurrentlyBlockedByAnotherModalComponent()) return;
+    auto& language = AVDexedLanguageService::getInstance();
+    AVDexedPromptOverlay::Options options;
+    options.title = language.text("learnMidiTitle");
+    options.message = language.format("presetStepLearnMessage", {{"step", avPresetStepName(step)}});
+    options.confirmText = language.text("cancel");   // a single pill: the dialog only waits
+    const int token = ++AVStepLearnToken;
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    // Every way out of the dialog ends here: Cancel, Escape and a click outside
+    // stop the Learn. Once the CC is learned, AVFollowPresetStepCCs has already
+    // cleared AVStepLearn and closes the dialog with dismiss().
+    AVStepLearnPrompt = showAVPrompt(std::move(options), [safeThis, token](bool, const String&) {
+        if (safeThis == nullptr || safeThis->AVStepLearnToken != token || safeThis->AVStepLearn < 0) return;
+        safeThis->AVStepLearn = -1;
+        safeThis->processor->cancelAVPresetStepLearn();
+    });
+    AVStepLearn = step;
+    processor->startAVPresetStepLearn(static_cast<DexedAudioProcessor::AVPresetStep>(step));
+}
+
+void DexedAudioProcessorEditor::AVFollowPresetStepCCs() {
+    const int learned = processor->consumeAVPresetStepLearned();
+    if (isPositiveAndBelow(learned, 2)) {
+        if (learned == AVStepLearn) {
+            AVStepLearn = -1;   // the dialog's result must not cancel what was just learned
+            if (AVStepLearnPrompt != nullptr) AVStepLearnPrompt->dismiss();
+        }
+        const int cc = processor->getAVPresetStepCC(static_cast<DexedAudioProcessor::AVPresetStep>(learned));
+        if (cc >= 0)
+            showAVFooterNotice(AVDexedLanguageService::getInstance().format("presetStepLearned",
+                                   {{"step", avPresetStepName(learned)}, {"cc", String(cc)}}));
+    }
+    // Each press of a learned control is one step through the list shown in
+    // Play, as a click on the arrow beside the sound name is. Presses while a
+    // dialog, a menu or Settings is open are dropped, not kept for later.
+    AVPendingSoundSteps += processor->consumeAVPresetSteps();
+    if (! AVCanStepSounds()) {
+        AVPendingSoundSteps = 0;
+        return;
+    }
+    // Right after the editor opens the list is still being read: a press then
+    // waits for it instead of being lost.
+    if (AVPendingSoundSteps == 0 || playView.isWaitingForFirstIndex())
+        return;
+    const int steps = std::exchange(AVPendingSoundSteps, 0);
+    for (int i = 0; i < std::abs(steps) && AVCanStepSounds(); ++i)
+        playView.navigatePreset(steps > 0 ? 1 : -1);
+}
+
+bool DexedAudioProcessorEditor::AVCanStepSounds() const {
+    return ! hasAVPromptOpen() && ! isCurrentlyBlockedByAnotherModalComponent()
+        && (AVSettingsOverlay == nullptr || ! AVSettingsOverlay->isVisible());
+}
+
+bool DexedAudioProcessorEditor::AVStepSoundFromKey(const KeyPress& key) {
+    const auto mods = key.getModifiers();
+    if (! AVIsSoundStepKey(key) || mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown())
+        return false;
+    // A text field keeps its arrows (the search field moves through the list
+    // itself); the bank manager's grid and file list use theirs.
+    if (dynamic_cast<TextEditor*>(Component::getCurrentlyFocusedComponent()) != nullptr
+        || cartManagerCover.isShowing() || ! AVCanStepSounds())
+        return false;
+    playView.navigatePreset(key.isKeyCode(KeyPress::upKey) ? -1 : 1);
+    return true;
+}
+
+void DexedAudioProcessorEditor::globalFocusChanged(Component* focusedComponent) {
+    if (AVSoundKeysTarget.getComponent() == focusedComponent && focusedComponent != nullptr)
+        return;
+    if (AVSoundKeysTarget != nullptr)
+        AVSoundKeysTarget->removeKeyListener(&AVSoundKeys);
+    AVSoundKeysTarget = nullptr;
+    // The controls that use Up / Down themselves: JUCE's Slider steps its value
+    // and ComboBox its choice (the Play knobs are plain Sliders). Buttons let
+    // the keys through; text fields and lists keep theirs.
+    if (focusedComponent != nullptr && isParentOf(focusedComponent)
+        && (dynamic_cast<Slider*>(focusedComponent) != nullptr || dynamic_cast<ComboBox*>(focusedComponent) != nullptr)) {
+        focusedComponent->addKeyListener(&AVSoundKeys);
+        AVSoundKeysTarget = focusedComponent;
+    }
+}
+
+void DexedAudioProcessorEditor::AVDeliverPromptCallback(const std::function<void()>& callback) {
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    AVInPromptResult = true;
+    if (callback) callback();
+    if (safeThis == nullptr) return;
+    // A notice that waited for this prompt follows it on the same backdrop.
+    AVPumpNotices();
+    AVInPromptResult = false;
+    AVReleaseFinishedPrompts();
+}
+
+void DexedAudioProcessorEditor::AVReleaseFinishedPrompts() {
+    // A closed prompt fades out as a proxy image the animator owns. The prompt
+    // is kept until that fade ends: released earlier, its fade could no longer
+    // be found (and cancelled) when the editor closes.
+    auto& animator = Desktop::getInstance().getAnimator();
+    AVPrompts.erase(std::remove_if(AVPrompts.begin(), AVPrompts.end(), [&animator](const auto& prompt) {
+                        return prompt->isFinishing() && ! animator.isAnimating(prompt.get());
+                    }), AVPrompts.end());
+    const bool fading = std::any_of(AVPrompts.begin(), AVPrompts.end(), [](const auto& prompt) { return prompt->isFinishing(); });
+    if (! fading || AVPromptSweepPending)
+        return;
+    AVPromptSweepPending = true;
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    Timer::callAfterDelay(150, [safeThis] {
+        if (safeThis == nullptr) return;
+        safeThis->AVPromptSweepPending = false;
+        safeThis->AVReleaseFinishedPrompts();
+    });
+}
+
+bool DexedAudioProcessorEditor::hasAVPromptOpen() const {
+    return std::any_of(AVPrompts.begin(), AVPrompts.end(), [](const auto& prompt) { return ! prompt->isFinishing(); });
+}
+
+void DexedAudioProcessorEditor::showAVNotice(const String& title, const String& message) {
+    AVNoticeQueue.push_back({ title, message });
+    // Inside a prompt's result the caller may still open the next prompt (the
+    // save-changes question after an import): the notice waits for it.
+    if (! AVInPromptResult)
+        AVPumpNotices();
+}
+
+bool DexedAudioProcessorEditor::AVCanShowNoticeNow() const {
+    if (hasAVPromptOpen())
+        return false;
+    const int modal = Component::getNumCurrentlyModalComponents();
+    if (modal == 0)
+        return true;
+    // Settings is a full page, not a dialog: its own errors may show over it.
+    return modal == 1 && AVSettingsOverlay != nullptr && Component::getCurrentlyModalComponent() == AVSettingsOverlay.get();
+}
+
+void DexedAudioProcessorEditor::AVPumpNotices() {
+    // An open prompt pumps the queue itself when it closes.
+    if (AVNoticeQueue.empty() || hasAVPromptOpen())
+        return;
+    if (! AVCanShowNoticeNow()) {
+        // Something else is modal (a menu, a file chooser, the Store dialog):
+        // look again shortly. Prompts pump the queue themselves when they close.
+        if (! AVNoticePollPending) {
+            AVNoticePollPending = true;
+            Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+            Timer::callAfterDelay(250, [safeThis] {
+                if (safeThis == nullptr) return;
+                safeThis->AVNoticePollPending = false;
+                safeThis->AVPumpNotices();
+            });
+        }
+        return;
+    }
+    const auto notice = AVNoticeQueue.front();
+    AVNoticeQueue.erase(AVNoticeQueue.begin());
+    AVDexedPromptOverlay::Options options;
+    options.title = notice.title;
+    options.message = notice.message;
+    showAVPrompt(std::move(options), {});
+}
+
+void DexedAudioProcessorEditor::showAVFooterNotice(const String& text) {
+    if (text.isEmpty())
+        return;
+    AVNoticeText = text;
+    AVNoticeStart = Time::getMillisecondCounterHiRes();
+    AVHelpFadeStart = 0.0;
+    AVNoticeTicker.startTimerHz(60);
+    AVUpdateHelpText();
+}
+
+void DexedAudioProcessorEditor::AVAdoptExternalSoundsOnce() {
+    // Banks and presets 0.1.0 played from outside the data folder are copied in,
+    // once per process and off the message thread (a slow or sleeping drive must
+    // not freeze the editor). Unreachable ones stay pending for a later run.
+    const auto appDirectory = DexedAudioProcessor::dexedAppDir;
+    int idle = avAdoptionIdle;
+    if (! appDirectory.isDirectory() || ! avAdoptionState.compare_exchange_strong(idle, avAdoptionQueued))
+        return;
+    const auto preferences = DexedAudioProcessor::getPreferencesFile();
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    AVAdoptionPool = std::make_unique<ThreadPool>(1);
+    AVAdoptionPool->addJob([appDirectory, preferences, safeThis] {
+        avAdoptionState = avAdoptionStarted;
+        // Copies here; the preferences are written on the message thread, where
+        // every other preferences write of this process happens.
+        auto adoption = AVDexedLibrary::copyExternalSounds(appDirectory, preferences);
+        MessageManager::callAsync([safeThis, preferences, adoption = std::move(adoption)] {
+            AVDexedLibrary::settleExternalSounds(preferences, adoption);
+            const auto& copied = adoption.copied;
+            if (safeThis == nullptr || copied.isEmpty())
+                return;
+            safeThis->playView.refreshLibrary();
+            if (safeThis->cartManagerCover.isVisible()) safeThis->cartManager.refreshFiles();
+            // The footer is one line: three names at most.
+            safeThis->showAVFooterNotice(AVDexedLanguageService::getInstance().format("adoptedNotice",
+                                                                                      {{"names", avNameList(copied, 3)}}));
+        });
+    });
 }
 
 void DexedAudioProcessorEditor::initProgram() {
@@ -789,98 +1500,206 @@ void DexedAudioProcessorEditor::storeProgram() {
     storeProgramShowDialog(processor->currentCart, File());
 }
 
-void DexedAudioProcessorEditor::saveNativePreset(bool saveAs, std::function<void(bool)> completion) {
+void DexedAudioProcessorEditor::AVSaveSound(std::function<void(bool)> completion) {
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
     const auto activeFile = playView.getActiveUserPreset();
-    if (!saveAs && activeFile.existsAsFile()) {
-        const auto oldKey = playView.getPresetKeyForFile(activeFile);
-        auto presetId = readNativePresetId(activeFile);
-        if (presetId.isEmpty())
-            presetId = Uuid().toString();
-        auto state = createNativePresetState(*processor, presetId);
-        if (state.isEmpty()) {
-            if (completion) completion(false);
-            return;
+
+    // A sound file of the library (not of a read-only pack, nor one waiting
+    // hidden in .deleted): overwritten in place, while it is still this sound.
+    if (activeFile.existsAsFile() && AVDexedLibrary::isPresetFile(activeFile)
+        && avIsInVisibleLibrary(activeFile, root) && ! AVDexedLibrary::isReadOnly(activeFile, root)) {
+        // Renamed or deleted elsewhere (Finder, another instance, another
+        // project) and a new sound saved under the same name: the file now holds
+        // another id, and that sound is never overwritten. A sound without id
+        // (from 0.1.0) has nothing to compare and saves in place as before.
+        const auto expectedId = processor->getAVPresetId().trim();
+        const auto holdsOtherSound = [&expectedId](const File& file) {
+            return expectedId.isNotEmpty() && readNativePresetId(file).trim() != expectedId;
+        };
+        if (! holdsOtherSound(activeFile)) {
+            const auto oldKey = playView.getPresetKeyForFile(activeFile);
+            auto presetId = expectedId.isNotEmpty() ? expectedId : readNativePresetId(activeFile);
+            if (presetId.isEmpty())
+                presetId = Uuid().toString();
+            const auto state = createNativePresetState(*processor, presetId);
+            bool written = false, replacedMeanwhile = false;
+            {
+                // Under the library lock, as the browser's rename and delete: a
+                // preset another AV Dexed just moved, removed or replaced is not
+                // touched here (checked again now that nobody else can write).
+                const AVDexedLibrary::LibraryScope lock(3000);
+                if (! state.isEmpty() && lock.held && activeFile.existsAsFile()) {
+                    replacedMeanwhile = holdsOtherSound(activeFile);
+                    written = ! replacedMeanwhile && AVDexedLibrary::writeAtomically(activeFile, state);
+                }
+            }
+            if (! replacedMeanwhile) {
+                if (! written) {
+                    showAVNotice(language.text("saveError"), language.format("writeError", {{"path", activeFile.getFullPathName()}}));
+                    if (completion) completion(false);
+                    return;
+                }
+                playView.migratePresetKey(oldKey, "user:" + presetId);
+                processor->setAVPresetContext(processor->getAVPresetName(), presetId, activeFile);
+                processor->captureAVPresetBaseline();
+                playView.setActiveUserPreset(activeFile);
+                processor->updateHostDisplay();
+                showAVFooterNotice(language.format("savedSound", {{"name", activeFile.getFileNameWithoutExtension()}}));
+                if (completion) completion(true);
+                return;
+            }
         }
-        if (!activeFile.replaceWithData(state.getData(), state.getSize())) {
-            AVShowMessage(AlertWindow::WarningIcon, AVDexedLanguageService::getInstance().text("saveError"),
-                          AVDexedLanguageService::getInstance().format("writeError", {{"path", activeFile.getFullPathName()}}), this);
-            if (completion) completion(false);
-            return;
-        }
-        playView.migratePresetKey(oldKey, "user:" + presetId);
-        processor->setAVPresetContext(processor->getAVPresetName(), presetId, activeFile);
-        processor->captureAVPresetBaseline();
-        playView.setActiveUserPreset(activeFile);
-        processor->updateHostDisplay();
-        if (completion) completion(true);
+        AVSaveSoundAs(std::move(completion),
+                      language.format("presetReplacedElsewhere", {{"name", activeFile.getFileNameWithoutExtension()}}));
         return;
     }
 
-    auto folder = processor->dexedAppDir.getChildFile("User Presets");
-    folder.createDirectory();
-    auto fileName = File::createLegalFileName(processor->getAVPresetName().trim());
-    if (fileName.isEmpty()) fileName = "Untitled";
-    fileName << ".dexedpreset";
-    const auto initialFile = activeFile.existsAsFile() && saveAs
-        ? activeFile : folder.getChildFile(fileName);
-    fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("saveNativeTitle"), initialFile, "*.dexedpreset", true);
+    // A voice of a bank of the library: into its own slot of that .syx, with its
+    // modern settings (the processor re-reads the file and patches only that slot).
+    if (activeFile.getFullPathName().isEmpty() && processor->canSaveAVSoundToBank()) {
+        const Cartridge previousBank = processor->currentCart;
+        const auto bankFile = processor->activeFileCartridge;
+        const auto outcome = processor->saveAVSoundToBank(processor->activeProgram.getName());
+        if (outcome == DexedAudioProcessor::AVBankSaveResult::saved) {
+            // Favourites and folder entries follow the voice into the new bank content.
+            playView.carryAVBankMetadata(previousBank, processor->currentCart);
+            processor->updateHostDisplay();
+            playView.refreshLibrary();
+            // The bank manager's preview may show this file as it was before.
+            cartManager.reloadPreview();
+            updateUI();
+            showAVFooterNotice(language.format("savedIn", {{"place", bankFile.getFileNameWithoutExtension()}}));
+            if (completion) completion(true);
+            return;
+        }
+        if (outcome == DexedAudioProcessor::AVBankSaveResult::failed) {
+            showAVNotice(language.text("saveError"), language.format("writeError", {{"path", bankFile.getFullPathName()}}));
+            if (completion) completion(false);
+            return;
+        }
+        // needsSaveAs: the file no longer holds this bank (edited elsewhere).
+    }
+
+    // Factory or pack sounds, sounds from outside the library, SysEx banks…
+    AVSaveSoundAs(std::move(completion));
+}
+
+void DexedAudioProcessorEditor::AVSaveSoundAs(std::function<void(bool)> completion, const String& reason) {
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+    // The folder being browsed when it is a real, writable one; else "User Presets".
+    auto folder = playView.getSelectedLibraryFolder();
+    if (! (folder.isDirectory() && avIsInVisibleLibrary(folder, root) && folder.hasWriteAccess()
+           && ! AVDexedLibrary::isReadOnly(folder, root)))
+        // Never a pack that happens to be called "User Presets" ("User Presets 2" then).
+        folder = AVDexedLibrary::writableFolderFor(root, AVDexedLibrary::userPresetsFolderName);
+    const auto place = avFolderDisplayName(folder, root);
+
+    AVDexedPromptOverlay::Options options;
+    options.title = language.text("saveAs");
+    options.message = (reason.isNotEmpty() ? reason + "\n" : String()) + language.format("saveAsWhere", {{"folder", place}});
+    options.hasEditor = true;
+    options.editorText = processor->getAVPresetName().trim();
+    options.placeholder = language.text("soundName");
+    options.maxLength = 64;
+    options.confirmText = language.text("save");
+    options.cancelText = language.text("cancel");
+    options.validate = [](const String& text) {
+        return avPresetFileStem(text).isEmpty() ? AVDexedLanguageService::getInstance().text("soundNameInvalid") : String();
+    };
     Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
-    fileChooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles
-                             | FileBrowserComponent::warnAboutOverwriting,
-                             [safeThis, saveAs, activeFile, completion = std::move(completion)](const FileChooser& chooser) mutable {
+    showAVPrompt(std::move(options), [safeThis, folder, place, completion = std::move(completion)](bool confirmed, const String& text) {
         if (safeThis == nullptr)
             return;
-        if (chooser.getResults().isEmpty()) {
+        if (!confirmed) {
             if (completion) completion(false);
             return;
         }
-        auto destination = chooser.getResult();
-        if (destination.getFileExtension().compareIgnoreCase(".dexedpreset") != 0)
-            destination = destination.withFileExtension("dexedpreset");
-        destination.getParentDirectory().createDirectory();
-        auto presetId = !saveAs && destination == activeFile ? readNativePresetId(destination) : String();
-        const auto oldKey = !saveAs && destination == activeFile
-            ? safeThis->playView.getPresetKeyForFile(destination) : String();
-        if (presetId.isEmpty())
-            presetId = Uuid().toString();
-        auto state = createNativePresetState(*safeThis->processor, presetId, destination.getFileNameWithoutExtension());
-        if (state.isEmpty()) {
+        auto& lang = AVDexedLanguageService::getInstance();
+        auto* editor = safeThis.getComponent();
+        const auto presetId = Uuid().toString();
+        File destination;
+        bool written = false;
+        // The free name is taken and written under the library lock, so another
+        // AV Dexed saving the same name at the same moment cannot overwrite it.
+        const AVDexedLibrary::LibraryScope lock(4000);
+        if (lock.held && folder.createDirectory().wasOk()) {
+            destination = AVDexedLibrary::uniqueDestination(folder, avPresetFileStem(text) + AVDexedLibrary::presetExtension);
+            const auto state = createNativePresetState(*editor->processor, presetId, destination.getFileNameWithoutExtension());
+            written = ! state.isEmpty() && AVDexedLibrary::writeAtomically(destination, state);
+        }
+        if (! written) {
+            editor->showAVNotice(lang.text("saveError"),
+                                 lang.format("writeError", {{"path", (destination != File() ? destination : folder).getFullPathName()}}));
             if (completion) completion(false);
             return;
         }
-        if (!destination.replaceWithData(state.getData(), state.getSize())) {
-            AVShowMessage(AlertWindow::WarningIcon, AVDexedLanguageService::getInstance().text("saveError"),
-                          AVDexedLanguageService::getInstance().format("writeError", {{"path", destination.getFullPathName()}}), safeThis.getComponent());
-            if (completion) completion(false);
-            return;
-        }
-        safeThis->playView.migratePresetKey(oldKey, "user:" + presetId);
-        safeThis->processor->setAVPresetContext(destination.getFileNameWithoutExtension(), presetId, destination);
-        safeThis->processor->captureAVPresetBaseline();
-        safeThis->playView.setActiveUserPreset(destination);
-        safeThis->processor->updateHostDisplay();
-        safeThis->updateUI();
+        editor->processor->setAVPresetContext(destination.getFileNameWithoutExtension(), presetId, destination);
+        editor->processor->captureAVPresetBaseline();
+        editor->playView.setActiveUserPreset(destination);
+        editor->processor->updateHostDisplay();
+        editor->playView.refreshLibrary();
+        editor->updateUI();
+        editor->showAVFooterNotice(lang.format("savedIn", {{"place", place}}));
         if (completion) completion(true);
     });
+}
+
+bool DexedAudioProcessorEditor::AVWriteBankFile(Cartridge bank, const File& file, int storedSlot,
+                                                const std::map<String, float>& storedSettings) {
+    if (! bank.containsData() || file.getFullPathName().isEmpty())
+        return false;
+    // Another AV Dexed saving a sound into this bank re-reads it, checks it and
+    // writes it back under the lock: a write in between would be lost.
+    const AVDexedLibrary::LibraryScope lock(3000);
+    if (! lock.held)
+        return false;
+    MemoryBlock original;
+    AVDexedLibrary::BankSettings settings;
+    if (file.existsAsFile()) {
+        // A bank file is about 4 KB. One of 64 KB or more is an archive of many
+        // banks: only its first 64 KB can be read, and writing them back would
+        // cut every bank after that point.
+        if (file.getSize() >= 65535 || ! file.loadFileAsData(original))
+            return false;
+        Cartridge onDisk;
+        const int loadResult = onDisk.load(static_cast<const uint8_t*>(original.getData()), static_cast<int>(original.getSize()));
+        if (loadResult == 0 || loadResult == 1)
+            settings = AVDexedLibrary::readEmbeddedSettings(original);   // kept, with its other SysEx messages
+        else if (original.getSize() <= SYSEX_SIZE)
+            original.reset();   // too small to hold more than a bank: replaced, as Dexed always did
+        else
+            return false;       // other data that holds no bank is never rewritten
+    }
+    if (isPositiveAndBelow(storedSlot, 32))
+        settings = avSettingsWithSlot(std::move(settings), bank, storedSlot, storedSettings);
+    return AVDexedLibrary::writeAtomically(file, AVDexedLibrary::composeBankFile(original, bank, settings));
+}
+
+bool DexedAudioProcessorEditor::AVRefuseReadOnlyDestination(const File& destination) {
+    const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+    if (! destination.isAChildOf(root) || ! AVDexedLibrary::isReadOnly(destination, root))
+        return false;
+    auto& language = AVDexedLanguageService::getInstance();
+    showAVNotice(language.text("saveError"), language.text("packFolderReadOnly"));
+    return true;
 }
 
 void DexedAudioProcessorEditor::loadNativePreset(const File& file) {
     auto& language = AVDexedLanguageService::getInstance();
     if (!file.existsAsFile() || file.getSize() <= 0 || file.getSize() > 32 * 1024 * 1024) {
-        AVShowMessage(AlertWindow::WarningIcon, language.text("presetError"),
-                      language.text("missingPreset"), this);
+        showAVNotice(language.text("presetError"), language.text("missingPreset"));
         return;
     }
     MemoryBlock state;
     if (!file.loadFileAsData(state)) {
-        AVShowMessage(AlertWindow::WarningIcon, language.text("presetError"),
-                      language.format("readFileError", {{"path", file.getFullPathName()}}), this);
+        showAVNotice(language.text("presetError"), language.format("readFileError", {{"path", file.getFullPathName()}}));
         return;
     }
     auto xml = AudioProcessor::getXmlFromBinary(state.getData(), static_cast<int>(state.getSize()));
     if (xml == nullptr) {
-        AVShowMessage(AlertWindow::WarningIcon, language.text("presetError"),
-                      language.text("invalidPreset"), this);
+        showAVNotice(language.text("presetError"), language.text("invalidPreset"));
         return;
     }
     const bool legacyState = xml->hasTagName("dexedState");
@@ -916,8 +1735,7 @@ void DexedAudioProcessorEditor::loadNativePreset(const File& file) {
         }
     }
     if (!structurallyValid) {
-        AVShowMessage(AlertWindow::WarningIcon, language.text("presetError"),
-                      language.text("invalidPreset"), this);
+        showAVNotice(language.text("presetError"), language.text("invalidPreset"));
         return;
     }
 
@@ -925,10 +1743,9 @@ void DexedAudioProcessorEditor::loadNativePreset(const File& file) {
     requestPresetReplacement([safeThis, file, state = std::move(state)]() mutable {
         if (safeThis == nullptr)
             return;
-        if (!safeThis->processor->loadAVStateInformation(state.getData(), static_cast<int>(state.getSize()))) {
+        if (!safeThis->processor->loadAVNativePreset(state.getData(), static_cast<int>(state.getSize()))) {
             auto& language = AVDexedLanguageService::getInstance();
-            AVShowMessage(AlertWindow::WarningIcon, language.text("presetError"),
-                          language.text("invalidPreset"), safeThis.getComponent());
+            safeThis->showAVNotice(language.text("presetError"), language.text("invalidPreset"));
             return;
         }
         safeThis->processor->setAVPresetContext(safeThis->processor->getAVPresetName(), readNativePresetId(file), file);
@@ -990,7 +1807,7 @@ void DexedAudioProcessorEditor::storeProgramShowDialog(Cartridge destSysex, File
 void DexedAudioProcessorEditor::storeProgramResponse(AlertWindow *dialog, int response, Cartridge destSysex, File externalFile, bool hasExternalFile) {
     if ( response == 2 ) {
         fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("destinationSysex"),
-                                                    processor->dexedCartDir, "*.syx;*.SYX;*.*", true);
+                                                    AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir), "*.syx;*.SYX;*.*", true);
         fileChooser->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
                                  [this, destSysex](const FileChooser& fc) mutable {
                                      if ( fc.getResults().isEmpty() ) {
@@ -1002,8 +1819,8 @@ void DexedAudioProcessorEditor::storeProgramResponse(AlertWindow *dialog, int re
                                          storeProgramShowDialog(destSysex, chosenFile);
                                          return;
                                      }
-                                     AVShowMessage(AlertWindow::WarningIcon, AVDexedLanguageService::getInstance().text("presetError"),
-                                                   AVDexedLanguageService::getInstance().text("readError"), this);
+                                     showAVNotice(AVDexedLanguageService::getInstance().text("presetError"),
+                                                  AVDexedLanguageService::getInstance().text("readError"));
                                      cartManager.resetActiveSysex();
                                  });
         return;
@@ -1017,79 +1834,157 @@ void DexedAudioProcessorEditor::storeProgramResponse(AlertWindow *dialog, int re
         String programName(name->getText());
         Program storedVoice = processor->activeProgram;
         storedVoice.setName(programName);
+        // The bank as it was when the dialog opened, to notice a file that
+        // changed meanwhile (another AV Dexed, Finder, an older DAW session).
+        const auto baseFingerprint = AVDexedLibrary::bankFingerprint(destSysex);
 
         if (!destSysex.packProgram(storedVoice.getRawData(), programNum, programName)) {
             const auto& language = AVDexedLanguageService::getInstance();
-            AVShowMessage(AlertWindow::WarningIcon, language.text("saveError"),
-                          language.text("voicePackError"), this);
+            showAVNotice(language.text("saveError"), language.text("voicePackError"));
             cartManager.resetActiveSysex();
             return;
         }
 
-        auto adoptStoredBank = [this, programNum, programName](const Cartridge& savedCart, const File& source) {
+        // The sound's settings now (volume, pan, reverb…), taken with the
+        // program the way "Guardar" takes them.
+        const auto liveSettings = [this] {
+            const ScopedLock audioLock(processor->getCallbackLock());
+            return processor->captureAVSoundSettings().values;
+        };
+
+        // `settingsKept`: the stored slot will play with the sound's settings
+        // (they went into its file, or the file already gives them to that
+        // voice). Only then is the sound taken as saved; otherwise it stays
+        // "Modified", so "Guardar" and the save-changes prompt still protect them.
+        auto adoptStoredBank = [this, programNum, programName](const Cartridge& savedCart, const File& source, bool settingsKept) {
             playView.carryAVBankMetadata(processor->currentCart, savedCart);
-            processor->loadCartridge(savedCart);
-            processor->activeFileCartridge = source;
+            processor->setActiveBank(savedCart, source);
             processor->activeProgram.setName(programName);
-        processor->setAVPresetContext({}, {}, {});
-        processor->captureAVPresetBaseline();
+            processor->setAVPresetContext({}, {}, {});
+            if (settingsKept)
+                processor->captureAVPresetBaseline();
             processor->setCurrentProgramSelection(programNum);
             processor->updateHostDisplay();
             rebuildProgramCombobox();
             cartManager.resetActiveSysex();
+            cartManager.reloadPreview();
+        };
+
+        // Into a file, the stored slot carries the sound's settings with it, as
+        // with "Guardar"; the other slots keep theirs.
+        auto writeStoredBank = [destSysex, programNum, liveSettings](const File& file) {
+            return AVWriteBankFile(destSysex, file, programNum, liveSettings());
+        };
+
+        // Writes the whole bank over `file`. When the file no longer holds the
+        // bank this dialog started from, its other 31 sounds would silently go
+        // back to this copy: that is asked first (Return never confirms it).
+        auto overwriteBank = [this, destSysex, baseFingerprint, adoptStoredBank, writeStoredBank](const File& file, bool adopt) {
+            const auto write = [this, destSysex, file, adopt, adoptStoredBank, writeStoredBank] {
+                if (! writeStoredBank(file)) {
+                    showAVNotice(AVDexedLanguageService::getInstance().text("saveError"), avBankWriteError(file));
+                    cartManager.resetActiveSysex();
+                    return;
+                }
+                if (adopt) {
+                    adoptStoredBank(destSysex, file, true);
+                } else {
+                    cartManager.resetActiveSysex();
+                    cartManager.reloadPreview();
+                }
+            };
+            // Only a file that does not exist is written without a look: an
+            // existing one that is not a single readable bank (an archive of
+            // several, 64 KB or more) is never rewritten.
+            if (! file.existsAsFile()) {
+                write();
+                return;
+            }
+            Cartridge onDisk;
+            if (! AVDexedLibrary::readBank(file, onDisk)) {
+                const auto& language = AVDexedLanguageService::getInstance();
+                showAVNotice(language.text("saveError"), language.format("bankNotRewritable", {{"bank", file.getFileName()}}));
+                cartManager.resetActiveSysex();
+                return;
+            }
+            if (AVDexedLibrary::bankFingerprint(onDisk) == baseFingerprint) {
+                write();
+                return;
+            }
+            auto& language = AVDexedLanguageService::getInstance();
+            AVDexedPromptOverlay::Options options;
+            options.title = language.text("storeProgramTitle");
+            options.message = language.format("storeBankChanged", {{"bank", file.getFileName()}});
+            options.confirmText = language.text("overwrite");
+            options.cancelText = language.text("cancel");
+            options.returnConfirms = false;
+            Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+            showAVPrompt(std::move(options), [safeThis, write](bool confirmed, const String&) {
+                if (safeThis == nullptr) return;
+                if (confirmed) write();
+                else safeThis->cartManager.resetActiveSysex();
+            });
         };
 
         if ( ! hasExternalFile ) {
             int action = dialog->getComboBoxComponent("SaveAction")->getSelectedItemIndex();
             if (action == 0) {
-                adoptStoredBank(destSysex, processor->activeFileCartridge);
+                // Only in this session: no file is written, so the slot keeps the
+                // sound's settings only if its file already gives them to that voice.
+                const auto source = processor->activeFileCartridge;
+                const auto heard = avSettingsHeard(AVDexedLibrary::readEmbeddedSettings(source),
+                                                   AVDexedLibrary::voiceHash(destSysex, programNum), programNum);
+                adoptStoredBank(destSysex, source, avSameSettings(liveSettings(), heard));
                 return;
             }
 
             if (action == 1) {
                 fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("destinationSysex"),
-                                                            processor->dexedCartDir, "*.syx;*.SYX", true);
+                                                            AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir), "*.syx;*.SYX", true);
                 fileChooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
-                                         [this, destSysex, programNum, programName, adoptStoredBank](const FileChooser& fc) mutable {
+                                         [this, adoptStoredBank, writeStoredBank, destSysex](const FileChooser& fc) {
                                              if (fc.getResults().isEmpty()) {
                                                  cartManager.resetActiveSysex();
                                                  return;
                                              }
 
                                              File destination = fc.getResult();
-                                             if (destSysex.saveVoice(destination) <= 0) {
-                                                 const auto& language = AVDexedLanguageService::getInstance();
-                                                 AVShowMessage(AlertWindow::WarningIcon, language.text("saveError"),
-                                                               language.format("writeError", {{"path", destination.getFullPathName()}}), this);
+                                             if (AVRefuseReadOnlyDestination(destination)) {
                                                  cartManager.resetActiveSysex();
                                                  return;
                                              }
-                                             adoptStoredBank(destSysex, destination);
+                                             if (! writeStoredBank(destination)) {
+                                                 showAVNotice(AVDexedLanguageService::getInstance().text("saveError"),
+                                                              avBankWriteError(destination));
+                                                 cartManager.resetActiveSysex();
+                                                 return;
+                                             }
+                                             adoptStoredBank(destSysex, destination, true);
                                          });
                 return;
             }
 
             File destination = processor->activeFileCartridge;
-            if (!destination.existsAsFile() || destSysex.saveVoice(destination) <= 0) {
-                const auto& language = AVDexedLanguageService::getInstance();
-                AVShowMessage(AlertWindow::WarningIcon, language.text("saveError"),
-                              language.format("writeError", {{"path", destination.getFullPathName()}}), this);
+            if (AVRefuseReadOnlyDestination(destination)) {
                 cartManager.resetActiveSysex();
                 return;
             }
-            adoptStoredBank(destSysex, destination);
+            if (!destination.existsAsFile()) {
+                const auto& language = AVDexedLanguageService::getInstance();
+                showAVNotice(language.text("saveError"),
+                             language.format("writeError", {{"path", destination.getFullPathName()}}));
+                cartManager.resetActiveSysex();
+                return;
+            }
+            overwriteBank(destination, true);
             return;
         } else {
-            if (destSysex.saveVoice(externalFile) <= 0) {
-                const auto& language = AVDexedLanguageService::getInstance();
-                AVShowMessage(AlertWindow::WarningIcon, language.text("saveError"),
-                              language.format("writeError", {{"path", externalFile.getFullPathName()}}), this);
+            if (AVRefuseReadOnlyDestination(externalFile)) {
                 cartManager.resetActiveSysex();
                 return;
             }
-
-            if (externalFile == processor->activeFileCartridge)
-                adoptStoredBank(destSysex, externalFile);
+            overwriteBank(externalFile, externalFile == processor->activeFileCartridge);
+            return;
         }
     }
 
@@ -1131,30 +2026,40 @@ void DexedAudioProcessorEditor::resetZoomFactor() {
 }
 
 bool DexedAudioProcessorEditor::isInterestedInFileDrag (const StringArray &files) {
-    if( files.size() != 1 ) return false;
-
-    for( auto i = files.begin(); i != files.end(); ++i ) {
-        if( i->endsWithIgnoreCase( ".scl" ) || i->endsWithIgnoreCase( ".kbm" )
-            || i->endsWithIgnoreCase(".syx") || i->endsWithIgnoreCase(".dexedpreset"))
-            return true;
-    }
-    return false;
+    // Not while a dialog is open: the drop would be swallowed or close it.
+    if (hasAVPromptOpen() || isCurrentlyBlockedByAnotherModalComponent()) return false;
+    // Any mix of banks, presets and folders is added to the library; a tuning
+    // file loads on its own.
+    if (avAllImportable(files)) return true;
+    return files.size() == 1 && avIsTuningPath(files[0]);
 }
 
-void DexedAudioProcessorEditor::filesDropped (const StringArray &files, int x, int y ) {
-    if( files.size() != 1 ) return;
-    auto fn = files[0];
-    if (fn.endsWithIgnoreCase(".dexedpreset")) {
-        loadNativePreset(File(fn));
+void DexedAudioProcessorEditor::fileDragEnter(const StringArray& files, int, int) {
+    auto& language = AVDexedLanguageService::getInstance();
+    // Worded by what is dragged: single sounds, banks (or folders of them), a tuning.
+    AVDropOverlay.setHint(language.text(avAllSounds(files) ? "dropSoundsHere"
+                                        : avAllImportable(files) ? "dropBanksHere" : "dropTuningHere"));
+    AVDropOverlay.setBounds(frameComponent.getLocalBounds());
+    AVDropOverlay.show();
+}
+
+void DexedAudioProcessorEditor::fileDragExit(const StringArray&) {
+    AVDropOverlay.hide(false);
+}
+
+void DexedAudioProcessorEditor::filesDropped (const StringArray &files, int, int) {
+    // JUCE does not call fileDragExit after a drop.
+    AVDropOverlay.hide(false);
+    if (avAllImportable(files)) {
+        Array<File> items;
+        for (const auto& path : files) items.add(File(path));
+        importBanks(items);
         return;
     }
-    if (fn.endsWithIgnoreCase(".syx")) {
-        loadCart(File(fn));
+    if (files.size() != 1 || !avIsTuningPath(files[0]))
         return;
-    }
+    const auto& fn = files[0];
     const bool scale = fn.endsWithIgnoreCase(".scl");
-    if (!scale && !fn.endsWithIgnoreCase(".kbm"))
-        return;
     auto& language = AVDexedLanguageService::getInstance();
     const File file(fn);
     String problem;
@@ -1165,7 +2070,7 @@ void DexedAudioProcessorEditor::filesDropped (const StringArray &files, int x, i
     else if (file.getSize() > MAX_SCL_KBM_FILE_SIZE)
         problem = language.format("tuningFileSize", {{"bytes", String(MAX_SCL_KBM_FILE_SIZE)}});
     if (problem.isNotEmpty()) {
-        AVShowMessage(AlertWindow::WarningIcon, language.text("tuningFileError"), problem, this);
+        showAVNotice(language.text("tuningFileError"), problem);
         return;
     }
     if (scale)
@@ -1186,6 +2091,10 @@ bool DexedAudioProcessorEditor::keyPressed(const KeyPress& key, Component* origi
     if (AVDexedTheme::noteKeyboardNavigation(key))
         repaint();
     if (dynamic_cast<TextEditor*>(Component::getCurrentlyFocusedComponent()) != nullptr)
+        return false;
+    // A dialog's keys bubble up to here: no shortcut acts behind it (Ctrl+P
+    // would stack Settings on a modal dialog, Ctrl+L open the bank manager).
+    if (hasAVPromptOpen() || isCurrentlyBlockedByAnotherModalComponent())
         return false;
     int keycode = key.getKeyCode();
     ModifierKeys mods = key.getModifiers();
@@ -1212,6 +2121,9 @@ bool DexedAudioProcessorEditor::keyPressed(const KeyPress& key, Component* origi
     }
 
     if ( keycode == 'L' && mods.isCtrlDown() ) {
+        // The bank manager lives in Advanced: from Play, go there first, so it
+        // is never left open behind a hidden view.
+        if (playView.isVisible()) showAVDexedPlayView(false, false);
         cartShow();
         return true;
     }
@@ -1226,11 +2138,38 @@ bool DexedAudioProcessorEditor::keyPressed(const KeyPress& key, Component* origi
         return true;
     }
 
-    return false;
+    // Up / Down that no control used: the previous / next sound.
+    return AVStepSoundFromKey(key);
 }
 
 void DexedAudioProcessorEditor::AVUpdateFooter() {
     auto& language = AVDexedLanguageService::getInstance();
+    AVUpdateHelpText();
+    // CPU and voices read four times a second, like a status bar, not per frame.
+    if (++AVStatusTicks >= 12) {
+        AVStatusTicks = 0;
+        AVCpuLabel.setText(String::fromUTF8("CPU · ") + String(processor->getAVAudioCpuPercent(), 1) + "%", dontSendNotification);
+        AVVoicesLabel.setText(language.text("voices") + ": " + String(processor->getAVActiveVoices()) + " / 16", dontSendNotification);
+    }
+}
+
+void DexedAudioProcessorEditor::AVUpdateHelpText() {
+    const auto now = Time::getMillisecondCounterHiRes();
+    // A footer notice wins over the hover help while it lasts: in, held, out.
+    if (AVNoticeText.isNotEmpty()) {
+        const auto elapsed = now - AVNoticeStart;
+        if (elapsed < noticeHoldUntil + noticeFadeOut) {
+            const auto alpha = elapsed < noticeFadeIn ? elapsed / noticeFadeIn
+                             : elapsed > noticeHoldUntil ? 1.0 - (elapsed - noticeHoldUntil) / noticeFadeOut : 1.0;
+            AVHelpLabel.setColour(Label::textColourId, AVDexedTheme::textPrimary);
+            AVHelpLabel.setText(AVNoticeText, dontSendNotification);
+            AVHelpLabel.setAlpha(float(jlimit(0.0, 1.0, alpha)));
+            return;
+        }
+        AVNoticeText.clear();
+        AVHelpFadeStart = now;   // the normal help fades back in
+        AVHelpLabel.setColour(Label::textColourId, AVDexedTheme::textSecondary);
+    }
     String help;
     auto* hover = Desktop::getInstance().getMainMouseSource().getComponentUnderMouse();
     if (hover && (hover == this || isParentOf(hover))) {
@@ -1247,13 +2186,16 @@ void DexedAudioProcessorEditor::AVUpdateFooter() {
             help = help.upToFirstOccurrenceOf("\n", false, false) + ": " + slider->getTextFromValue(slider->getValue());
             break;
         }
-    AVHelpLabel.setText(help.isEmpty() ? language.text("footerHelp") : help, dontSendNotification);
-    // CPU and voices read four times a second, like a status bar, not per frame.
-    if (++AVStatusTicks >= 12) {
-        AVStatusTicks = 0;
-        AVCpuLabel.setText(String::fromUTF8("CPU · ") + String(processor->getAVAudioCpuPercent(), 1) + "%", dontSendNotification);
-        AVVoicesLabel.setText(language.text("voices") + ": " + String(processor->getAVActiveVoices()) + " / 16", dontSendNotification);
+    AVHelpLabel.setText(help.isEmpty() ? AVDexedLanguageService::getInstance().text("footerHelp") : help, dontSendNotification);
+    float alpha = 1.0f;
+    if (AVHelpFadeStart > 0.0) {
+        const auto elapsed = now - AVHelpFadeStart;
+        if (elapsed < helpFadeIn) alpha = float(elapsed / helpFadeIn);
+        else AVHelpFadeStart = 0.0;
     }
+    AVHelpLabel.setAlpha(alpha);
+    if (AVHelpFadeStart <= 0.0 && AVNoticeTicker.isTimerRunning())
+        AVNoticeTicker.stopTimer();
 }
 
 void DexedAudioProcessorEditor::AVUpdateKeyboardRange() {
@@ -1323,6 +2265,7 @@ void DexedAudioProcessorEditor::AVLayoutFrame() {
     panicButton.setBounds(WINDOW_SIZE_X - 76, height - 27, 26, 24);
     AVUpdateFooter();
     if (AVSettingsOverlay) AVSettingsOverlay->setBounds(frameComponent.getLocalBounds());
+    AVDropOverlay.setBounds(frameComponent.getLocalBounds());
     if (cartManagerCover.isVisible()) {
         cartManagerCover.setBounds(classicView.getLocalBounds());
         cartManager.setBounds(cartManagerCover.getLocalBounds().reduced(16));

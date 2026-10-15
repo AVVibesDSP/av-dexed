@@ -4,7 +4,6 @@
 #include "DXLookNFeel.h"
 #include "parameter/Model.h"
 #include "ui/util/ContextMenuAdapter.h"
-#include "window/AboutBox.h"
 #include "../debugger/ValueTreeDebugger.h"
 #include "AVDexedTheme.h"
 #include "AVDexedLanguage.h"
@@ -306,10 +305,8 @@ GlobalEditor::GlobalEditor(DexedAudioProcessor &processor, juce::Component *pare
             debugger.reset(vtd);
             return;
         }
-        aboutBox = std::make_unique<AboutBox>();
-        getParentComponent()->addAndMakeVisible(aboutBox.get());
-        aboutBox->centreWithSize(aboutBox->getWidth(), aboutBox->getHeight());
-        aboutBox->enterModalState(true,{});
+        // About opens inside the editor (Settings, on its About page).
+        if (onAboutRequested) onAboutRequested();
     };
     aboutButton->setBounds(8, 11, 135, 46);
 

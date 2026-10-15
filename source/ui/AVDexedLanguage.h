@@ -13,7 +13,8 @@ class AVDexedLanguageService final : public juce::ChangeBroadcaster {
 public:
     static AVDexedLanguageService& getInstance();
 
-    void configure(const juce::File& applicationDirectory);
+    /** Reads the saved language from the preferences file (and saves there). */
+    void configure(const juce::File& preferencesFile);
     void setLanguage(const juce::String& languageCode);
     juce::String getLanguage() const { return language; }
     bool isSpanish() const { return language == "es"; }

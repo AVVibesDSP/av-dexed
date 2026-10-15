@@ -68,6 +68,10 @@ public:
                     csv += String(note) + "," + String(tuning.frequencyForMidiNote(note), 9) + "," + String(tuning.logScaledFrequencyForMidiNote(note), 9) + "\n";
                 TemporaryFile temporary(destination);
                 if (!temporary.getFile().replaceWithText(csv) || !temporary.overwriteTargetFileWithTemporary()) {
+                    // An in-editor notice when this table is shown inside the
+                    // editor. While it is its own (modal) window, a notice in
+                    // the editor behind would wait unseen until that window
+                    // closes, so AVShowMessage puts the AV alert over it.
                     auto& language = AVDexedLanguageService::getInstance();
                     AVShowMessage(AlertWindow::WarningIcon, language.text("saveError"),
                                   language.format("writeError", {{"path", destination.getFullPathName()}}), table.getComponent());

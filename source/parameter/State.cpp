@@ -98,8 +98,12 @@ void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
     session.setProperty("avPresetName", avPresetContextCurrent.load(std::memory_order_relaxed) ? avPresetName : juce::String(), nullptr);
     session.setProperty("avPresetId", getAVPresetId(), nullptr);
     session.setProperty("avKnownPresetOrigin", hasAVKnownPresetOrigin(), nullptr);
+    // Whether the sound still is its bank slot's own (perhaps edited), or an
+    // Init or single SysEx voice that "Guardar" must not write over the slot.
+    session.setProperty("avSoundFromBankSlot", avSoundFromBankSlot.load(std::memory_order_relaxed), nullptr);
     session.setProperty("avPresetPath", getAVPresetPath().getFullPathName(), nullptr);
     session.setProperty("avPresetBaseline", juce::String::toHexString(static_cast<juce::int64>(avPresetBaseline.load(std::memory_order_relaxed))), nullptr);
+    session.setProperty("avPresetBaselineFormat", avPresetBaselineFormat, nullptr);
 
     juce::MemoryBlock voiceData(activeProgram.getRawData(), Program::PROGRAM_SIZE + 1);
     session.setProperty(voiceProperty, voiceData.toBase64Encoding(), nullptr);
@@ -117,7 +121,32 @@ void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
 }
 
 void DexedAudioProcessor::setStateInformation(const void* source, int sizeInBytes) {
-    loadAVStateInformation(source, sizeInBytes);
+    // A host restore: the session's values win over the per-sound settings,
+    // also when the host re-selects the restored program right afterwards.
+    // (Whether "Guardar" may write into the bank slot comes from the session:
+    // loadAVStateInformation() restores it.)
+    if (loadAVStateInformation(source, sizeInBytes))
+        armAVRestoreGuard();
+}
+
+bool DexedAudioProcessor::loadAVNativePreset(const void* source, int sizeInBytes) {
+    const float output = avOutputParameter != nullptr ? avOutputParameter->getValue() : 0.0f;
+    const float tempo = avDelayTempoParameter != nullptr ? avDelayTempoParameter->getValue() : 0.0f;
+    {
+        // The sound arrows' CCs are the instrument's too: walking onto a sound
+        // file must not take them away, nor re-arm a pedal still held down
+        // (its own mappings come with it, as always; one on an arrow's CC gives
+        // way to the arrow). See MidiCCHandler::restoreAVMappings.
+        const juce::ScopedValueSetter<bool> avSoundFile(avLoadingSoundFile, true);
+        if (!loadAVStateInformation(source, sizeInBytes))
+            return false;
+    }
+    // A preset file carries these too (it is a full state), but they are the
+    // instrument's: the sound changes, the general volume does not.
+    for (const auto& [parameter, kept] : { std::pair { avOutputParameter, output }, std::pair { avDelayTempoParameter, tempo } })
+        if (parameter != nullptr && std::abs(parameter->getValue() - kept) > 1.0e-6f)
+            parameter->setValueNotifyingHost(kept);
+    return true;
 }
 
 bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInBytes) {
@@ -129,9 +158,26 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
 
     if (xmlState->hasTagName("dexedState")) {
         // Format 1.0 used a separate XML schema and binary program attribute.
+        // Its bank file is read before the audio lock (a slow or sleeping disk
+        // must not stall render); the bank is installed with its per-sound
+        // settings, which are not applied: the restored values win.
+        const auto legacySourcePath = xmlState->getStringAttribute("activeFileCartridge");
+        const auto legacyBankFile = avSessionBankFile(legacySourcePath);
+        Cartridge legacyBank;
+        const bool legacyBankRead = AVDexedLibrary::readBank(legacyBankFile, legacyBank);
+        const auto legacySoundTable = readAVSoundTable(legacyBankFile);
+
         juce::ScopedValueSetter<bool> disableSysexEcho(sendSysexChange, false);
         const juce::ScopedLock avStateLock(getCallbackLock());
-        return setStateInformation10(this, xmlState.get());
+        if (!setStateInformation10(this, xmlState.get()))
+            return false;
+        if (legacySourcePath.isNotEmpty())
+            installAVActiveBank(legacyBankRead ? legacyBank : currentCart, legacyBankFile, legacySoundTable);
+        // A 1.0 state does not say whether its voice still is the slot's own:
+        // it was applied as a voice of its own (no known origin), so "Guardar"
+        // goes to "Guardar como…" rather than over the bank voice.
+        avSoundFromBankSlot.store(hasAVKnownPresetOrigin(), std::memory_order_relaxed);
+        return true;
     }
 
     if (!xmlState->hasTagName(parameters.rootVt.getType().toString())) {
@@ -249,6 +295,12 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
         }
     }
 
+    // The session's bank file and its per-sound settings are read before the
+    // audio lock. They are installed with the bank so later program changes
+    // find them, but never applied here: the session's own values win.
+    const auto restoredBankFile = session.isValid() ? avSessionBankFile(restoredSourcePath) : juce::File();
+    const auto restoredSoundTable = readAVSoundTable(restoredBankFile);
+
     // State restoration must not echo parameter changes to an attached DX7.
     const juce::ScopedLock avStateLock(getCallbackLock());
     juce::ScopedValueSetter<bool> disableSysexEcho(sendSysexChange, false);
@@ -266,14 +318,19 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
         parameters.rootVt.addChild(parameters.state, 0, nullptr);
     }
 
-    if (mappings.isValid()) {
-        auto liveMappings = parameters.rootVt.getChildWithName(IDs::profile).getChildWithName(IDs::midiCCMappings);
-        liveMappings.copyPropertiesAndChildrenFrom(mappings, nullptr);
-    }
+    // The stored list wins, even an empty one the user left (a list saved
+    // before CC1 → Cutoff existed gets it). A session's arrow CCs come with
+    // it; a sound file keeps the live ones.
+    if (mappings.isValid())
+        midiCCMapper->restoreAVMappings(mappings, avLoadingSoundFile);
 
     if (hasVoiceSnapshot) {
         Program restoredVoice(static_cast<const uint8_t*>(decodedVoice.getData()));
         activeProgram = restoredVoice;
+        // Whatever the file holds, the voice follows the bank rule first (safe
+        // values for the engine's tables), as a bank or SysEx voice does; the
+        // reconciliation below then compares the parameters with that voice.
+        Cartridge::applyBankRules(activeProgram);
 
         // APVTS is authoritative for automatable values. Reconcile the raw DX
         // buffer with the restored parameter tree while retaining voice data
@@ -281,9 +338,20 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
         for (const auto& meta : dxParameters) {
             if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*>(parameters.getParameter(meta.name))) {
                 auto value = static_cast<int>(std::lround(parameter->convertFrom0to1(parameter->getValue())));
+                // A bank value beyond the parameter's range (an output level of
+                // 102, as real DX7 banks hold) shows as the range's end. While
+                // the parameter still sits at that end, the voice keeps its own
+                // value, so a reopened project sounds as it did when saved.
+                const auto& range = parameter->getNormalisableRange();
+                const int stored = activeProgram[meta.pos];
+                const int top = static_cast<int>(std::lround(range.end)) + meta.displayOffset;
+                const int bottom = static_cast<int>(std::lround(range.start)) + meta.displayOffset;
+                if ((value + meta.displayOffset == top && stored > top) || (value + meta.displayOffset == bottom && stored < bottom))
+                    continue;
                 activeProgram[meta.pos] = static_cast<uint8_t>(juce::jlimit(0, 127, value + meta.displayOffset));
             }
         }
+        // The parameters only ever put in-range values back: still within the rule.
         for (int op = 0; op < 6; ++op) {
             auto* parameter = parameters.getParameter(IDs::on.op(op).name);
             if (parameter != nullptr) {
@@ -297,12 +365,11 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
     }
 
     if (hasCartridgeSnapshot) {
-        loadCartridge(restoredCart);
+        installAVActiveBank(restoredCart, restoredBankFile, restoredSoundTable);
         setCurrentProgramSelection(restoredProgram);
-        activeFileCartridge = restoredSourcePath.isNotEmpty() ? juce::File(restoredSourcePath) : juce::File();
     } else if (session.isValid()) {
         setCurrentProgramSelection(restoredProgram);
-        activeFileCartridge = restoredSourcePath.isNotEmpty() ? juce::File(restoredSourcePath) : juce::File();
+        installAVActiveBank(currentCart, restoredBankFile, restoredSoundTable);
     }
 
     refreshVoice.set(true);
@@ -310,14 +377,33 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
     avPresetName = session.getProperty("avPresetName").toString();
     avPresetId = session.getProperty("avPresetId").toString();
     const auto presetPath = session.getProperty("avPresetPath").toString();
+    // A session saved before the sound files were renamed (.dexedpreset) finds
+    // the new name, but only when that file holds the same sound: a name clash
+    // at the rename left the old sound as "<name> 2" (the browser finds it by id).
     avPresetPath = presetPath.isEmpty() ? juce::File() : juce::File(presetPath);
+    if (const auto renamed = AVDexedLibrary::remapPresetPath(avPresetPath); renamed != avPresetPath) {
+        juce::String renamedId;
+        juce::MemoryBlock renamedData;
+        if (avPresetId.isNotEmpty() && renamed.getSize() <= 32 * 1024 * 1024 && renamed.loadFileAsData(renamedData))
+            if (auto xml = getXmlFromBinary(renamedData.getData(), static_cast<int>(renamedData.getSize())))
+                renamedId = xml->getStringAttribute("libraryPresetId").trim();
+        if (avPresetId.isEmpty() || renamedId == avPresetId.trim())
+            avPresetPath = renamed;
+    }
     avPresetContextCurrent.store(avPresetName.isNotEmpty() || avPresetId.isNotEmpty() || presetPath.isNotEmpty(),
                                  std::memory_order_relaxed);
     avKnownPresetOrigin.store(session.isValid() && static_cast<bool>(session.getProperty("avKnownPresetOrigin", true)),
                               std::memory_order_relaxed);
+    // Sessions saved before this property existed (0.1.0, early 0.2.0 builds)
+    // do not store it: the restored origin tells (Init and a single SysEx
+    // voice cleared both). Never "a slot" by default, or "Guardar" would write
+    // an Init sound over the bank voice.
+    avSoundFromBankSlot.store(session.isValid()
+                                  && static_cast<bool>(session.getProperty("avSoundFromBankSlot", hasAVKnownPresetOrigin())),
+                              std::memory_order_relaxed);
     if (!session.isValid()) {
         activeProgram.setName({});
-        activeFileCartridge = juce::File();
+        installAVActiveBank(currentCart, juce::File(), AVSoundTable {});
     }
 
     if (tuningVt.isValid()) {
@@ -329,8 +415,13 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
     }
     const auto baseline = session.getProperty("avPresetBaseline").toString();
     avPresetBaseline.store(static_cast<uint64_t>(baseline.getHexValue64()), std::memory_order_relaxed);
-    if (baseline.isEmpty() || avPresetBaseline.load(std::memory_order_relaxed) == 0)
+    // A baseline hashed by another version (0.1.0 also hashed the general
+    // volume) cannot be compared: the restored sound counts as unmodified.
+    if (baseline.isEmpty() || avPresetBaseline.load(std::memory_order_relaxed) == 0
+        || static_cast<int>(session.getProperty("avPresetBaselineFormat", 1)) != avPresetBaselineFormat)
         captureAVPresetBaseline();
+    // A restored sound: no CC has moved anything of it yet.
+    if (midiCCMapper != nullptr) midiCCMapper->forgetAVCCWrites();
     programChanged.set(true);
     return true;
 }
@@ -345,12 +436,29 @@ juce::MemoryBlock DexedAudioProcessor::createAVNativePresetState(const juce::Str
     auto tree = juce::ValueTree::fromXml(*xml);
     tree.setProperty("nativePresetVersion", 1, nullptr);
     tree.setProperty("libraryPresetId", id, nullptr);
+    // A sound file keeps the sound's own values, not where the mod wheel left
+    // a parameter it drives (CC1 → Cutoff by default).
+    if (midiCCMapper != nullptr)
+        if (auto values = tree.getChildWithName(parameters.state.getType()); values.isValid())
+            for (auto* parameter : getParameters())
+                if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(parameter)) {
+                    const float soundValue = midiCCMapper->getAVSoundValue(ranged);
+                    if (std::abs(soundValue - ranged->getValue()) > 1.0e-6f)
+                        for (auto child : values)
+                            if (child.getProperty("id").toString() == ranged->paramID)
+                                child.setProperty("value", ranged->convertFrom0to1(soundValue), nullptr);
+                }
+    // A sound file does not carry the arrow CCs (loading one keeps the live ones).
+    auto mappings = tree.getChildWithName(IDs::profile).getChildWithName(IDs::midiCCMappings);
+    mappings.removeProperty(IDs::avPresetPreviousCC, nullptr);
+    mappings.removeProperty(IDs::avPresetNextCC, nullptr);
     auto session = tree.getChildWithName(sessionNode);
     session.setProperty("avPresetName", name, nullptr);
     session.setProperty("avPresetId", id, nullptr);
     session.setProperty("avKnownPresetOrigin", true, nullptr);
     session.setProperty("avPresetPath", juce::String(), nullptr);
     session.setProperty("avPresetBaseline", juce::String::toHexString(static_cast<juce::int64>(getAVMusicalFingerprint(&name))), nullptr);
+    session.setProperty("avPresetBaselineFormat", avPresetBaselineFormat, nullptr);
     if (auto nativeXml = tree.createXml()) copyXmlToBinary(*nativeXml, bytes);
     return bytes;
 }

@@ -45,6 +45,12 @@ public:
     void comboBoxChanged (juce::ComboBox* comboBoxThatHasChanged) override;
     void buttonClicked (juce::Button* buttonThatWasClicked) override;
 
+    /** "Save profile": asks for the name in an in-editor prompt (an AV alert
+        window only when there is no editor) and saves it. */
+    void AVAskProfileName();
+    /** Why `name` cannot name a profile file (localized), or "" when it can. */
+    static juce::String AVProfileNameProblem(const juce::String& name);
+
 private:
     DexedApvts &apvts_;
     DexedAudioProcessor &proc_;

@@ -91,6 +91,8 @@ DexedAudioProcessor::DexedAudioProcessor(SetupMode setupMode)
     DXLOG("VERSION " DEXED_VERSION);
 
     mapParameters();
+    // Before the startup bank and program: setCurrentProgram applies their settings.
+    resolveAVSoundParameters();
 
     Exp2::init();
     Tanh::init();
@@ -456,7 +458,10 @@ void DexedAudioProcessor::keydown(uint8_t channel, uint8_t pitch, uint8_t velo) 
         return;
     }
 
-    pitch += tuningTranspositionShift();
+    // In int: a voice transposed beyond its range (a bank value above 48, as
+    // Dexed 1.1.0 loads it) must not wrap the note or read past the 128-note
+    // tuning table; it sounds at the nearest note there is.
+    pitch = static_cast<uint8_t>(juce::jlimit(0, 127, int(pitch) + tuningTranspositionShift()));
 
     if ( normalizeDxVelocity ) {
         velo = ((float)velo) * 0.7874015; // 100/127
@@ -554,7 +559,7 @@ void DexedAudioProcessor::keydown(uint8_t channel, uint8_t pitch, uint8_t velo) 
 }
 
 void DexedAudioProcessor::keyup(uint8_t chan, uint8_t pitch, uint8_t velo) {
-    pitch += tuningTranspositionShift();
+    pitch = static_cast<uint8_t>(juce::jlimit(0, 127, int(pitch) + tuningTranspositionShift()));   // as keydown
 
     int note;
     for (note=0; note<MAX_ACTIVE_NOTES; ++note) {
@@ -711,6 +716,9 @@ void DexedAudioProcessor::setZoomFactor(float factor) {
 }
 
 void DexedAudioProcessor::applyProgram(const Program &program) {
+    // Init, a received voice...: setCurrentProgram marks a bank slot's sound again.
+    avSoundFromBankSlot.store(false, std::memory_order_relaxed);
+    if (midiCCMapper != nullptr) midiCCMapper->forgetAVCCWrites();   // a new sound: the wheel moved nothing of it
     panic();
     activeProgram = program;
     activeProgram.pushToParameters(parameters);
@@ -756,8 +764,16 @@ uint64_t DexedAudioProcessor::getAVMusicalFingerprint(const juce::String* native
         for (size_t i = 0; i < count; ++i)
             hash = (hash ^ data[i]) * 1099511628211ULL;
     };
+    // A wheel gesture is played, not part of a sound: a parameter a mapped CC
+    // moved (CC1 → Cutoff by default) counts with the value the sound had, so
+    // playing the wheel never marks the sound "Modificado"; moving the same
+    // knob with the mouse does. Atomics only, no allocation.
     for (const auto* parameter : getParameters()) {
-        const auto value = static_cast<int32_t>(std::lround(parameter->getValue() * 1000000.0f));
+        // "Volumen general" and the local tempo belong to the instrument, not the sound.
+        if (parameter == avOutputParameter || parameter == avDelayTempoParameter)
+            continue;
+        const float soundValue = midiCCMapper != nullptr ? midiCCMapper->getAVSoundValue(parameter) : parameter->getValue();
+        const auto value = static_cast<int32_t>(std::lround(soundValue * 1000000.0f));
         append(&value, sizeof(value));
     }
     append(activeProgram.getRawData(), Program::PROGRAM_SIZE + 1);

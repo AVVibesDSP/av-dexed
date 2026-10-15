@@ -9,7 +9,7 @@ AV Dexed is a free, unofficial fork of [Dexed](https://github.com/asb2m10/dexed)
 Pascal Gauthier (Digital Suburban). It keeps Dexed's FM engine and all of its classic editing, and adds a simpler
 interface for people who just want to play and sound good.
 
-**Version 0.1.0 — public preview.** Source code only for now; no binaries are published yet.
+**Version 0.2.0 — public preview.** Source code only for now; no binaries are published yet.
 
 <p align="center">
   <img src="doc/images/av-dexed-play.png" alt="AV Dexed Play view: sound browser, FM algorithm and effect knobs" width="49%">
@@ -23,24 +23,37 @@ interface for people who just want to play and sound good.
 
 ## What is different
 
-- **Play view:** a sound browser with search, favorites and folders; the FM algorithm in the center, where each
+- **Play view:** a sound browser with search, favorites and real folders; the FM algorithm in the center, where each
   operator lights up while it sounds and opens in Advanced with a click; Volume, Pan and Cutoff, plus Reverb, Delay and
   Chorus.
+- **A library made of real folders:** every folder in the browser is a folder on disk, and the other way round. Drop
+  `.syx` banks, `.avdexpreset` sounds or whole folders on AV Dexed (or use *Import bank*) and they are copied into it.
 - **Advanced view:** every classic Dexed parameter, redrawn.
-- **Built-in effects:** reverb, tempo-synced delay and chorus, saved with each sound.
+- **Built-in effects:** reverb, tempo-synced delay and chorus. Each sound keeps its own volume, pan, cutoff and
+  effects, also the voices of a `.syx` bank (see below).
 - **Settings:** audio output, instrument options, MIDI inputs, MIDI CC assignments (with invert), SysEx, and About.
 - **English and Spanish** interface.
 - **Its own plugin identifiers and data folder**, so it can be installed next to the original Dexed.
 
 ## User data and compatibility
 
-On macOS, AV Dexed keeps its data in `~/Library/Application Support/AV Vibes/AV Dexed` (`Dexed.xml`, `Cartridges`,
-`User Presets` and `Profiles`). On first launch it copies missing settings and banks from the original Dexed folder
-(`~/Library/Application Support/DigitalSuburban/Dexed`) without deleting or overwriting anything.
+On macOS the sound library is the folder `~/Library/Application Support/AV Vibes/AV Dexed` itself (Windows:
+`%APPDATA%\AV Vibes\AV Dexed`): each folder in it is a folder of the browser. The factory sounds live in
+`Dexed Factory` and `SynprezFM` (read-only; *Save as…* keeps your changes in your own folder). Preferences are in
+`AV Dexed Preferences.xml`. On first launch AV Dexed copies missing settings and banks from the original Dexed folder
+(`~/Library/Application Support/DigitalSuburban/Dexed`) without deleting or overwriting anything; 0.1.0 data is moved
+into the new layout, and anything replaced is kept in the hidden `.migration-backup` folder.
 
-Existing banks and presets keep working. Native `.dexedpreset` files store the sound, the effects and its metadata;
-`.syx` keeps the original DX7 bank/voice format, which has no room for the new effects. Because AV Dexed has its own
+Existing banks and presets keep working. AV Dexed's own `.avdexpreset` files store one whole sound (until 0.2.0 they
+were called `.dexedpreset`; those still open and are renamed in the library). A `.syx` bank stays a
+standard DX7 bank: the volume, pan, cutoff and effect settings of its voices are stored after the bank as one extra
+SysEx message (manufacturer ID `7D`, non-commercial) that a DX7 and other editors ignore. Because AV Dexed has its own
 plugin identifiers, it does not replace an original Dexed instance in an existing DAW project.
+
+Bank voices load exactly as in Dexed 1.1.0, including values beyond the documented ranges that real DX7 banks hold
+(for example an output level of 102), with two exceptions: bit 7 of the operator bytes is ignored (a MIDI data byte
+never has it), and an LFO speed or delay above 99 is limited to 99 (Dexed 1.1.0 reads past its 100-entry tables
+there). Single-voice SysEx dumps, sound files and DAW sessions follow the same rule.
 
 ## Build
 
@@ -93,14 +106,19 @@ AV Dexed es un fork **gratuito y no oficial** de [Dexed](https://github.com/asb2
 DX7 de Pascal Gauthier (Digital Suburban). Conserva el motor FM de Dexed y toda su edición clásica, y agrega una
 interfaz más sencilla para quien solo quiere tocar y que suene bien.
 
-**Versión 0.1.0, vista previa pública.** Por ahora solo se publica el código; todavía no hay instaladores.
+**Versión 0.2.0, vista previa pública.** Por ahora solo se publica el código; todavía no hay instaladores.
 
 AV Dexed es una versión modificada de Dexed 1.1.0 (commit base `eebb748`), modificada por AV Vibes desde octubre de
 2026; el historial de git muestra cada cambio. No está afiliado ni cuenta con el respaldo de Pascal Gauthier / Digital
 Suburban. Reporta los problemas de AV Dexed en este repositorio, no en el proyecto original.
 
-- **Play:** buscador de sonidos con favoritos y carpetas, el algoritmo FM al centro (cada operador brilla mientras
+- **Play:** buscador de sonidos con favoritos y carpetas reales, el algoritmo FM al centro (cada operador brilla mientras
   suena y se abre en Advanced con un clic), Volumen, Paneo, Corte, Reverb, Delay y Chorus.
+- **Biblioteca de carpetas reales:** cada carpeta del buscador es una carpeta en el disco
+  (`~/Library/Application Support/AV Vibes/AV Dexed`), y al revés. Arrastra bancos `.syx`, sonidos `.avdexpreset` o
+  carpetas completas sobre AV Dexed (o usa *Importar banco*) y se copian ahí.
+- **Cada sonido guarda su volumen, paneo, corte y efectos**, también las voces de un banco `.syx` (van dentro del
+  mismo archivo, en un mensaje SysEx extra que un DX7 ignora).
 - **Advanced:** todos los parámetros clásicos de Dexed.
 - **Ajustes:** salida de audio, instrumento, entradas MIDI, asignaciones de CC (con invertir), SysEx y Acerca de.
 - **Español e inglés.** Identificadores y carpeta de datos propios: se puede instalar junto al Dexed original.

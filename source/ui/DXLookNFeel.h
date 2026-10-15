@@ -80,6 +80,15 @@ public:
     void drawResizableFrame(Graphics&, int width, int height,
                             const BorderSize<int>& border) override;
 
+    /** The horizontal fader (Settings, effect panels): its 6 px track covers the
+        whole area JUCE maps the value over (SliderLayout::sliderBounds), so at
+        the minimum and maximum the thumb centre sits exactly on the track ends.
+        A layout leaves AVFaderInset free on both sides of that area so the
+        thumb (radius AVFaderThumbRadius) is never cut by the slider's bounds. */
+    static juce::Rectangle<float> AVFaderTrack(juce::Rectangle<float> sliderArea);
+    static constexpr float AVFaderThumbRadius = 5.1f;
+    static constexpr int AVFaderInset = 6;
+
     static Colour fillColour;
     static Colour lightBackground;
     static Colour background;
@@ -134,8 +143,12 @@ private:
     std::unique_ptr<Veil> AVVeil;
 };
 
-/** Asynchronous AV-themed notice with a localized OK button. JUCE's static
-    message boxes fall back to the host-wide LookAndFeel and an English "OK". */
+/** Asynchronous AV-themed notice with a localized OK button. When `parent` is
+    (or sits inside) the AV Dexed editor, it is the editor's in-editor notice
+    (DexedAudioProcessorEditor::showAVNotice; `icon` is not shown there). Only
+    without an editor is it an AVAlertWindow: JUCE's static message boxes fall
+    back to the host-wide LookAndFeel and an English "OK". Called off the
+    message thread, it ignores `parent` and posts the alert to that thread. */
 void AVShowMessage(juce::MessageBoxIconType icon, const juce::String& title,
                    const juce::String& message, juce::Component* parent = nullptr);
 

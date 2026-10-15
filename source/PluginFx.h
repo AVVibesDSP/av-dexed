@@ -74,6 +74,9 @@ public:
     float uiGain;
     
     void init(int sampleRate);
+private:
+    float appliedGain = 1;   // follows uiGain one block at a time (no zipper noise)
+public:
     void process(float *work, int sampleSize);
 };
 

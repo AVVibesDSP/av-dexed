@@ -17,6 +17,17 @@ static void setApvtsParamBool(DexedApvts& apvts, const juce::String& paramId, bo
         param->setValueNotifyingHost(value ? 1.0f : 0.0f);
 }
 
+/** The bank file a saved session points to. Sessions up to 0.1.0 point into
+    Cartridges/, which 0.2.0 absorbed into the library: map them to where the
+    migration put the file. Relative or empty paths mean no file. */
+static juce::File avSessionBankFile(const juce::String& path) {
+    if (path.isEmpty() || ! juce::File::isAbsolutePath(path))
+        return {};
+    const juce::File file(path);
+    const auto appDirectory = DexedAudioProcessor::dexedAppDir;
+    return appDirectory == juce::File() ? file : AVDexedLibrary::remapLegacyPath(file, appDirectory);
+}
+
 bool setStateInformation10(DexedAudioProcessor* proc, XmlElement* root) {
     auto& apvts = proc->parameters;
 
@@ -82,23 +93,17 @@ bool setStateInformation10(DexedAudioProcessor* proc, XmlElement* root) {
     setApvtsParam(apvts, IDs::portamentoTm.name, oldPortamento * 99.0f / 127.0f);
 
     // Load program data from dexedBlob
-    proc->applyProgram(Program(static_cast<const uint8_t*>(programData->getData())));
+    Program legacyVoice(static_cast<const uint8_t*>(programData->getData()));
+    Cartridge::applyBankRules(legacyVoice);   // the same rule as a bank voice
+    proc->applyProgram(legacyVoice);
 
     // Restore the visible context without loading a slot over the voice that
     // was embedded in the legacy state.
     if (legacyProgram >= 0 && legacyProgram < proc->getNumPrograms())
         proc->setCurrentProgramSelection(legacyProgram);
 
-    const juce::String sourcePath = root->getStringAttribute("activeFileCartridge");
-    if (sourcePath.isNotEmpty()) {
-        const juce::File sourceFile(sourcePath);
-        if (sourceFile.existsAsFile()) {
-            Cartridge restoredCart;
-            if (restoredCart.load(sourceFile) == 0)
-                proc->loadCartridge(restoredCart);
-        }
-        proc->activeFileCartridge = sourceFile;
-    }
+    // The bank of "activeFileCartridge" is read by the caller before the audio
+    // lock and installed after this function (loadAVStateInformation).
 
     // Load tuning from dexedTuning child
     if (tuningParent != nullptr) {

@@ -50,7 +50,7 @@ inline juce::Font font(float points, const juce::String& style = "Medium") {
 }
 /** Focus rings follow the web's :focus-visible rule: they appear after keyboard
     navigation and stay hidden after a mouse click, so clicking a knob or a tab
-    leaves no outline behind. The editor flips this on Tab/arrows and mouse down. */
+    leaves no outline behind. The editor turns them on with Tab and off on mouse down. */
 inline bool& keyboardFocusVisible() {
     static bool visible = false;
     return visible;
@@ -58,17 +58,21 @@ inline bool& keyboardFocusVisible() {
 inline bool showsFocus(const juce::Component& component) {
     return keyboardFocusVisible() && component.hasKeyboardFocus(true);
 }
-/** Called by every place that sees keys first (lists, dialogs, the editor):
-    navigation keys turn focus rings back on. Returns true when that changed. */
-inline bool noteKeyboardNavigation(const juce::KeyPress& key) {
-    using juce::KeyPress;
-    const bool navigation = key.isKeyCode(KeyPress::tabKey) || key.isKeyCode(KeyPress::leftKey)
-        || key.isKeyCode(KeyPress::rightKey) || key.isKeyCode(KeyPress::upKey) || key.isKeyCode(KeyPress::downKey)
-        || key.isKeyCode(KeyPress::homeKey) || key.isKeyCode(KeyPress::endKey)
-        || key.isKeyCode(KeyPress::pageUpKey) || key.isKeyCode(KeyPress::pageDownKey);
-    if (!navigation || keyboardFocusVisible()) return false;
+/** Turns focus rings on; true when that changed. For controls whose own keys
+    move the focus (the bank manager's grid of 32 programs). */
+inline bool revealKeyboardFocus() {
+    if (keyboardFocusVisible()) return false;
     keyboardFocusVisible() = true;
     return true;
+}
+/** Called by every place that sees keys first (lists, dialogs, the editor).
+    Only Tab (and Shift+Tab) counts as keyboard navigation: it is the key that
+    moves the focus. Arrow keys choose sounds, nudge a value or move a list's
+    selection; they never move the focus, so they must not show a ring on
+    whatever control happens to hold it (the Play tab after a click on the top
+    bar). Returns true when the rings were turned on. */
+inline bool noteKeyboardNavigation(const juce::KeyPress& key) {
+    return key.isKeyCode(juce::KeyPress::tabKey) && revealKeyboardFocus();
 }
 /** Key listener for components that consume navigation keys themselves. */
 struct FocusKeyListener final : public juce::KeyListener {
@@ -139,6 +143,17 @@ inline void fillRowHighlight(juce::Graphics& g, juce::Rectangle<float> row, floa
     gradient.multiplyOpacity(strength);
     g.setGradientFill(gradient);
     g.fillRoundedRectangle(row, cornerRadius(row, 6.0f));
+}
+/** Blurred backdrop for in-editor modals (Settings, effects, prompts): a 1/3
+    copy of a snapshot with a 9-tap gaussian. Drawn stretched, under a 54% veil. */
+inline juce::Image blurredBackdrop(const juce::Image& snapshot) {
+    if (! snapshot.isValid()) return {};
+    const auto small = snapshot.rescaled(juce::jmax(1, snapshot.getWidth() / 3), juce::jmax(1, snapshot.getHeight() / 3));
+    auto blurred = small.createCopy();
+    juce::ImageConvolutionKernel kernel(9);
+    kernel.createGaussianBlur(2.0f);
+    kernel.applyToImage(blurred, small, small.getBounds());
+    return blurred;
 }
 /** Card/side-panel/modal surface: the vertical panel gradient, no outline. */
 inline void panel(juce::Graphics& g, juce::Rectangle<float> area, float radius = 9.0f) {

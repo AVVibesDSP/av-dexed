@@ -60,6 +60,9 @@ public:
     std::unique_ptr<juce::TextButton> parmButton;
     std::unique_ptr<juce::TextButton> cartButton;
     std::unique_ptr<juce::TextButton> storeButton;
+    /** "AV Dexed" (top left) was clicked: the editor shows About. Alt or Shift
+        on the click opens the state debugger instead. */
+    std::function<void()> onAboutRequested;
 
 private:
     //[UserVariables]   -- You can add your own custom variables in this section.
@@ -69,8 +72,6 @@ private:
     std::vector<Rectangle<float>> AVPanels;
     void AVPlace(const String& id, Rectangle<int> bounds);
     std::unique_ptr<ParameterObserver> observer;
-
-    std::unique_ptr<Component> aboutBox;
     //[/UserVariables]
 
     //==============================================================================

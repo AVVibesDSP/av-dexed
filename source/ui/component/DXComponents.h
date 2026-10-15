@@ -83,6 +83,12 @@ private:
 };
 //==============================================================================
 
+/** Up / Down belong to the editor everywhere (previous / next sound): a focused
+    control lets them through instead of changing its value or selection. */
+inline bool AVIsSoundStepKey(const KeyPress& key) {
+    return key.isKeyCode(KeyPress::upKey) || key.isKeyCode(KeyPress::downKey);
+}
+
 class VectorChoiceBox : public ComboBox, private juce::ChangeListener {
 public:
     enum class Preview { waveform, leftScale, rightScale };
@@ -91,6 +97,8 @@ public:
 
     void paint(Graphics &g) override;
     void resized() override;
+    /** Left/Right still step the choice; Up/Down go to the editor (sounds). */
+    bool keyPressed(const KeyPress& key) override { return ! AVIsSoundStepKey(key) && ComboBox::keyPressed(key); }
 
     std::unique_ptr<AccessibilityHandler> createAccessibilityHandler() override {
         return std::make_unique<ComboBoxAccessibilityHandlerFix> (*this);
@@ -122,13 +130,18 @@ public:
     virtual void mouseEnter(const MouseEvent &event) override { accum_wheel = 0; }
     virtual void mouseWheelMove(const MouseEvent &event, const MouseWheelDetails &wheel) override;
     virtual void paint(Graphics &g) override;
+    /** Left/Right still step the program; Up/Down go to the editor, which walks
+        the sound list shown in Play (the same previous / next everywhere). */
+    bool keyPressed(const KeyPress& key) override { return ! AVIsSoundStepKey(key) && ComboBox::keyPressed(key); }
 
     std::unique_ptr<AccessibilityHandler> createAccessibilityHandler() override {
         return std::make_unique<ComboBoxAccessibilityHandlerFix> (*this);
     }
 };
 
-// Simple Slider to make 10 % jumps when shift is pressed on keypress, but more precise with mouse wheel.
+// Knob that leaves Up/Down to the editor (previous / next sound). Left/Right
+// step its value; with Shift they jump by 10 % of the range. The mouse wheel
+// is finer with Shift.
 class DXSlider : public Slider {
 public:
     DXSlider(const String& componentName) : Slider(componentName) {
@@ -137,20 +150,15 @@ public:
     }
 
     bool keyPressed(const KeyPress &key) override {
-        if ( key.getModifiers().isShiftDown() ) {
-            float len = getRange().getLength() * 0.10;
-            if (key.getKeyCode() == key.upKey) {
-                setValue(getValue() + len);
-                return true;
-            }
-            if (key.getKeyCode() == key.downKey) {
-                setValue(getValue() - len);
-                return true;
-            }
-        } else {
-            return Slider::keyPressed(key);
+        if (AVIsSoundStepKey(key))
+            return false;
+        const bool left = key.isKeyCode(KeyPress::leftKey), right = key.isKeyCode(KeyPress::rightKey);
+        if ((left || right) && key.getModifiers().isShiftDown()) {
+            const double jump = getRange().getLength() * 0.10;
+            setValue(getValue() + (right ? jump : -jump));
+            return true;
         }
-        return false;
+        return Slider::keyPressed(key);
     }
 
     void mouseWheelMove(const MouseEvent &event, const MouseWheelDetails &wheel) override {

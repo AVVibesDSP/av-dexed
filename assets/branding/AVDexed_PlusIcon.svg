@@ -1,0 +1,10 @@
+<svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- AV Dexed "+" icon (import). Ocean gradient; grey idle state is derived in code. -->
+<path d="M7.5 0C8.05 0 8.5 0.45 8.5 1V6.5H14C14.55 6.5 15 6.95 15 7.5C15 8.05 14.55 8.5 14 8.5H8.5V14C8.5 14.55 8.05 15 7.5 15C6.95 15 6.5 14.55 6.5 14V8.5H1C0.45 8.5 0 8.05 0 7.5C0 6.95 0.45 6.5 1 6.5H6.5V1C6.5 0.45 6.95 0 7.5 0Z" fill="url(#avPlus)"/>
+<defs>
+<linearGradient id="avPlus" x1="7.5" y1="0" x2="7.5" y2="15" gradientUnits="userSpaceOnUse">
+<stop stop-color="#58BFE8"/>
+<stop offset="1" stop-color="#0B3558"/>
+</linearGradient>
+</defs>
+</svg>

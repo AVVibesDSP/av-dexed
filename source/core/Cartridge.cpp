@@ -1,4 +1,5 @@
 #include "Cartridge.h"
+#include "AVDexedLibrary.h"
 
 void exportSysexPgm(uint8_t *dest, const uint8_t *src) {
     uint8_t header[] = { 0xF0, 0x43, 0x00, 0x00, 0x01, 0x1B };
@@ -17,6 +18,12 @@ void exportSysexPgm(uint8_t *dest, const uint8_t *src) {
 /**
  * This function normalize data that comes from corrupted sysex.
  * It used to avoid engine crashing upon extreme values
+ *
+ * AV Dexed: unchanged from Dexed 1.1.0, and used where Dexed uses it: the
+ * pitch envelope and the algorithm, whose engine tables have 100 and 32
+ * entries. Every other field keeps the value the bank holds (an output level
+ * of 102, found in real DX7 banks, plays as in Dexed); rescaling those too,
+ * as 0.1.0 did, left such voices nearly mute.
  */
 uint8_t normparm(uint8_t value, char max, int id) {
     if ( value <= max )
@@ -24,6 +31,13 @@ uint8_t normparm(uint8_t value, char max, int id) {
     // if this is beyond the max, we expect a 0-255 range, normalize this
     // to the expected return value; and this value as a random data.
     return ((float)value)/255 * max;
+}
+
+namespace {
+/** LFO speed and delay above 99: Dexed 1.1.0 reads past its 100-entry speed
+    table and shifts by a negative amount for the delay (undefined behaviour,
+    an unpredictable LFO). These two fields alone are limited to 99. */
+uint8_t avLfoTime(uint8_t value) { return value <= 99 ? value : 99; }
 }
 
 
@@ -85,22 +99,30 @@ int Cartridge::saveVoice(juce::File f) {
         return -1;
 
     setHeader();
+    // Every write goes through a temporary file that is swapped in only once
+    // it is complete: a full disk never leaves the bank empty or cut short.
+    const juce::MemoryBlock bank(voiceData, SYSEX_SIZE);
 
     if ( ! f.existsAsFile() ) {
         // file doesn't exists, create it
-        return f.replaceWithData(voiceData, SYSEX_SIZE);
+        return AVDexedLibrary::writeAtomically(f, bank) ? 1 : -1;
     }
 
-    std::unique_ptr<juce::FileInputStream> fis = f.createInputStream();
-    if ( fis == NULL )
+    // Banks are read from the first 64 KB of a file only. A larger file (an
+    // archive of many concatenated banks) rewritten from that part would lose
+    // everything after it, so it is never rewritten.
+    const auto fileSize = f.getSize();
+    if (fileSize >= maxRewritableFileSize)
         return -1;
-
-    uint8_t buffer[65535];
-    int sz = fis->read(buffer, 65535);
+    juce::MemoryBlock original;
+    if (! f.loadFileAsData(original) || static_cast<juce::int64>(original.getSize()) != fileSize)
+        return -1;
+    auto* buffer = static_cast<uint8_t*>(original.getData());
+    const int sz = static_cast<int>(original.getSize());
 
     // if the file is smaller than 4104, it probably needs to be overridden.
     if ( sz <= 4104 ) {
-        return f.replaceWithData(voiceData, SYSEX_SIZE);
+        return AVDexedLibrary::writeAtomically(f, bank) ? 1 : -1;
     }
 
     // To avoid to erase the performance data, we skip the sysex stream until
@@ -133,21 +155,24 @@ int Cartridge::saveVoice(juce::File f) {
     if (! found)
         return -1;
 
-    return f.replaceWithData(buffer, sz);
+    // The whole file goes back: every other message (performance data, the
+    // embedded sound settings) stays as it was.
+    return AVDexedLibrary::writeAtomically(f, original) ? 1 : -1;
 }
 
 Program Cartridge::unpackProgram(int idx) {
     if (idx < 0 || idx >= 32 || !hasData)
         return Program::initialProgram();
+    // As Dexed 1.1.0 (eebb748) unpacks a voice, field for field, with two
+    // differences: bit 7 of the operator bytes is masked (a MIDI data byte never
+    // has it, and the DX7 ignores it), and the LFO speed and delay are limited
+    // to 99 (see avLfoTime). tests/AVDexedVoiceTests.cpp compares both.
     uint8_t ret[Program::PROGRAM_SIZE];
     uint8_t *bulk = static_cast<uint8_t *>(voiceData) + 6 + (idx * 128);
     for (int op = 0; op < 6; op++) {
-        // eg rate and level, brk pt, depth, scaling
-
-        for(int i=0; i<11; i++) {
-            uint8_t currparm = bulk[op * 17 + i] & 0x7F; // mask BIT7 (don't care per sysex spec)
-            ret[op * 21 + i] = normparm(currparm, 99, i);
-        }
+        // eg rate and level, brk pt, depth, scaling: as stored (Dexed copies them unchanged)
+        for(int i=0; i<11; i++)
+            ret[op * 21 + i] = bulk[op * 17 + i] & 0x7F;
 
         char leftrightcurves = bulk[op * 17 + 11]&0xF; // bits 4-7 don't care per sysex spec
         ret[op * 21 + 11] = leftrightcurves & 3;
@@ -157,12 +182,12 @@ Program Cartridge::unpackProgram(int idx) {
         char kvs_ams = bulk[op * 17 + 13]&0x1F; // bits 5-7 don't care per sysex spec
         ret[op * 21 + 14] = kvs_ams & 3;
         ret[op * 21 + 15] = (kvs_ams >> 2) & 7;
-        ret[op * 21 + 16] = normparm(bulk[op * 17 + 14]&0x7F, 99, op * 21 + 16);
+        ret[op * 21 + 16] = bulk[op * 17 + 14]&0x7F;  // output level
         char fcoarse_mode = bulk[op * 17 + 15]&0x3F; //bits 6-7 don't care per sysex spec
         ret[op * 21 + 17] = fcoarse_mode & 1;
         ret[op * 21 + 18] = (fcoarse_mode >> 1)&0x1F;
-        ret[op * 21 + 19] = normparm(bulk[op * 17 + 16]&0x7F, 99, op * 21 + 19);
-        ret[op * 21 + 20] = normparm((detune_rs >> 3) &0x7F, 14, op * 21 + 20);
+        ret[op * 21 + 19] = bulk[op * 17 + 16]&0x7F;  // fine freq
+        ret[op * 21 + 20] = (detune_rs >> 3) &0x7F;
     }
 
     for (int i=0; i<8; i++)  {
@@ -174,20 +199,54 @@ Program Cartridge::unpackProgram(int idx) {
     char oks_fb = bulk[111]&0xF;//bits 4-7 are don't care per spec
     ret[135] = oks_fb & 7;
     ret[136] = oks_fb >> 3;
-    ret[137] = normparm(bulk[112] & 0x7F, 99, 137);
-    ret[138] = normparm(bulk[113] & 0x7F, 99, 138);
-    ret[139] = normparm(bulk[114] & 0x7F, 99, 139);
-    ret[140] = normparm(bulk[115] & 0x7F, 99, 140);
+    ret[137] = avLfoTime(bulk[112] & 0x7F); // lfs
+    ret[138] = avLfoTime(bulk[113] & 0x7F); // lfd
+    ret[139] = bulk[114] & 0x7F; // lpmd
+    ret[140] = bulk[115] & 0x7F; // lamd
     char lpms_lfw_lks = bulk[116] & 0x7F;
     ret[141] = lpms_lfw_lks & 1;
-    ret[142] = normparm((lpms_lfw_lks >> 1) & 7, 5, 142);
+    ret[142] = (lpms_lfw_lks >> 1) & 7;
     ret[143] = lpms_lfw_lks >> 4;
-    ret[144] = normparm(bulk[117] & 0x7F, 48, 144);
+    ret[144] = bulk[117] & 0x7F;
     for (int name_idx = 0; name_idx < 10; name_idx++) {
         ret[145 + name_idx] = bulk[118 + name_idx] & 0x7F;
     }
 
     return { ret };
+}
+
+void Cartridge::applyBankRules(Program& voice) {
+    // The same values unpackProgram() gives when this voice is packed into a
+    // bank and read back: each field within the bits a bank stores it in, the
+    // pitch envelope and algorithm normalised as Dexed does, the LFO speed and
+    // delay limited to 99. The name and the operator switches are kept.
+    for (int op = 0; op < 6; op++) {
+        const int base = op * 21;
+        for (int i = 0; i < 11; i++) voice[base + i] &= 0x7F;
+        voice[base + 11] &= 3;
+        voice[base + 12] &= 3;
+        voice[base + 13] &= 7;
+        voice[base + 14] &= 3;
+        voice[base + 15] &= 7;
+        voice[base + 16] &= 0x7F;
+        voice[base + 17] &= 1;
+        voice[base + 18] &= 0x1F;
+        voice[base + 19] &= 0x7F;
+        voice[base + 20] &= 0x0F;
+    }
+    for (int i = 126; i < 134; i++) voice[i] = normparm(voice[i] & 0x7F, 99, i);
+    voice[134] &= 0x1F;
+    voice[135] &= 7;
+    voice[136] &= 1;
+    voice[137] = avLfoTime(voice[137] & 0x7F);
+    voice[138] = avLfoTime(voice[138] & 0x7F);
+    voice[139] &= 0x7F;
+    voice[140] &= 0x7F;
+    voice[141] &= 1;
+    voice[142] &= 7;
+    voice[143] &= 7;
+    voice[144] &= 0x7F;
+    for (int i = 145; i < 155; i++) voice[i] &= 0x7F;
 }
 
 /**

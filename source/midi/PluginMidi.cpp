@@ -76,6 +76,15 @@ void DexedAudioProcessor::processMidiMessage(const MidiMessage *msg) {
             int ctrl = buf[1];
             int value = buf[2];
             midiCCMapper->processControlChange(ctrl, value);
+            // A learned arrow press with no editor open steps through the bank
+            // right here, at the message's place in the timeline (as a Program
+            // Change does), so an offline bounce matches playing live. With the
+            // editor open, it walks the Play list on the message thread.
+            if (! avEditorOpen.load(std::memory_order_acquire))
+                if (const int steps = consumeAVPresetSteps(); steps != 0) {
+                    setCurrentProgram(((currentProgram + steps) % 32 + 32) % 32);
+                    avHostProgramDirty.store(true, std::memory_order_release);
+                }
                 switch(ctrl) {
                 case 1:
                     controllers.modwheel_cc = value;
@@ -177,7 +186,60 @@ bool DexedAudioProcessor::enqueueAVSysEx(const uint8_t* data, int size) noexcept
     return true;
 }
 
-void DexedAudioProcessor::timerCallback() { flushAVPendingSysEx(); }
+void DexedAudioProcessor::timerCallback() {
+    flushAVPendingSysEx();
+    tickAVRestoreGuard();
+    stepAVPresetsWithoutEditor();
+    if (avHostProgramDirty.exchange(false, std::memory_order_acq_rel))
+        updateHostDisplay(ChangeDetails().withProgramChanged(true));
+}
+
+void DexedAudioProcessor::stepAVPresetsWithoutEditor() {
+    // The open editor walks its own list with the learned arrow CCs (it
+    // consumes the steps itself). With the window closed they still work:
+    // through the current bank, as a DX7's own buttons would.
+    if (getActiveEditor() != nullptr)
+        return;
+    // A Learn that a closed editor started is not reported to the next one.
+    consumeAVPresetStepLearned();
+    const int steps = consumeAVPresetSteps();
+    if (steps == 0)
+        return;
+    {
+        // Like a bank received by SysEx, a program change on this thread holds
+        // the audio lock: render reads the voice it replaces.
+        const juce::ScopedLock avStepLock(getCallbackLock());
+        setCurrentProgram(((currentProgram + steps) % 32 + 32) % 32);
+    }
+    updateHostDisplay(ChangeDetails().withProgramChanged(true));
+}
+
+//==============================================================================
+// MIDI Learn of the previous / next sound arrows: kept by the CC handler with
+// the other CC assignments (render detects the presses, lock-free).
+void DexedAudioProcessor::startAVPresetStepLearn(AVPresetStep step) {
+    midiCCMapper->startAVPresetStepLearn(static_cast<int>(step));
+}
+
+void DexedAudioProcessor::cancelAVPresetStepLearn() {
+    midiCCMapper->cancelAVPresetStepLearn();
+}
+
+int DexedAudioProcessor::getAVPresetStepCC(AVPresetStep step) const noexcept {
+    return midiCCMapper != nullptr ? midiCCMapper->getAVPresetStepCC(static_cast<int>(step)) : -1;
+}
+
+void DexedAudioProcessor::clearAVPresetStepCC(AVPresetStep step) {
+    midiCCMapper->clearAVPresetStepCC(static_cast<int>(step));
+}
+
+int DexedAudioProcessor::consumeAVPresetStepLearned() noexcept {
+    return midiCCMapper != nullptr ? midiCCMapper->consumeAVPresetStepLearned() : -1;
+}
+
+int DexedAudioProcessor::consumeAVPresetSteps() noexcept {
+    return midiCCMapper != nullptr ? midiCCMapper->consumeAVPresetSteps() : 0;
+}
 
 void DexedAudioProcessor::flushAVPendingSysEx() {
     for (int count = 0; count < AVSysExQueueSize; ++count) {
@@ -214,8 +276,10 @@ void DexedAudioProcessor::handleAVSysExNow(const uint8_t* buf, int sz) {
         case 0 : {
             // single voice dump
             if ( buf[3] == 0 ) {
-                if ( sz != 163 || buf[4] != 0x01 || buf[5] != 0x1b || buf[162] != 0xf7
-                    || sysexChecksum(buf + 6, 155) != buf[161] ) {
+                // As Dexed 1.1.0: a voice whose checksum does not match still
+                // loads (it is logged); only a message too short for the 155
+                // voice bytes and the checksum is refused.
+                if ( sz < 6 + 155 + 1 ) {
                     DXLOG("wrong single voice datasize %d", sz);
                     return;
                 }
@@ -230,9 +294,12 @@ void DexedAudioProcessor::handleAVSysExNow(const uint8_t* buf, int sz) {
                     return;
                 }
 
+                // A bank that arrives by SysEx has no file: the previous bank's
+                // file, its settings and "Guardar" must not follow it. This runs
+                // on the message thread (the 30 Hz flush), never in render.
                 Cartridge received;
                 if ( received.load(buf, sz) == 0 ) {
-                    loadCartridge(received);
+                    setActiveBank(received, juce::File());
                     setCurrentProgram(0);
                 }
             }

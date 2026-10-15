@@ -77,12 +77,11 @@ public:
         auto area = slider.getLocalBounds();
         layout.textBoxBounds = area.removeFromLeft(int(valueWidth));
         area.removeFromLeft(int(valueGap));
-        layout.sliderBounds = area;
+        // The value maps over sliderBounds and the track is drawn over the same
+        // span; the inset keeps the thumb whole at both ends (0 dB is the
+        // general volume's resting place, its maximum).
+        layout.sliderBounds = area.reduced(AVFaderInset, 0);
         return layout;
-    }
-    /** The track starts 6 px in (drawLinearSlider), so the value maps there too. */
-    int getSliderThumbRadius(juce::Slider& slider) override {
-        return slider.getSliderStyle() == juce::Slider::LinearHorizontal ? 6 : DXLookNFeel::getSliderThumbRadius(slider);
     }
 
     /** Toggles marked "AVRing" are GOZO's ring + dot (the MIDI inputs). */

@@ -33,6 +33,9 @@
 #include "AVDexedResizeGrip.h"
 #include "AVDexedWheel.h"
 #include "AVDexedPeakMeter.h"
+#include "AVDexedPromptOverlay.h"
+#include "AVDexedDropOverlay.h"
+#include "window/AVDexedSettingsPanel.h"
 
 class AVDexedPanicButton final : public juce::TextButton {
 public:
@@ -50,9 +53,30 @@ private:
 */
 class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox::Listener, public Timer,
                                    public FileDragAndDropTarget, public KeyListener,
-                                   private ChangeListener {
+                                   private ChangeListener, private FocusChangeListener {
     // Declared first so all child components/dialogs release their LAF before it dies.
     SharedResourcePointer<DXLookNFeel> lookAndFeel;
+    /** Up / Down choose the previous / next sound anywhere in the editor. A
+        focused knob or combo box would take them first (JUCE gives a key to the
+        focused control before its parents), so this listener rides on the
+        focused control (globalFocusChanged) and hands them to the editor. It
+        outlives every control it is attached to. */
+    struct AVSoundStepKeys final : public KeyListener {
+        explicit AVSoundStepKeys(DexedAudioProcessorEditor& owner) : editor(owner) {}
+        bool keyPressed(const KeyPress& key, Component*) override { return editor.AVStepSoundFromKey(key); }
+        DexedAudioProcessorEditor& editor;
+    } AVSoundKeys { *this };
+    Component::SafePointer<Component> AVSoundKeysTarget;
+    void globalFocusChanged(Component* focusedComponent) override;
+    /** Up / Down (no Cmd, Ctrl or Alt): the previous / next sound of the Play
+        list, unless a text field has the focus or the bank manager is open, or
+        sounds cannot change now (AVCanStepSounds). */
+    bool AVStepSoundFromKey(const KeyPress& key);
+    /** Sounds may change from the keys or a learned MIDI control now: no
+        dialog, menu or other modal window, and Settings closed. */
+    bool AVCanStepSounds() const;
+    /** The keyboard's home: a click on empty space gives it the focus (not the
+        first control, which was the Play tab), so keys still reach the editor. */
     Component frameComponent;
     Component classicView;
     AVDexedKeyboardComponent midiKeyboard;
@@ -62,13 +86,15 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     std::unique_ptr<juce::Drawable> AVBrandSymbol;
     AVDexedWheel AVPitchWheel, AVModWheel;
     Label AVPitchLabel, AVModLabel, AVOctaveLabel;
-    static constexpr int AVKeyboardAnchor = 24;
+    static constexpr int AVKeyboardAnchor = 36;   // C2: the keyboard shows C2 – C7
     Label AVHelpLabel, AVCpuLabel, AVVoicesLabel;
     AVDexedPeakMeter AVOutputMeter;
     double AVLastMeterUpdate = 0.0;
     DrawableButton AVSettingsButton { "AVSettings", DrawableButton::ImageFitted };
     std::unique_ptr<Drawable> AVInfoSymbol;
     void AVUpdateFooter();
+    /** The footer help text: the hovered control's help, or a temporary notice. */
+    void AVUpdateHelpText();
     void AVLayoutFrame();
     void AVUpdateKeyboardRange();
     Label identityLabel;
@@ -90,6 +116,52 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     Component cartManagerCover;
 
     std::unique_ptr<juce::Component> AVSettingsOverlay;
+    // MIDI Learn of the previous / next sound arrows: the arrow waiting for its
+    // CC (0 previous, 1 next, -1 none), the waiting dialog, and a token that
+    // keeps a late result of an older dialog from cancelling a newer Learn.
+    int AVStepLearn = -1, AVStepLearnToken = 0;
+    int AVPendingSoundSteps = 0;   // pedal presses that arrived before the list was read
+    Component::SafePointer<AVDexedPromptOverlay> AVStepLearnPrompt;
+    void AVLearnPresetStep(int step);
+    /** Learned CCs: a finished arrow Learn closes its dialog and is named in the
+        footer; arrow presses walk the Play list. */
+    void AVFollowPresetStepCCs();
+    // Its own ticker: the editor timer stops while the bank manager is open,
+    // and the arrows (in the top bar) are learned and used then too.
+    juce::TimedCallback AVPresetStepPoll { [this] { AVFollowPresetStepCCs(); } };
+    /** "AV Vibes" and the short rule after it (the brand block). The rule sits
+        on the middle of the text's x-height, as the font's own dashes do. */
+    struct AVIdentityLayout { Rectangle<float> text, rule; };
+    static AVIdentityLayout AVGetIdentityLayout();
+    // In-editor dialogs (new folder, import, confirmations). Finished ones are
+    // kept until their result has been delivered and their fade-out has ended.
+    std::vector<std::unique_ptr<AVDexedPromptOverlay>> AVPrompts;
+    juce::Image AVPromptBackdrop;
+    bool AVInPromptResult = false;
+    bool AVPromptSweepPending = false;
+    /** Releases finished prompts whose fade-out is over; looks again shortly
+        while one is still fading. */
+    void AVReleaseFinishedPrompts();
+    // Notices (errors, import problems) wait here while another prompt or a
+    // modal window is open, so two dialogs are never stacked.
+    struct AVPendingNotice { juce::String title, message; };
+    std::vector<AVPendingNotice> AVNoticeQueue;
+    bool AVNoticePollPending = false;
+    bool AVCanShowNoticeNow() const;
+    void AVPumpNotices();
+    /** Runs a prompt's result (or third-pill) callback: a prompt it opens reuses
+        the backdrop, queued notices follow, finished prompts are released. */
+    void AVDeliverPromptCallback(const std::function<void()>& callback);
+    // Footer notice ("Agregado a «Pianos» · 32 sonidos"): ~3 s with fades, then
+    // the normal help fades back. Its own ticker: the editor timer is stopped
+    // while the bank manager is open.
+    juce::String AVNoticeText;
+    double AVNoticeStart = 0.0, AVHelpFadeStart = 0.0;
+    juce::TimedCallback AVNoticeTicker { [this] { AVUpdateHelpText(); } };
+    // Copies 0.1.0's external banks into the library once per process.
+    std::unique_ptr<juce::ThreadPool> AVAdoptionPool;
+    void AVAdoptExternalSoundsOnce();
+    AVDexedDropOverlay AVDropOverlay;
     std::unique_ptr<FileChooser> fileChooser;
     int labelRefreshTicks = 0;
     int AVStatusTicks = 0;
@@ -109,7 +181,20 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     void applyCart(Cartridge cart, File file);
     void storeProgramShowDialog(Cartridge destSysex, File externalFile);
     void storeProgramResponse(AlertWindow *dialog, int response, Cartridge destSysex, File externalFile, bool hasExternalFile);
-    void saveNativePreset(bool saveAs, std::function<void(bool)> completion = {});
+    /** "Guardar": overwrites the active .dexedpreset of the library, or writes a
+        bank voice into its own slot; anything else goes to "Guardar como". The
+        completion says whether the sound was saved. */
+    void AVSaveSound(std::function<void(bool)> completion = {});
+    /** "Guardar como": a name prompt, then a new .dexedpreset in the selected
+        library folder (or "User Presets"). Never overwrites. `reason`, when
+        given, opens the message (why "Guardar" could not save in place). */
+    void AVSaveSoundAs(std::function<void(bool)> completion = {}, const juce::String& reason = {});
+    /** Shows a notice and returns true when `destination` is inside a read-only pack. */
+    bool AVRefuseReadOnlyDestination(const File& destination);
+    /** After an import: shows `folder` (or the first sound's folder), loads the
+        first valid bank (or else the first preset), then tells what was refused. */
+    void AVOpenImportedSounds(const Array<File>& banks, const Array<File>& presets, const File& folder,
+                              StringArray refused, StringArray failed);
     void loadNativePreset(const File& file);
 public:
     DexedAudioProcessor *processor;
@@ -128,14 +213,51 @@ public:
     void storeProgram();
     void cartShow();
     void parmShow();
+    /** Settings (blurred, fixed, in the editor) open on `page`; an open one
+        turns to it. "AV Dexed" in Advanced opens it on About. */
+    void showAVSettingsPage(AVDexedSettingsPanel::AVPage page);
     void tuningShow();
+    /** Shows an in-editor dialog (not movable, blurred backdrop). A dialog opened
+        from another dialog's result reuses the first backdrop. Returns it (owned
+        here; a SafePointer to it goes null once it has faded out). */
+    AVDexedPromptOverlay* showAVPrompt(AVDexedPromptOverlay::Options options, AVDexedPromptOverlay::Result result);
+    /** MIDI Learn of `parameter` from `control`'s menu: the in-editor waiting
+        dialog ("Aprender MIDI", a single Cancel). The first CC that arrives
+        closes it and the footer names it. */
+    void showAVMidiLearn(Component& control, RangedAudioParameter& parameter);
+    bool hasAVPromptOpen() const;
+    /** An in-editor notice with a single OK pill. Queued while another prompt
+        or modal window is open; shown when it closes. */
+    void showAVNotice(const juce::String& title, const juce::String& message);
+    /** A short confirmation in the footer for about 3 s, then the normal help. */
+    void showAVFooterNotice(const juce::String& text);
+    /** Writes `bank` into a .syx under the library lock, as every write another
+        AV Dexed may race with: a new file, or an existing one whose bank message
+        alone is replaced (its other SysEx messages and embedded sound settings
+        stay). Refuses an existing file of 64 KB or more (an archive of several
+        banks, which a rewrite would cut) and one larger than a bank that holds
+        no bank. With `storedSlot` (0–31), that slot's embedded settings become
+        `storedSettings` (empty = defaults) while every other slot keeps playing
+        as before, the same rule as "Guardar". */
+    static bool AVWriteBankFile(Cartridge bank, const File& file, int storedSlot = -1,
+                                const std::map<juce::String, float>& storedSettings = {});
 
     static float getLargestScaleFactor();
     void resetZoomFactor();
 
     virtual bool isInterestedInFileDrag (const StringArray &files) override;
     virtual void filesDropped (const StringArray &files, int x, int y ) override;
+    void fileDragEnter(const StringArray& files, int x, int y) override;
+    void fileDragExit(const StringArray& files) override;
+    /** Adds .syx banks, .dexedpreset sounds and folders of them (recursively) to
+        the library: files already inside it stay where they are (no prompt when
+        all of them are); the rest are copied, never overwriting, into the folder
+        named in a prompt. Then that folder is shown and the first bank (or
+        preset) loads. Used by "Importar banco", drag and drop and the Advanced
+        bank manager. */
+    void importBanks(const Array<File>& files);
     std::unique_ptr<ComponentTraverser> createFocusTraverser() override;
+    std::unique_ptr<ComponentTraverser> createKeyboardFocusTraverser() override;
 
     bool keyPressed(const KeyPress& key, Component* originatingComponent) override;
 
@@ -150,6 +272,7 @@ public:
 
 #if defined(AVDEXED_TESTING)
     friend bool AVRenderUIEvidence(const juce::File& directory);
+    friend bool AVRunLibraryQA(const juce::File& outputDirectory);
 #endif
 
 private:

@@ -178,12 +178,44 @@ public:
 };
 }
 
-/** Audio, as in GOZO: Local BPM, then the output device with Test, sample
-    rate and buffer size, all as combo boxes (no channel check boxes: the first
-    stereo pair is used). Plugins keep only the BPM; the host owns the device. */
+/** Audio, as in GOZO: the general volume and Local BPM, then the output device
+    with Test, sample rate and buffer size, all as combo boxes (no channel check
+    boxes: the first stereo pair is used). Plugins keep only the volume and the
+    BPM; the host owns the device. */
 class AVDexedSettingsPanel::AVAudioPage final : public Component, private ChangeListener {
 public:
     explicit AVAudioPage(DexedAudioProcessor& processor) : AVManager(AVDexedStandaloneAccess::AVDeviceManager) {
+        // Volumen general: the "output" parameter, one gain for every sound (the
+        // Volume knob in Play belongs to each sound). Same row as the BPM.
+        AVVolume.setSliderStyle(Slider::LinearHorizontal);
+        AVVolume.setTextBoxStyle(Slider::TextBoxLeft, false, int(AVDexedSettingsStyle::valueWidth), 28);
+        AVVolume.setWantsKeyboardFocus(true);
+        addAndMakeVisible(AVVolume);
+        AVVolumeAttachment = std::make_unique<AudioProcessorValueTreeState::SliderAttachment>(
+            processor.parameters, IDs::output.name, AVVolume);
+        // "output" is a linear gain (0..1). The fader follows a square law, so
+        // its middle is -12 dB rather than -6, and the value reads in dB; the
+        // unit is in the label, which keeps the value inside GOZO's 46 px.
+        // The attachment's range maps through the parameter's own functions,
+        // which ignore any skew, so the fader gets a plain range in the same
+        // units (the BPM row does the same with setRange).
+        AVVolume.setNormalisableRange({ 0.0, 1.0, 0.001 });
+        AVVolume.setSkewFactorFromMidPoint(Decibels::decibelsToGain(-12.0));
+        AVVolume.textFromValueFunction = [](double gain) {
+            const double decibels = Decibels::gainToDecibels(gain, -100.0);
+            if (decibels <= -99.9) return String::fromUTF8("−∞");
+            if (decibels > -0.05) return String("0.0");
+            return String::fromUTF8("−") + String(-decibels, 1);
+        };
+        AVVolume.valueFromTextFunction = [](const String& text) {
+            if (text.containsChar(0x221e) || text.containsIgnoreCase("inf")) return 0.0;
+            // A decimal comma ("-6,5") reads as a point instead of "-65".
+            const double decibels = text.replace(String::fromUTF8("−"), "-").replaceCharacter(',', '.')
+                                        .retainCharacters("0123456789.-").getDoubleValue();
+            return Decibels::decibelsToGain(jmin(0.0, decibels), -100.0);
+        };
+        AVVolume.updateText();
+        AVVolume.setDoubleClickReturnValue(true, 1.0);
         AVTempo.setSliderStyle(Slider::LinearHorizontal);
         AVTempo.setTextBoxStyle(Slider::TextBoxLeft, false, int(AVDexedSettingsStyle::valueWidth), 28);
         AVTempo.setWantsKeyboardFocus(true);
@@ -234,10 +266,13 @@ public:
     }
     ~AVAudioPage() override {
         if (AVManager != nullptr) AVManager->removeChangeListener(this);
+        AVVolumeAttachment.reset();
         AVTempoAttachment.reset();
     }
     void AVRefreshLanguage() {
         auto& language = AVDexedLanguageService::getInstance();
+        AVVolume.setTitle(language.text("generalVolume"));
+        AVVolume.setTooltip(language.text("generalVolumeHelp"));
         AVTempo.setTitle(language.text("localBpm"));
         AVTempo.setTooltip(language.text("localTempoHelp"));
         AVType.setTitle(language.text("audioDeviceTypeShort"));
@@ -256,13 +291,14 @@ public:
         namespace S = AVDexedSettingsStyle;
         const int x = int(S::fieldX), width = jmin(440, getWidth() - x);
         const auto row = [](int index) { return roundToInt(S::rowGap * float(index)); };
-        AVTempo.setBounds(x, row(0), width, int(S::rowHeight));
-        AVType.setBounds(x, row(1), width, int(S::rowHeight));
+        AVVolume.setBounds(x, row(0), width, int(S::rowHeight));
+        AVTempo.setBounds(x, row(1), width, int(S::rowHeight));
+        AVType.setBounds(x, row(2), width, int(S::rowHeight));
         const int test = S::pillWidth(AVTest.getButtonText(), 60);
-        AVOutput.setBounds(x, row(2), width - test - 10, int(S::rowHeight));
-        AVTest.setBounds(x + width - test, row(2), test, int(S::rowHeight));
-        AVRate.setBounds(x, row(3), width, int(S::rowHeight));
-        AVBuffer.setBounds(x, row(4), width, int(S::rowHeight));
+        AVOutput.setBounds(x, row(3), width - test - 10, int(S::rowHeight));
+        AVTest.setBounds(x + width - test, row(3), test, int(S::rowHeight));
+        AVRate.setBounds(x, row(4), width, int(S::rowHeight));
+        AVBuffer.setBounds(x, row(5), width, int(S::rowHeight));
     }
     void paint(Graphics& g) override {
         namespace S = AVDexedSettingsStyle;
@@ -270,21 +306,22 @@ public:
         const auto label = [&g](const String& text, int index) {
             S::label(g, text, { 0.0f, S::rowGap * float(index), S::labelWidth, S::rowHeight });
         };
-        label(language.text("localBpm"), 0);
+        label(language.text("generalVolume"), 0);
+        label(language.text("localBpm"), 1);
         if (AVManager == nullptr) {
-            S::hintParagraph(g, language.text("audioHostHelp"), { 0.0f, S::rowGap * 2.0f, float(getWidth()), 60.0f });
+            S::hintParagraph(g, language.text("audioHostHelp"), { 0.0f, S::rowGap * 3.0f, float(getWidth()), 60.0f });
             return;
         }
-        if (AVType.isVisible()) label(language.text("audioDeviceTypeShort"), 1);
-        label(language.text("audioOutputDevice"), 2);
-        label(language.text("audioSampleRate"), 3);
-        label(language.text("audioBufferSize"), 4);
+        if (AVType.isVisible()) label(language.text("audioDeviceTypeShort"), 2);
+        label(language.text("audioOutputDevice"), 3);
+        label(language.text("audioSampleRate"), 4);
+        label(language.text("audioBufferSize"), 5);
     }
 
 private:
     AudioDeviceManager* AVManager = nullptr;
-    Slider AVTempo;
-    std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> AVTempoAttachment;
+    Slider AVVolume, AVTempo;
+    std::unique_ptr<AudioProcessorValueTreeState::SliderAttachment> AVVolumeAttachment, AVTempoAttachment;
     ComboBox AVType, AVOutput, AVRate, AVBuffer;
     TextButton AVTest;
     Array<double> AVRates;
@@ -296,6 +333,7 @@ private:
         const auto error = AVManager->setAudioDeviceSetup(setup, true);
         AVRefreshDevices();
         if (error.isNotEmpty()) {
+            // An in-editor notice over Settings (AVShowMessage finds the editor).
             auto& language = AVDexedLanguageService::getInstance();
             AVShowMessage(AlertWindow::WarningIcon, language.text("audioPage"), language.text("audioDeviceError") + "\n" + error, this);
         }
@@ -393,6 +431,7 @@ private:
     std::vector<std::unique_ptr<AVMappingRow>> AVRows;
     Array<MidiDeviceInfo> AVKnownInputs;
     std::vector<std::tuple<int, String, bool>> AVKnownRows;
+    std::array<int, 2> AVKnownStepCCs { -1, -1 };
     ComboBox AVParameter;
     TextButton AVLearn;
     StringArray AVParameterIds;
@@ -471,8 +510,12 @@ private:
             const auto id = AVProcessor.midiCCMapper->getAVMappingParameterId(cc);
             if (id.isNotEmpty()) mappings.emplace_back(cc, id, AVProcessor.midiCCMapper->isAVInverted(cc));
         }
-        if (mappings != AVKnownRows || force) {
+        using Step = DexedAudioProcessor::AVPresetStep;
+        const std::array<int, 2> stepCCs { AVProcessor.getAVPresetStepCC(Step::previous),
+                                           AVProcessor.getAVPresetStepCC(Step::next) };
+        if (mappings != AVKnownRows || stepCCs != AVKnownStepCCs || force) {
             AVKnownRows = mappings;
+            AVKnownStepCCs = stepCCs;
             AVRows.clear();
             for (const auto& [cc, id, inverted] : mappings) {
                 auto row = std::make_unique<AVMappingRow>();
@@ -496,6 +539,28 @@ private:
                 row->unassign.setButtonText(language.text("unassign"));
                 row->unassign.onClick = [this, fromCC] {
                     AVProcessor.midiCCMapper->removeMapping(fromCC);
+                    AVRefresh(false);
+                };
+                AVContent.addAndMakeVisible(*row);
+                AVRows.push_back(std::move(row));
+            }
+            // The sound arrows' CCs (learned on ‹ › beside the sound name) are
+            // assignments too: listed here so they can be seen and removed. A
+            // press is a step, not a value: no Invert, and the CC is learned
+            // again on the arrow rather than dragged.
+            for (int step = 0; step < 2; ++step) {
+                const int cc = stepCCs[size_t(step)];
+                if (cc < 0) continue;
+                const auto which = static_cast<Step>(step);
+                auto row = std::make_unique<AVMappingRow>();
+                row->title = language.text(step == 0 ? "previousSound" : "nextSound");
+                row->pill.cc = cc;
+                row->pill.setMouseCursor(MouseCursor::NormalCursor);
+                row->pill.setTitle(row->title + " · CC " + String(cc));
+                row->invert.setVisible(false);
+                row->unassign.setButtonText(language.text("unassign"));
+                row->unassign.onClick = [this, which] {
+                    AVProcessor.clearAVPresetStepCC(which);
                     AVRefresh(false);
                 };
                 AVContent.addAndMakeVisible(*row);
@@ -644,6 +709,7 @@ private:
             return;
         }
         AVSelectPort(box, input ? AVProcessor.sysexComm.getInput() : AVProcessor.sysexComm.getOutput());
+        // An in-editor notice over Settings (AVShowMessage finds the editor).
         auto& language = AVDexedLanguageService::getInstance();
         AVShowMessage(AlertWindow::WarningIcon, language.text("midiInterface"), language.text("midiPortsError"), this);
     }

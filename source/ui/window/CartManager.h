@@ -82,6 +82,11 @@ class CartManager : public Component, public Button::Listener, public DragAndDro
     std::unique_ptr<CartridgeFileDisplay> activeCartName;
 
     File cartDir;
+    // The file the preview (browserCart) shows: the tree's selection can move
+    // on to a folder while the preview stays, and its voices load from here.
+    File AVPreviewFile;
+    /** Shows `file` in the preview; false (preview unchanged) when it cannot be read. */
+    bool AVLoadPreview(const File& file);
 
     std::unique_ptr<FileChooser> fileChooser;
 
@@ -108,6 +113,10 @@ public:
     void resetActiveSysex();
 
     void updateCartFilename();
+    /** Re-reads the bank tree (after an import or a change in the library). */
+    void refreshFiles();
+    /** Re-reads the previewed bank from its file (after a save into it). */
+    void reloadPreview();
 
     void resized() override;
 

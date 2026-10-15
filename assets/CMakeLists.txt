@@ -24,4 +24,5 @@ juce_add_binary_data(DexedResources SOURCES
     branding/AVDexed_SaveIcon.svg
     branding/AVDexed_SettingsIcon.svg
     branding/AVDexed_CloseIcon.svg
+    branding/AVDexed_PlusIcon.svg
 )

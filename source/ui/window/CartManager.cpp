@@ -25,52 +25,32 @@
 #include "../AVDexedLanguage.h"
 #include "../AVDexedTheme.h"
 #include "PluginData.h"
+#include "../../core/AVDexedLibrary.h"
 
 #include <fstream>
 
 class SyxFileFilter : public FileFilter {
 public:
     SyxFileFilter() : FileFilter(".syx") {}
-    bool isFileSuitable(const File &file) const {
-        return file.getFileExtension().toLowerCase() == ".syx" && file.getSize() >= 4096;
+    // The library's hidden folders (.migration-backup, .profiles, .deleted) are
+    // not hidden files on Windows: filter them by name as the library does.
+    bool isFileSuitable(const File &file) const override {
+        return file.getFileExtension().toLowerCase() == ".syx" && file.getSize() >= 4096
+            && ! AVDexedLibrary::isIgnoredName(file.getFileName());
     }
-    bool isDirectorySuitable(const File &file) const {
-        return true;
+    bool isDirectorySuitable(const File &file) const override {
+        return ! AVDexedLibrary::isIgnoredName(file.getFileName());
     };
 };
 
+/** The bank tree takes no file drops itself (a TreeView accepts every drag):
+    they reach the editor, which shows its drop wash and imports them into the
+    library the same way as everywhere else (folder prompt, never overwriting). */
 class FileTreeDrop : public FileTreeComponent {
 public :
     FileTreeDrop(DirectoryContentsList &listToShow) : FileTreeComponent(listToShow) {}
 
-    bool isInterestedInFileDrag (const StringArray &files) override {
-        bool found = false;
-
-        for(int i=0; i<files.size(); i++) {
-            String filename = files[i].toLowerCase();
-            found |= filename.endsWith(".syx");
-        }
-        return found;
-    }
-
-    void filesDropped(const StringArray &files, int x, int y) override {
-        File targetDir = getSelectedFile();
-
-        if ( ! targetDir.exists() )
-            targetDir = DexedAudioProcessor::dexedCartDir;
-
-        if ( ! targetDir.isDirectory() )
-            targetDir = targetDir.getParentDirectory();
-
-        for(int i=0; i<files.size(); i++) {
-            if ( files[i].toLowerCase().endsWith(".syx") ) {
-                File src(files[i]);
-                File target = targetDir.getChildFile(src.getFileName());
-                src.copyFileTo(target);
-            }
-        }
-        refresh();
-    }
+    bool isInterestedInFileDrag (const StringArray&) override { return false; }
 };
 
 /**
@@ -139,7 +119,8 @@ public:
 
 CartManager::CartManager(DexedAudioProcessorEditor *editor) : Component("CartManager") {
     mainWindow = editor;
-    cartDir = DexedAudioProcessor::dexedCartDir;
+    // The data folder is the library: its folders are the tree's folders.
+    cartDir = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
 
     activeCart.reset(new ProgramListBox("Active Programs Selector", 8));
     addAndMakeVisible(activeCart.get());
@@ -284,15 +265,21 @@ void CartManager::programSelected(ProgramListBox* source, int pos) {
     if (pos < 0 || pos >= 32) return;
     const bool currentBank = source == activeCart.get();
     auto selectedCart = source->getCurrentCart();
-    const auto sourceFile = cartBrowser->getSelectedFile();
+    // The preview's own file: the tree's selection may have moved to a folder.
+    const auto sourceFile = AVPreviewFile;
     const auto safe = Component::SafePointer<CartManager>(this);
     mainWindow->requestPresetReplacement([safe, selectedCart, sourceFile, pos, currentBank]() mutable {
         if (safe == nullptr) return;
         auto* editor = safe->mainWindow;
         if (!currentBank) {
-            editor->processor->loadCartridge(selectedCart);
-            editor->processor->activeFileCartridge = sourceFile;
+            // Before setCurrentProgram: it applies the sound settings of this file.
+            // The preview was read when its file was selected; a "Guardar" into
+            // that bank since then (even the one the save-changes prompt just
+            // made) is on disk, and installing the older copy would undo it here.
+            editor->processor->setActiveBank(AVDexedLibrary::currentBankOf(sourceFile, selectedCart), sourceFile);
             safe->activeCart->setCartridge(editor->processor->currentCart);
+            if (sourceFile == safe->AVPreviewFile)
+                safe->browserCart->setCartridge(editor->processor->currentCart);
         }
         safe->browserCart->setActive(-1);
         editor->processor->setCurrentProgram(pos);
@@ -310,14 +297,25 @@ void CartManager::buttonClicked(juce::Button *buttonThatWasClicked) {
     }
 
     if ( buttonThatWasClicked == loadButton.get() ) {
-        fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("importBankTitle"), File::getSpecialLocation(File::SpecialLocationType::userDocumentsDirectory), "*.syx;*.SYX;*.*", true);
+        // Banks usually arrive in Downloads. One from outside the library is
+        // imported (copied into a library folder) instead of played from there.
+        auto start = File::getSpecialLocation(File::userHomeDirectory).getChildFile("Downloads");
+        if (! start.isDirectory()) start = File::getSpecialLocation(File::userDocumentsDirectory);
+        fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("importBankTitle"), start, "*.syx;*.SYX", true);
 
+        const auto safe = Component::SafePointer<CartManager>(this);
         fileChooser->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
-                                 [this](const FileChooser& fc) {
-                                     if ( fc.getResults().isEmpty() )
+                                 [safe](const FileChooser& fc) {
+                                     if ( safe == nullptr || fc.getResults().isEmpty() )
                                          return;
-                                     mainWindow->loadCart(fc.getResult());
-                                     updateCartFilename();
+                                     // The "Based on" label follows when the bank is
+                                     // committed: an import or a save-changes prompt
+                                     // may come first.
+                                     const auto file = fc.getResult();
+                                     if (file.isAChildOf(safe->cartDir))
+                                         safe->mainWindow->loadCart(file);
+                                     else
+                                         safe->mainWindow->importBanks({ file });
                                  });
         return;
     }
@@ -413,22 +411,29 @@ void CartManager::selectionChanged() {
     if ( file.isDirectory() )
         return;
 
-    Cartridge browserSysex;
-    int rc = browserSysex.load(file);
-    if ( rc < 0 ) {
+    if (! AVLoadPreview(file)) {
         auto& language = AVDexedLanguageService::getInstance();
-        AVShowMessage(AlertWindow::WarningIcon, language.text("error"),
-                      language.format("bankOpenError", {{"path", file.getFullPathName()}}), this);
+        mainWindow->showAVNotice(language.text("error"), language.format("bankOpenError", {{"path", file.getFullPathName()}}));
         return;
     }
-
-    if ( rc != 0 ) {
-        browserCart->readOnly = true;
-    } else {
-        browserCart->readOnly = false;
-    }
     browserCart->setActive(-1);
+}
+
+bool CartManager::AVLoadPreview(const File& file) {
+    Cartridge browserSysex;
+    const int rc = browserSysex.load(file);
+    if ( rc < 0 )
+        return false;
+    // A damaged or non-bank file is shown but never written to.
+    browserCart->readOnly = rc != 0;
+    AVPreviewFile = file;
     browserCart->setCartridge(browserSysex);
+    return true;
+}
+
+void CartManager::reloadPreview() {
+    if (AVPreviewFile.existsAsFile())
+        AVLoadPreview(AVPreviewFile);
 }
 
 void CartManager::programRightClicked(ProgramListBox *source, int pos) {
@@ -473,30 +478,56 @@ void CartManager::programRightClicked(ProgramListBox *source, int pos) {
 
 void CartManager::programDragged(ProgramListBox* destListBox, int dest, char* packedPgm) {
     if (packedPgm == nullptr || dest < 0 || dest >= 32) return;
+    auto* processor = mainWindow->processor;
     if (destListBox == activeCart.get()) {
-        const auto previous = mainWindow->processor->currentCart;
+        const auto previous = processor->currentCart;
         auto updated = previous;
         updated.setPackedProgram(dest, packedPgm);
         mainWindow->playView.carryAVBankMetadata(previous, updated);
-        mainWindow->processor->loadCartridge(updated);
-        mainWindow->processor->updateHostDisplay();
+        // Through setActiveBank: it swaps the bank under the audio lock (a MIDI
+        // program change reads it). Same file: only the memory copy changes, so
+        // "Guardar" later sees the difference and offers "Guardar como".
+        const auto bankFile = processor->activeFileCartridge;
+        processor->setActiveBank(updated, bankFile);
+        processor->updateHostDisplay();
         mainWindow->updateUI();
     } else {
-        const auto file = cartBrowser->getSelectedFile();
+        // The file the preview shows (the tree's selection may be a folder now).
+        const auto file = AVPreviewFile;
         if (!file.existsAsFile()) return;
+        auto& language = AVDexedLanguageService::getInstance();
+        // Factory and expansion packs are read-only.
+        if (AVDexedLibrary::isReadOnly(file, cartDir)) {
+            mainWindow->showAVNotice(language.text("saveError"), language.text("packFolderReadOnly"));
+            return;
+        }
+        // Only a file that is one bank is changed in place: an archive of
+        // several banks (64 KB or more) is left exactly as it is.
         Cartridge cart;
-        if (cart.load(file) != 0) return;
+        if (! AVDexedLibrary::readBank(file, cart)) {
+            mainWindow->showAVNotice(language.text("saveError"), language.format("bankNotRewritable", {{"bank", file.getFileName()}}));
+            return;
+        }
         const auto previous = cart;
         cart.setPackedProgram(dest, packedPgm);
-        if (cart.saveVoice(file) <= 0) {
-            auto& language = AVDexedLanguageService::getInstance();
-            auto* alert = new AVAlertWindow(language.text("saveError"), language.format("writeError", {{"path", file.getFullPathName()}}), AlertWindow::WarningIcon);
-            alert->addButton(language.text("ok"), 1, KeyPress(KeyPress::returnKey), KeyPress(KeyPress::escapeKey));
-            alert->enterModalState(true, nullptr, true);
+        // Only the bank message is replaced: the sound settings embedded in the
+        // file stay (the slot that changed simply has none for its new voice).
+        if (! DexedAudioProcessorEditor::AVWriteBankFile(cart, file)) {
+            mainWindow->showAVNotice(language.text("saveError"), language.format("writeError", {{"path", file.getFullPathName()}}));
             return;
         }
         mainWindow->playView.carryAVBankMetadata(previous, cart);
         browserCart->setCartridge(cart);
+        // The bank that is playing: its copy in memory follows the file (the
+        // sound being played and its settings stay as they are), unless that
+        // copy holds changes of its own, which must not be thrown away.
+        if (file == processor->activeFileCartridge
+            && AVDexedLibrary::bankFingerprint(processor->currentCart) == AVDexedLibrary::bankFingerprint(previous)) {
+            processor->setActiveBank(cart, file);
+            processor->updateHostDisplay();
+            mainWindow->updateUI();
+        }
+        mainWindow->playView.refreshLibrary();
     }
 }
 
@@ -505,7 +536,8 @@ void CartManager::initialFocus() {
 }
 
 void CartManager::hideCartridgeManager() {
-        mainWindow->startTimer(100);
+        // The editor's own rate (meters, footer, resize countdown count 20 ms ticks).
+        mainWindow->startTimer(20);
         getParentComponent()->setVisible(false);
 }
 
@@ -523,8 +555,11 @@ bool CartManager::keyPressed(const KeyPress& key, Component* originatingComponen
 
 void CartManager::showSysexConfigMsg() {
     auto& language = AVDexedLanguageService::getInstance();
-    AVShowMessage(AlertWindow::WarningIcon, language.text("warning"),
-                  language.text("sysexConfigurationWarning"), this);
+    mainWindow->showAVNotice(language.text("warning"), language.text("sysexConfigurationWarning"));
+}
+
+void CartManager::refreshFiles() {
+    if (cartBrowserList != nullptr) cartBrowserList->refresh();
 }
 
 // unused stuff from FileBrowserListener

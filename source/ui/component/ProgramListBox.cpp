@@ -113,6 +113,10 @@ bool ProgramListBox::keyPressed(const KeyPress &key, Component *originatingCompo
     }
 
     labels[currentIdx]->grabKeyboardFocus();
+    // Here the arrows do move the focus (from cell to cell): its ring is the
+    // only mark of the cell Return would load.
+    if (AVDexedTheme::revealKeyboardFocus())
+        if (auto* top = getTopLevelComponent()) top->repaint();
 
     repaint();
     return true;

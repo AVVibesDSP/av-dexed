@@ -66,6 +66,7 @@ public:
     static juce::String normalizePgmName(const char *sysexName);
 
     friend class DexedAudioProcessor;
+    friend class Cartridge;   // applyBankRules() edits a voice in place
 
 private:
     // We add the 155 byte of operator switch

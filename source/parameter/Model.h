@@ -112,6 +112,13 @@ namespace IDs {
                     DECLARE_ID(midiCC)
                     DECLARE_ID(midiParameterName)
                     DECLARE_ID(midiInvert)
+                // Properties of midiCCMappings: the CCs learned for the
+                // previous / next sound arrows (absent = none).
+                DECLARE_ID(avPresetPreviousCC)
+                DECLARE_ID(avPresetNextCC)
+                // Version of the assignments the list was saved with (absent =
+                // saved before AV Dexed had default assignments).
+                DECLARE_ID(avMappingsVersion)
 
         // This should be public for parameter attributes
         DECLARE_ID(id)

@@ -65,6 +65,7 @@ target_sources(${BaseTargetName} PRIVATE
 	Tuning.cpp
 
 	core/Cartridge.cpp
+	core/AVDexedLibrary.cpp
 	core/Program.cpp
 
     engine/EngineMkI.cpp
@@ -72,6 +73,7 @@ target_sources(${BaseTargetName} PRIVATE
 
     ui/PluginEditor.cpp
 	ui/AVDexedPlayView.cpp
+	ui/AVDexedPromptOverlay.cpp
 	ui/AVDexedLanguage.cpp
 	ui/AVDexedKeyboard.cpp
 	ui/AVDexedResizeGrip.cpp
@@ -155,7 +157,10 @@ if(DEXED_BUILD_TESTS)
     target_sources(AVDexedRegressionTests PRIVATE
         ../tests/AVDexedFxChainTests.cpp
         ../tests/AVDexedStateTests.cpp
-        ../tests/AVDexedUIEvidence.cpp)
+        ../tests/AVDexedUIEvidence.cpp
+        ../tests/AVDexedLibraryTests.cpp
+        ../tests/AVDexedQALibrary.cpp
+        ../tests/AVDexedVoiceTests.cpp)
     target_include_directories(AVDexedRegressionTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../libs

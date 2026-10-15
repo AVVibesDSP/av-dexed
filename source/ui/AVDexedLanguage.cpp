@@ -1,6 +1,7 @@
 // Copyright (C) 2026 AV Vibes. Part of AV Dexed, a modified version of Dexed.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "../core/AVDexedLibrary.h"
 #include "AVDexedLanguage.h"
 #include "../JuceLibraryCode/BinaryData.h"
 
@@ -51,14 +52,12 @@ StringPairArray AVDexedLanguageService::parseCatalog(const String& contents) {
     return parsed;
 }
 
-void AVDexedLanguageService::configure(const File& applicationDirectory) {
-    const auto nextPreferenceFile = applicationDirectory.getChildFile("Dexed.xml");
+void AVDexedLanguageService::configure(const File& nextPreferenceFile) {
     if (preferenceFile == nextPreferenceFile)
         return;
 
     preferenceFile = nextPreferenceFile;
-    PropertiesFile::Options options;
-    PropertiesFile preferences(preferenceFile, options);
+    PropertiesFile preferences(preferenceFile, AVDexedLibrary::preferencesOptions());
     const auto stored = preferences.getValue("avDexedLanguage", "es");
     const String loaded = stored == "en" ? "en" : "es";
     if (loaded == language)
@@ -76,8 +75,7 @@ void AVDexedLanguageService::setLanguage(const String& languageCode) {
 
     language = nextLanguage;
     if (preferenceFile != File()) {
-        PropertiesFile::Options options;
-        PropertiesFile preferences(preferenceFile, options);
+        PropertiesFile preferences(preferenceFile, AVDexedLibrary::preferencesOptions());
         preferences.setValue("avDexedLanguage", language);
         preferences.save();
     }

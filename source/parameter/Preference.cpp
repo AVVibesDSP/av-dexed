@@ -2,9 +2,8 @@
 #include "Model.h"
 
 void DexedAudioProcessor::loadPreference() {
-    File propFile = DexedAudioProcessor::dexedAppDir.getChildFile("Dexed.xml");
-    PropertiesFile::Options prefOptions;
-    PropertiesFile prop(propFile, prefOptions);
+    File propFile = DexedAudioProcessor::getPreferencesFile();
+    PropertiesFile prop(propFile, AVDexedLibrary::preferencesOptions());
 
     if ( ! prop.isValidFile() ) {
         return;
@@ -42,9 +41,8 @@ void DexedAudioProcessor::loadPreference() {
 }
 
 void DexedAudioProcessor::savePreference() {
-    File propFile = DexedAudioProcessor::dexedAppDir.getChildFile("Dexed.xml");
-    PropertiesFile::Options prefOptions;
-    PropertiesFile prop(propFile, prefOptions);
+    File propFile = DexedAudioProcessor::getPreferencesFile();
+    PropertiesFile prop(propFile, AVDexedLibrary::preferencesOptions());
 
     prop.setValue(String("normalizeDxVelocity"), normalizeDxVelocity);
     prop.setValue(String("pitchRange"), controllers.pitch_range_up); // for backwards compat

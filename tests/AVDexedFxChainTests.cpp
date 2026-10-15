@@ -7,7 +7,13 @@
 #include <iostream>
 
 bool runAVDexedStateTests();
+bool runAVDexedLibraryTests();
 bool AVRenderUIEvidence(const juce::File& directory);
+bool AVRunLibraryQA(const juce::File& outputDirectory);
+bool AVRenderBankVoice(const juce::File& bankFile, int slot);
+bool AVScanBankVoices(const juce::File& folder);
+bool AVAuditVoices(const juce::File& folder, const juce::File& output);
+bool runAVDexedVoiceTests();
 
 namespace {
 bool expect(bool condition, const char* message)
@@ -82,10 +88,20 @@ int main(int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
     if (argc == 3 && juce::String(argv[1]) == "--render-ui")
         return AVRenderUIEvidence(juce::File(argv[2])) ? 0 : 1;
-    const bool passed = testDryPathAndZeroSamples()
-        && testDelayTailAfterSendIsRemoved()
-        && runAVDexedStateTests();
-    if (passed)
-        std::cout << "AV Dexed regression tests passed.\n";
+    if (argc == 3 && juce::String(argv[1]) == "--qa-library")
+        return AVRunLibraryQA(juce::File(argv[2])) ? 0 : 1;
+    if (argc == 4 && juce::String(argv[1]) == "--audit-voices")
+        return AVAuditVoices(juce::File(argv[2]), juce::File(argv[3])) ? 0 : 1;
+    if (argc == 3 && juce::String(argv[1]) == "--scan-voices")
+        return AVScanBankVoices(juce::File(argv[2])) ? 0 : 1;
+    if (argc == 4 && juce::String(argv[1]) == "--render-voice")
+        return AVRenderBankVoice(juce::File(argv[2]), juce::String(argv[3]).getIntValue()) ? 0 : 1;
+    // Every suite runs even after a failure, so one run lists every problem.
+    bool passed = testDryPathAndZeroSamples();
+    passed &= testDelayTailAfterSendIsRemoved();
+    passed &= runAVDexedStateTests();
+    passed &= runAVDexedLibraryTests();
+    passed &= runAVDexedVoiceTests();
+    std::cout << (passed ? "AV Dexed regression tests passed.\n" : "AV Dexed regression tests FAILED.\n");
     return passed ? 0 : 1;
 }

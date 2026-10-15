@@ -1,3 +1,4 @@
+#include "../midi/MidiCCHandler.h"
 #include "Model.h"
 #include "PluginProcessor.h"
 #include "core/Program.h"
@@ -266,7 +267,125 @@ int DexedAudioProcessor::getCurrentProgram() {
     return currentProgram;
 }
 
+// The modern settings that belong to each sound. Not avDelayTempo (the local
+// BPM is global, in Settings) nor output (the global volume).
+static const MetaParameterID* const avSoundParameterIds[] = {
+    &IDs::masterVolume, &IDs::pan, &IDs::cutoff, &IDs::resonance,
+    &IDs::reverbAmount, &IDs::reverbSize, &IDs::reverbPreDelay, &IDs::reverbDamping,
+    &IDs::delayAmount, &IDs::delaySync, &IDs::delayDivisionLeft, &IDs::delayDivisionRight,
+    &IDs::delayTimeLeft, &IDs::delayTimeRight, &IDs::delayFeedback, &IDs::delayDamping,
+    &IDs::chorusAmount, &IDs::chorusMode, &IDs::chorusRate, &IDs::chorusDepth, &IDs::chorusSpread,
+    &IDs::avReverbBypass, &IDs::avDelayBypass, &IDs::avChorusBypass
+};
+
+void DexedAudioProcessor::resolveAVSoundParameters() {
+    static_assert(std::size(avSoundParameterIds) == AVSoundParameterCount);
+    for (size_t i = 0; i < avSoundParameters.size(); ++i) {
+        avSoundParameters[i] = parameters.getParameter(avSoundParameterIds[i]->name);
+        jassert(avSoundParameters[i] != nullptr);
+    }
+    avOutputParameter = parameters.getParameter(IDs::output.name);
+    avDelayTempoParameter = parameters.getParameter(IDs::avDelayTempo.name);
+    jassert(avOutputParameter != nullptr && avDelayTempoParameter != nullptr);
+}
+
+DexedAudioProcessor::AVSoundTable DexedAudioProcessor::makeAVSoundTable(const AVDexedLibrary::BankSettings& settings) const {
+    AVSoundTable table {};
+    for (const auto& [slot, stored] : settings) {
+        if (!juce::isPositiveAndBelow(slot, 32))
+            continue;
+        auto& entry = table[static_cast<size_t>(slot)];
+        entry.voice = stored.voice;
+        entry.hasSettings = true;
+        for (size_t i = 0; i < avSoundParameters.size(); ++i) {
+            const auto* parameter = avSoundParameters[i];
+            entry.values[i] = parameter != nullptr ? parameter->getDefaultValue() : 0.0f;
+            if (parameter == nullptr)
+                continue;
+            // Real units, as in session state; ids this version does not know are ignored.
+            const auto found = stored.values.find(parameter->paramID);
+            if (found != stored.values.end() && std::isfinite(found->second))
+                entry.values[i] = juce::jlimit(0.0f, 1.0f, parameter->convertTo0to1(found->second));
+        }
+    }
+    return table;
+}
+
+void DexedAudioProcessor::applyAVSoundSettings(int program) {
+    // Settings stay with their sound: the slot's own entry when it still holds
+    // that voice, else any slot holding the same voice (moved in the bank
+    // manager), else the neutral defaults.
+    const auto voice = AVDexedLibrary::voiceHash(currentCart, program);
+    AVSoundSlot slot;
+    {
+        const juce::SpinLock::ScopedLockType lock(avSoundTableLock);
+        const auto& own = avSoundTable[static_cast<size_t>(program)];
+        if (own.hasSettings && own.voice == voice) {
+            slot = own;
+        } else {
+            for (const auto& other : avSoundTable) {
+                if (other.hasSettings && other.voice == voice) {
+                    slot = other;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Only what differs, and without change gestures: a sound change is not an
+    // edit, so hosts in Touch/Latch do not record it as automation.
+    for (size_t i = 0; i < avSoundParameters.size(); ++i) {
+        auto* parameter = avSoundParameters[i];
+        if (parameter == nullptr)
+            continue;
+        const float target = slot.hasSettings ? slot.values[i] : parameter->getDefaultValue();
+        if (std::abs(parameter->getValue() - target) > 1.0e-6f)
+            parameter->setValueNotifyingHost(target);
+    }
+}
+
+AVDexedLibrary::SlotSettings DexedAudioProcessor::captureAVSoundSettings() const {
+    AVDexedLibrary::SlotSettings settings;
+    // The voice as it would be stored: the current program packed into its
+    // slot. Like "Guardar", an unchanged voice keeps the bank's own bytes.
+    Cartridge packed = currentCart;
+    const int slot = juce::jlimit(0, 31, currentProgram);
+    packAVVoiceIfChanged(packed, slot, activeProgram);
+    settings.voice = AVDexedLibrary::voiceHash(packed, slot);
+
+    for (const auto* parameter : avSoundParameters) {
+        if (parameter == nullptr)
+            continue;
+        // The sound's own value, not where the mod wheel left it.
+        const auto value = midiCCMapper != nullptr ? midiCCMapper->getAVSoundValue(parameter) : parameter->getValue();
+        if (std::abs(value - parameter->getDefaultValue()) > 1.0e-4f)
+            settings.values[parameter->paramID] = parameter->convertFrom0to1(value);
+    }
+    return settings;
+}
+
+namespace {
+/** The voices of a bank, as the restore guard tells banks apart. No allocation:
+    the audio thread computes it on a MIDI program change. */
+juce::uint64 avBankVoicesHash(const Cartridge& bank) noexcept {
+    return AVDexedLibrary::stableHash64(bank.getVoiceSysex() + 6, 4096);
+}
+}
+
+void DexedAudioProcessor::armAVRestoreGuard() noexcept {
+    avRestoreGuardTicksLeft.store(AVRestoreGuardTicks, std::memory_order_relaxed);
+    avRestoreGuardBank.store(avBankVoicesHash(currentCart), std::memory_order_relaxed);
+    avRestoreGuardProgram.store(currentProgram, std::memory_order_release);
+}
+
+void DexedAudioProcessor::tickAVRestoreGuard() noexcept {
+    if (avRestoreGuardTicksLeft.load(std::memory_order_relaxed) > 0
+        && avRestoreGuardTicksLeft.fetch_sub(1, std::memory_order_relaxed) == 1)
+        avRestoreGuardProgram.store(-1, std::memory_order_release);
+}
+
 void DexedAudioProcessor::setCurrentProgramSelection(int index) {
+    // Session restore and visible selection: the sound and its settings stay.
     currentProgram = juce::jlimit(0, 31, index);
     programChanged.set(true);
 }
@@ -277,6 +396,20 @@ void DexedAudioProcessor::setCurrentProgram(int index) {
     applyProgram(program);
     currentProgram = index;
     avKnownPresetOrigin.store(true, std::memory_order_relaxed);
+    avSoundFromBankSlot.store(true, std::memory_order_relaxed);
+
+    // The first program change after a host restore consumes the guard; when
+    // it re-selects the restored program of the restored bank, the session's
+    // values win. The same slot of a bank installed since (another bank chosen
+    // in the browser, a SysEx bank) is another sound: it gets its own settings.
+    // A bank with the same voices only re-pointed to another file keeps it.
+    const int restoredProgram = avRestoreGuardProgram.exchange(-1, std::memory_order_acq_rel);
+    const bool restoredSound = restoredProgram == index
+        && avRestoreGuardBank.load(std::memory_order_relaxed) == avBankVoicesHash(currentCart);
+    if (! restoredSound)
+        applyAVSoundSettings(index);
+    // The settings are part of the sound just loaded: it is not "Modified".
+    captureAVPresetBaseline();
 }
 
 const String DexedAudioProcessor::getProgramName(int index) {

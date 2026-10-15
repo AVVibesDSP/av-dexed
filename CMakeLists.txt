@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(AVDexed VERSION 0.1.0)
+project(AVDexed VERSION 0.2.0)
 
 option(DEXED_BUILD_TESTS "Build AV Dexed regression tests" OFF)
 if(DEXED_BUILD_TESTS)

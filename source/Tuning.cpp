@@ -2,6 +2,7 @@
 #include "parameter/Model.h"
 #include "ui/AVDexedLanguage.h"
 #include "ui/DXLookNFeel.h"
+#include "ui/PluginEditor.h"
 
 int DexedAudioProcessor::tuningTranspositionShift() {
     int transpose = activeProgram[IDs::transpose.pos];
@@ -34,11 +35,30 @@ void DexedAudioProcessor::retuneToStandard() {
 }
 
 namespace {
+/** A problem with a .scl/.kbm (SCL/KBM buttons, a profile, a restored state)
+    is an in-editor notice, as for a dropped tuning file; AVShowMessage falls
+    back to an AV alert window only when no editor is open. */
 void AVShowTuningFileError(AudioProcessorEditor* editor, const String& message) {
-    auto& language = AVDexedLanguageService::getInstance();
-    auto* alert = new AVAlertWindow(language.text("tuningFileError"), message, AlertWindow::WarningIcon, editor);
-    alert->addButton(language.text("ok"), 0, KeyPress(KeyPress::returnKey));
-    alert->enterModalState(true, nullptr, true);
+    AVShowMessage(AlertWindow::WarningIcon, AVDexedLanguageService::getInstance().text("tuningFileError"), message, editor);
+}
+
+/** The open editor of `processor`, found by address only: by the time an
+    asynchronous notice runs, the processor may be gone, so it is never touched. */
+DexedAudioProcessorEditor* AVOpenEditorOf(const AudioProcessor* processor) {
+    std::function<DexedAudioProcessorEditor*(Component&)> search = [&](Component& component) -> DexedAudioProcessorEditor* {
+        if (auto* editor = dynamic_cast<DexedAudioProcessorEditor*>(&component))
+            return editor->getAudioProcessor() == processor ? editor : nullptr;
+        for (auto* child : component.getChildren())
+            if (auto* found = search(*child)) return found;
+        return nullptr;
+    };
+    // The editor sits inside a desktop window: the host's wrapper or the
+    // standalone app's window.
+    auto& desktop = Desktop::getInstance();
+    for (int index = 0; index < desktop.getNumComponents(); ++index)
+        if (auto* top = desktop.getComponent(index))
+            if (auto* found = search(*top)) return found;
+    return nullptr;
 }
 
 void AVShowTuningParseError(AudioProcessor& processor, const std::string& detail) {
@@ -48,8 +68,10 @@ void AVShowTuningParseError(AudioProcessor& processor, const std::string& detail
         return;
     }
     // A host may restore state on its own thread: build no window there and
-    // hold no editor pointer; show the notice later, on the message thread.
-    MessageManager::callAsync([message] { AVShowTuningFileError(nullptr, message); });
+    // hold no editor pointer; on the message thread, look for this
+    // processor's editor (if one is open) and show the notice there.
+    const AudioProcessor* owner = &processor;
+    MessageManager::callAsync([message, owner] { AVShowTuningFileError(AVOpenEditorOf(owner), message); });
 }
 }
 

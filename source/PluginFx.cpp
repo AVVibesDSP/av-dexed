@@ -121,9 +121,19 @@ void PluginFx::process(float *work, int sampleSize) {
     }
     dc_od = work[sampleSize-1];
     
-    if ( uiGain != 1 ) {
+    // "Volumen general": a fast move of its fader ramps across the block
+    // instead of jumping, which would click.
+    const float targetGain = uiGain;
+    if ( targetGain != appliedGain ) {
+        const float step = (targetGain - appliedGain) / float(sampleSize);
+        for(int i=0; i < sampleSize; i++ ) {
+            appliedGain += step;
+            work[i] *= appliedGain;
+        }
+        appliedGain = targetGain;
+    } else if ( targetGain != 1 ) {
         for(int i=0; i < sampleSize; i++ )
-            work[i] *= uiGain;
+            work[i] *= targetGain;
     }
     
     if ( uiCutoff != pCutoff || uiReso != pReso ) {

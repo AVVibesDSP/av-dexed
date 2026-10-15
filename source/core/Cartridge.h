@@ -61,6 +61,17 @@ public:
      * Returns 2 if no sysex data found, probably random data
      */
     int load(const uint8_t *stream, int size);
+
+    /** Files of this size or more are never rewritten by saveVoice(): only
+        their first 64 KB are ever read as a bank (load()). */
+    static constexpr juce::int64 maxRewritableFileSize = 65535;
+    /**
+     * Writes this bank into `f`: a new file, or only the bank message of an
+     * existing one (its other SysEx messages stay), through an atomic write.
+     * Returns 1 when written, -1 otherwise (no data, a file of
+     * maxRewritableFileSize or more, a file without a DX7 bank to replace,
+     * or a write that did not complete; the file is then left as it was).
+     */
     int saveVoice(juce::File f);
     bool containsData() const { return hasData; }
 
@@ -111,4 +122,8 @@ public:
     bool packProgram(const uint8_t *src, int idx, const juce::String& name);
 
     Program unpackProgram(int idx);
+    /** Applies to a voice that arrives unpacked (a single-voice SysEx dump, a
+        sound file, a DAW session) the rule unpackProgram() applies to a bank
+        voice, so every way in loads a voice the same way. */
+    static void applyBankRules(Program& voice);
 };

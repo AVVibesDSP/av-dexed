@@ -29,6 +29,7 @@ public:
     void resized() override;
     bool keyPressed(const juce::KeyPress&) override;
     void AVShowPage(AVPage);
+    AVPage AVGetPage() const noexcept { return AVSelectedPage; }
     ParamDialog& AVGetInstrumentSettings() { return *AVInstrument; }
 private:
     class AVTabButton;

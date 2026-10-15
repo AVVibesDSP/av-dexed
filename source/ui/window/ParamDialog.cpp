@@ -18,6 +18,7 @@
 */
 
 //[Headers] You can add your own extra header files here...
+#include "../../core/AVDexedLibrary.h"
 #include "../../debugger/Logger.h"
 #include "../component/DXComponents.h"
 #include "parameter/Model.h"
@@ -599,7 +600,7 @@ void ParamDialog::comboBoxChanged (juce::ComboBox* comboBoxThatHasChanged) {
     else if (comboBoxThatHasChanged == profileSelector.get()) {
         int idx = profileSelector->getSelectedItemIndex();
         if (idx > 0) {
-            juce::File profileDir = DexedAudioProcessor::dexedAppDir.getChildFile("Profiles");
+            juce::File profileDir = DexedAudioProcessor::dexedAppDir.getChildFile(AVDexedLibrary::profilesFolderName);
             juce::Array<juce::File> files;
             profileDir.findChildFiles(files, juce::File::findFiles, false, "*.xml");
             files.sort();
@@ -655,50 +656,15 @@ void ParamDialog::buttonClicked (juce::Button* buttonThatWasClicked) {
     }
     else if (buttonThatWasClicked == transposeHelp.get()) {
         //[UserButtonCode_transposeHelp] -- add your button handler code here..
+        // An in-editor notice over Settings, like every other dialog (it was a
+        // desktop window with its own title bar).
         auto& language = AVDexedLanguageService::getInstance();
-        struct AVTuningHelpPanel final : Component {
-            DXLookNFeel AVLookAndFeel;
-            TextEditor editor;
-            AVTuningHelpPanel() {
-                setLookAndFeel(&AVLookAndFeel);
-                addAndMakeVisible(editor);
-                setSize(560, 340);
-            }
-            ~AVTuningHelpPanel() override { setLookAndFeel(nullptr); }
-            void resized() override { editor.setBounds(getLocalBounds().reduced(12)); }
-        };
-        auto* panel = new AVTuningHelpPanel();
-        auto* te = &panel->editor;
-        te->setReadOnly(true);
-        te->setMultiLine(true);
-        te->setFont(AVDexedTheme::font(12.0f, "Regular"));
-        te->setBounds(0, 0, 560, 340);
-        te->setText(language.text("transposeHelpText"));
-        DialogWindow::LaunchOptions options;
-        options.content.setOwned(panel);
-        options.componentToCentreAround = this;
-        options.dialogTitle = language.text("transposeHelpTitle");
-        options.dialogBackgroundColour = AVDexedTheme::panelTop;
-        options.escapeKeyTriggersCloseButton = true;
-        options.useNativeTitleBar = true;
-        options.resizable = false;
-        options.launchAsync();
-
+        AVShowMessage(MessageBoxIconType::NoIcon, language.text("transposeHelpTitle"),
+                      language.text("transposeHelpText"), this);
         //[/UserButtonCode_transposeHelp]
     }
     else if (buttonThatWasClicked == storeButton.get()) {
-        auto& language = AVDexedLanguageService::getInstance();
-        auto* aw = new AVAlertWindow(language.text("saveProfileTitle"), language.text("saveProfilePrompt"), juce::MessageBoxIconType::NoIcon, this);
-        aw->addTextEditor("name", "", language.text("profileName"));
-        aw->addButton(language.text("save"), 1, KeyPress(KeyPress::returnKey));
-        aw->addButton(language.text("cancel"), 0, KeyPress(KeyPress::escapeKey));
-        const auto safe = Component::SafePointer<ParamDialog>(this);
-        aw->enterModalState(true, juce::ModalCallbackFunction::create([safe, aw](int result) {
-            if (result == 1 && safe != nullptr) {
-                const auto name = aw->getTextEditorContents("name").trim();
-                if (name.isNotEmpty()) safe->saveProfileToFile(name);
-            }
-        }), true);
+        AVAskProfileName();
         handled = true;
     }
 
@@ -799,7 +765,7 @@ void ParamDialog::refreshProfileList() {
     profileSelector->clear();
     profileSelector->addItem(AVDexedLanguageService::getInstance().text("selectProfile"), 1);
 
-    juce::File profileDir = DexedAudioProcessor::dexedAppDir.getChildFile("Profiles");
+    juce::File profileDir = DexedAudioProcessor::dexedAppDir.getChildFile(AVDexedLibrary::profilesFolderName);
     if (profileDir.exists()) {
         juce::Array<juce::File> files;
         profileDir.findChildFiles(files, juce::File::findFiles, false, "*.xml");
@@ -810,14 +776,65 @@ void ParamDialog::refreshProfileList() {
     profileSelector->setSelectedItemIndex(0, juce::dontSendNotification);
 }
 
-void ParamDialog::saveProfileToFile(const String& name) {
+void ParamDialog::AVAskProfileName() {
     auto& language = AVDexedLanguageService::getInstance();
-    if (name.containsAnyOf("/\\:") || name == "." || name == "..") {
-        AVShowMessage(AlertWindow::WarningIcon, language.text("profileError"),
-                      language.text("profileNameInvalid"), this);
+    const auto safe = Component::SafePointer<ParamDialog>(this);
+    // In the editor, as every other dialog: an AlertWindow is a desktop window
+    // that could be dragged away, ignored the zoom and opened off-centre over
+    // Settings. The validator keeps the prompt open on an unusable name.
+    if (auto* editor = findParentComponentOfClass<DexedAudioProcessorEditor>()) {
+        AVDexedPromptOverlay::Options options;
+        options.title = language.text("saveProfileTitle");
+        options.message = language.text("saveProfilePrompt");
+        options.hasEditor = true;
+        options.placeholder = language.text("profileName");
+        options.confirmText = language.text("save");
+        options.cancelText = language.text("cancel");
+        options.validate = [](const String& name) { return AVProfileNameProblem(name); };
+        editor->showAVPrompt(std::move(options), [safe](bool confirmed, const String& name) {
+            if (confirmed && safe != nullptr) safe->saveProfileToFile(name);
+        });
         return;
     }
-    const auto profileDir = DexedAudioProcessor::dexedAppDir.getChildFile("Profiles");
+    // No editor around this page: the AV alert window.
+    auto* aw = new AVAlertWindow(language.text("saveProfileTitle"), language.text("saveProfilePrompt"), juce::MessageBoxIconType::NoIcon, this);
+    aw->addTextEditor("name", "", language.text("profileName"));
+    aw->addButton(language.text("save"), 1, KeyPress(KeyPress::returnKey));
+    aw->addButton(language.text("cancel"), 0, KeyPress(KeyPress::escapeKey));
+    aw->enterModalState(true, juce::ModalCallbackFunction::create([safe, aw](int result) {
+        if (result == 1 && safe != nullptr) safe->saveProfileToFile(aw->getTextEditorContents("name"));
+    }), true);
+}
+
+String ParamDialog::AVProfileNameProblem(const String& requested) {
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto name = requested.trim();
+    // A separator would put the file somewhere else.
+    if (name.containsAnyOf("/\\:"))
+        return language.text("profileNameInvalid");
+    // `<name>.xml` must be a plain, visible file on every system: no reserved
+    // or control characters, no leading dot (hidden, so never listed), no
+    // trailing dot (Windows drops it), not a Windows device name.
+    static const StringArray devices { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6",
+                                       "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6",
+                                       "LPT7", "LPT8", "LPT9" };
+    bool control = false;
+    for (auto c : name) control = control || c < 32 || c == 127;
+    if (name.isEmpty() || control || name.containsAnyOf("*?\"<>|") || name.startsWithChar('.') || name.endsWithChar('.')
+        || devices.contains(name.upToFirstOccurrenceOf(".", false, false).trim(), true))
+        return language.text("profileNameUnusable");
+    return {};
+}
+
+void ParamDialog::saveProfileToFile(const String& requested) {
+    auto& language = AVDexedLanguageService::getInstance();
+    // Errors here are in-editor notices (AVShowMessage finds the editor).
+    const auto name = requested.trim();
+    if (const auto problem = AVProfileNameProblem(name); problem.isNotEmpty()) {
+        AVShowMessage(AlertWindow::WarningIcon, language.text("profileError"), problem, this);
+        return;
+    }
+    const auto profileDir = DexedAudioProcessor::dexedAppDir.getChildFile(AVDexedLibrary::profilesFolderName);
     if (!profileDir.createDirectory()) {
         AVShowMessage(AlertWindow::WarningIcon, language.text("saveError"),
                       language.format("writeError", {{"path", profileDir.getFullPathName()}}), this);

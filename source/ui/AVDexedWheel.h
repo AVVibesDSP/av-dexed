@@ -101,6 +101,9 @@ public:
         if (isDoubleClickReturnEnabled()) setValue(getDoubleClickReturnValue(), juce::sendNotificationSync);
     }
     bool isBeingDragged() const noexcept { return AVDragging || isTimerRunning(); }
+    /** The wheels answer only to the hand: a key step would leave the pitch bent
+        (nothing springs it back). Up / Down go on to the editor (sounds). */
+    bool keyPressed(const juce::KeyPress&) override { return false; }
 
 private:
     bool isPitch() const { return bool(getProperties()["AVPitch"]); }

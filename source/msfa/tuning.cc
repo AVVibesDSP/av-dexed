@@ -24,7 +24,8 @@ struct StandardTuning : public TuningState {
     }
     
     virtual int32_t midinote_to_logfreq(int midinote) override {
-        return current_logfreq_table_[midinote];
+        // AV Dexed: never past the 128-note table (a transposed voice, a portamento glide).
+        return current_logfreq_table_[midinote < 0 ? 0 : (midinote > 127 ? 127 : midinote)];
     }
     
     int current_logfreq_table_[128];

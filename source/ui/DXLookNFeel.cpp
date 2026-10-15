@@ -26,6 +26,7 @@
 #include "../JuceLibraryCode/BinaryData.h"
 #include "../debugger/Logger.h"
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 
 #define REG_COLOUR(id, value) setColour(id, value)
 
@@ -142,6 +143,24 @@ void DXLookNFeel::drawLabel(Graphics& g, Label& label) {
 }
 
 void AVShowMessage(MessageBoxIconType icon, const String& title, const String& message, Component* parent) {
+    // Dialogs live on the message thread. A caller on another thread (a host
+    // restoring state) must not touch `parent` or the editor's dialog queue
+    // there: the notice follows on the message thread, as an alert window.
+    if (! MessageManager::existsAndIsCurrentThread()) {
+        MessageManager::callAsync([icon, title, message] { AVShowMessage(icon, title, message, nullptr); });
+        return;
+    }
+    // Inside an editor the notice is one of its own dialogs (blurred backdrop,
+    // follows the zoom, cannot be dragged away, waits for an open prompt).
+    auto* editor = dynamic_cast<DexedAudioProcessorEditor*>(parent);
+    if (editor == nullptr && parent != nullptr)
+        editor = parent->findParentComponentOfClass<DexedAudioProcessorEditor>();
+    if (editor != nullptr) {
+        editor->showAVNotice(title, message);
+        return;
+    }
+    // No editor (a desktop window such as the tuning table, or none open):
+    // the AV-themed alert window.
     auto* alert = new AVAlertWindow(title, message, icon, parent);
     alert->addButton(AVDexedLanguageService::getInstance().text("ok"), 0,
                      KeyPress(KeyPress::returnKey), KeyPress(KeyPress::escapeKey));
@@ -258,21 +277,32 @@ void DXLookNFeel::drawLinearSlider(Graphics& g, int x, int y, int width, int hei
         return;
     }
     // Settings fader: 6 px track in the neutral box, ocean fill, ocean thumb.
-    const auto track = Rectangle<float>(float(x + 6), float(y) + float(height) * 0.5f - 3.0f,
-                                        float(jmax(1, width - 12)), 6.0f);
+    // The track covers exactly the span sliderPos runs over. Drawn 6 px in from
+    // each end, it left the thumb 6 px past its ends (and in Settings, where
+    // the general volume rests at its maximum, cut in half by the bounds).
+    const auto area = Rectangle<float>(float(x), float(y), float(width), float(height));
+    const auto track = AVFaderTrack(area);
     AVDexedTheme::fillBox(g, track, 3.0f, slider.isMouseOverOrDragging(), 1.4f);
     const auto active = track.withWidth(jlimit(0.0f, track.getWidth(), sliderPos - track.getX()));
     g.setGradientFill(ColourGradient(AVDexedTheme::oceanTop, 0.0f, track.getY(),
                                      AVDexedTheme::oceanBottom, 0.0f, track.getBottom(), false));
     g.fillRoundedRectangle(active, 3.0f);
-    const auto thumb = Rectangle<float>(10.2f, 10.2f).withCentre({ sliderPos, track.getCentreY() });
+    const auto thumb = Rectangle<float>(AVFaderThumbRadius * 2.0f, AVFaderThumbRadius * 2.0f)
+                           .withCentre({ sliderPos, track.getCentreY() });
     g.setGradientFill(ColourGradient(AVDexedTheme::oceanHighlight, 0.0f, thumb.getY(),
                                      AVDexedTheme::oceanTop, 0.0f, thumb.getBottom(), false));
     g.fillEllipse(thumb);
     if (AVDexedTheme::showsFocus(slider)) {
+        // Around the thumb's whole travel, kept inside the slider.
+        const auto ring = area.expanded(float(AVFaderInset), 0.0f)
+                              .getIntersection(slider.getLocalBounds().toFloat().reduced(0.6f));
         g.setColour(AVDexedTheme::oceanHighlight.withAlpha(0.65f));
-        g.drawRoundedRectangle(Rectangle<float>(float(x), float(y), float(width), float(height)), 4.0f, 1.2f);
+        g.drawRoundedRectangle(ring, 4.0f, 1.2f);
     }
+}
+
+Rectangle<float> DXLookNFeel::AVFaderTrack(Rectangle<float> sliderArea) {
+    return { sliderArea.getX(), sliderArea.getCentreY() - 3.0f, jmax(1.0f, sliderArea.getWidth()), 6.0f };
 }
 
 void DXLookNFeel::positionComboBoxText(ComboBox& box, Label& label) {

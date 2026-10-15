@@ -39,6 +39,7 @@
 #include "engine/EngineOpl.h"
 #include "parameter/DexedApvts.h"
 #include "core/Program.h"
+#include "core/AVDexedLibrary.h"
 #include "util/CommandFifo.h"
 
 struct ProcessorVoice {
@@ -130,6 +131,9 @@ class DexedAudioProcessor  : public AudioProcessor, public MidiInputCallback, pu
     void handleAVSysExNow(const uint8_t* data, int size);
     void flushAVPendingSysEx();
     void timerCallback() override;
+    /** Timer, with no editor open: moves through the current bank by the steps
+        the learned previous / next CCs asked for (see consumeAVPresetSteps). */
+    void stepAVPresetsWithoutEditor();
     std::atomic<float> avAudioCpuPercent { 0.0f };
     std::atomic<float> avOutputPeakL { 0.0f }, avOutputPeakR { 0.0f };
     std::atomic<int> avActiveVoices { 0 };
@@ -174,6 +178,7 @@ public :
     struct TestMode {};
     explicit DexedAudioProcessor(TestMode);
     void flushAVPendingSysExForTesting() { flushAVPendingSysEx(); }
+    void runAVTimerTickForTesting() { timerCallback(); }
 #endif
     DexedApvts parameters;
     Program activeProgram;
@@ -188,6 +193,10 @@ public :
     bool isAVPresetModified() const noexcept;
     juce::MemoryBlock createAVNativePresetState(const juce::String& name, const juce::String& id);
     bool loadAVStateInformation(const void* data, int sizeInBytes);
+    /** Loads a .dexedpreset. Unlike a host session, a sound file never changes
+        the instrument-wide settings: "Volumen general" and the local tempo keep
+        their live values. */
+    bool loadAVNativePreset(const void* data, int sizeInBytes);
     void setAVKeyboardPitch(int value) noexcept { avKeyboardPitchPending.store(juce::jlimit(0, 16383, value), std::memory_order_relaxed); }
     void setAVKeyboardMod(int value) noexcept { avKeyboardModPending.store(juce::jlimit(0, 127, value), std::memory_order_relaxed); }
     int getAVKeyboardPitch() const noexcept { return avKeyboardPitch.load(std::memory_order_relaxed); }
@@ -210,6 +219,8 @@ public :
 
     SysexComm sysexComm;
     VoiceStatus voiceStatus;
+    /** The file of the active bank (empty for a bank without file, e.g. received
+        by SysEx). Read it freely; change it only through setActiveBank(). */
     File activeFileCartridge;
 
     /**
@@ -227,6 +238,48 @@ public :
     void setEngineType(int rs);
 
     void loadCartridge(const Cartridge& cart);
+
+    /** The bank the browser, the program list and "Guardar" refer to: loads
+        `bank` as the current cartridge, remembers `file` (empty for a bank that
+        arrived by SysEx or has no file) and reloads the per-sound settings
+        embedded in that file. The program and every parameter stay as they are.
+        The only place that changes activeFileCartridge. Not on the audio thread. */
+    void setActiveBank(const Cartridge& bank, const juce::File& file);
+
+    // MIDI learn for the previous / next sound arrows. A learned CC steps through
+    // the sounds when it goes from below 64 to 64 or above (a button or pedal
+    // press). Kept with the MIDI CC assignments (session and MIDI profiles).
+    enum class AVPresetStep { previous = 0, next = 1 };
+    /** The next CC that arrives is learned for `step`. Message thread. */
+    void startAVPresetStepLearn(AVPresetStep step);
+    void cancelAVPresetStepLearn();
+    /** The CC learned for `step`, or -1. */
+    int getAVPresetStepCC(AVPresetStep step) const noexcept;
+    void clearAVPresetStepCC(AVPresetStep step);
+    /** The step whose learn just finished (0 previous, 1 next), or -1. Message thread. */
+    int consumeAVPresetStepLearned() noexcept;
+    /** Net steps asked for by learned CCs since the last call (+1 per "next"
+        press, -1 per "previous"). The open editor consumes them (it walks the
+        Play view's list); with no editor the processor steps through the bank. */
+    int consumeAVPresetSteps() noexcept;
+
+    enum class AVBankSaveResult { saved, needsSaveAs, failed };
+    /** True when "Guardar" can write the current sound into its own slot of the
+        active bank: the file exists inside the library, is not in a read-only
+        pack, can be written, and the processor has a bank loaded from it.
+        (Whether the file still holds that bank is checked again when saving.) */
+    bool canSaveAVSoundToBank() const;
+    /** Writes the current voice (renamed to `name`, at most 10 ASCII characters
+        with accents folded; an empty name or the name it already has keeps the
+        voice's own) and its modern settings into the current slot of the active bank file,
+        holding the library lock: re-reads the file, checks it still holds the
+        loaded bank (else needsSaveAs), patches only that slot and its settings,
+        writes atomically. On success the bank is reloaded, the program stays,
+        and the baseline is recaptured. Message thread. */
+    AVBankSaveResult saveAVSoundToBank(const juce::String& name);
+    /** The current sound's modern settings (volume, pan, filter, reverb, delay,
+        chorus): values that differ from the default, in real units. */
+    AVDexedLibrary::SlotSettings captureAVSoundSettings() const;
     bool hasExternalCartridgeContext() const noexcept {
         return activeFileCartridge.getFullPathName().isNotEmpty();
     }
@@ -252,6 +305,9 @@ public :
     
     //==============================================================================
     AudioProcessorEditor* createEditor() override;
+    /** Called by the editor as it opens and closes: with no editor, learned
+        arrow presses step through the bank in render. */
+    void setAVEditorOpen(bool open) noexcept { avEditorOpen.store(open, std::memory_order_release); }
     bool hasEditor() const override;
     bool peekVoiceStatus();
     int updateProgramFromSysex(const uint8 *rawdata);
@@ -288,6 +344,10 @@ public :
     
     static File dexedAppDir;
     static File dexedCartDir;
+    /** AV Dexed's preferences (language, zoom, favourites, browser state). It was
+        called "Dexed.xml" until 0.1.0; the old file is migrated by copy. */
+    static constexpr const char* preferencesFileName = "AV Dexed Preferences.xml";
+    static File getPreferencesFile() { return dexedAppDir.getChildFile(preferencesFileName); }
     int lastActiveVoice = 0;
 
     void setZoomFactor(float factor);
@@ -340,6 +400,63 @@ private:
     std::atomic<bool> avPresetContextCurrent { false };
     std::atomic<bool> avKnownPresetOrigin { true };
     std::atomic<uint64_t> avPresetBaseline { 0 };
+    // Version of getAVMusicalFingerprint()'s recipe, saved with the baseline.
+    // 3: the parameter the mod wheel drives is left out, and lists saved
+    // before CC1 → Cutoff get it on restore (an older baseline cannot match).
+    static constexpr int avPresetBaselineFormat = 4;
+    // True while loadAVNativePreset restores a sound file: its mapping list
+    // replaces the live one, but the sound arrows' CCs stay as they are.
+    // Message thread only.
+    bool avLoadingSoundFile = false;
+
+    // Per-sound modern settings of the active bank (volume, pan, filter and the
+    // three effects), read from the settings embedded in its .syx. Program
+    // changes arrive on the audio thread (MIDI, host program parameter), so the
+    // table is prepared on the message thread and only copied in under the spin
+    // lock; the reader copies one slot out. No file access, allocation or
+    // blocking lock on the audio thread.
+    static constexpr int AVSoundParameterCount = 24;
+    struct AVSoundSlot {
+        juce::uint64 voice = 0;          // hash of the packed voice the settings belong to
+        bool hasSettings = false;
+        std::array<float, AVSoundParameterCount> values {};   // normalised targets (defaults where not stored)
+    };
+    using AVSoundTable = std::array<AVSoundSlot, 32>;
+    std::array<juce::RangedAudioParameter*, AVSoundParameterCount> avSoundParameters {};
+    // Instrument-wide settings: never part of a sound, never "Modified".
+    juce::RangedAudioParameter* avOutputParameter = nullptr;
+    juce::RangedAudioParameter* avDelayTempoParameter = nullptr;
+    // False after Init or a single voice received by SysEx: the edit buffer no
+    // longer holds the bank slot's sound, so "Guardar" must not write over it.
+    std::atomic<bool> avSoundFromBankSlot { true };
+    // Whether an editor is open, for the audio thread (getActiveEditor() is not
+    // for that thread): learned arrow presses with no editor step in render.
+    std::atomic<bool> avEditorOpen { false };
+    std::atomic<bool> avHostProgramDirty { false };
+    AVSoundTable avSoundTable {};
+    juce::SpinLock avSoundTableLock;
+    void resolveAVSoundParameters();
+    AVSoundTable makeAVSoundTable(const AVDexedLibrary::BankSettings& settings) const;
+    AVSoundTable readAVSoundTable(const juce::File& bankFile) const;
+    void installAVActiveBank(const Cartridge& bank, const juce::File& file, const AVSoundTable& table);
+    void applyAVSoundSettings(int program);
+    /** Packs `voice` into `slot` of `bank` only when it differs from what the
+        slot holds (same rule for "Guardar" and captureAVSoundSettings()). */
+    static bool packAVVoiceIfChanged(Cartridge& bank, int slot, const Program& voice);
+
+    // Hosts may call setCurrentProgram(restored) right after setStateInformation;
+    // the session already holds that sound's settings, so that one call keeps
+    // them. Armed by a host restore, consumed by the next program change or
+    // expired by the 30 Hz timer after about a second. It only holds for the
+    // restored bank (its voices' hash): the same slot of another bank (a click
+    // in the browser, a SysEx bank) gets its own settings.
+    static constexpr int AVRestoreGuardTicks = 30;
+    std::atomic<int> avRestoreGuardProgram { -1 };
+    std::atomic<juce::uint64> avRestoreGuardBank { 0 };
+    std::atomic<int> avRestoreGuardTicksLeft { 0 };
+    void armAVRestoreGuard() noexcept;
+    void tickAVRestoreGuard() noexcept;
+
     int32_t nextKeydownSeq;;
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DexedAudioProcessor)
