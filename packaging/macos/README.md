@@ -5,7 +5,8 @@
 - `AV Dexed <version> macOS.dmg` is the only file to publish. It holds, in this order:
   `1 - HOW TO OPEN - CÓMO ABRIR.txt` (the short Gatekeeper steps, for those who read nothing else),
   `2 - AV Dexed <version>.pkg`, `3 - READ ME - LÉEME.txt` and `4 - Uninstall - Desinstalar.command`. The texts
-  use these names. Sources: `dmg/how-to-open.txt`, `dmg/read-me.txt`, `dmg/uninstall.command`.
+  use these names. Sources: `dmg/how-to-open.txt`, `dmg/read-me.txt`, `dmg/uninstall.command`. On a GitHub
+  release the spaces of the file name become dots (`AV.Dexed.<version>.macOS.dmg`).
 - `AV Dexed <version>.pkg` (also left next to the `.dmg`) lets the user choose the formats (Standalone app,
   VST3, AU, CLAP) and installs each one where macOS looks for it (administrator password). Then it removes the
   download quarantine and signs the installed bundles locally (ad hoc), because AV Dexed is not notarized yet.
