@@ -9,10 +9,14 @@ AV Dexed is a free, unofficial fork of [Dexed](https://github.com/asb2m10/dexed)
 Pascal Gauthier (Digital Suburban). It keeps Dexed's FM engine and all of its classic editing, and adds a simpler
 interface for people who just want to play and sound good.
 
-**Version 0.2.0 — public preview.** macOS: download the `.dmg` from
-[Releases](https://github.com/AVVibesDSP/av-dexed/releases/latest) (macOS 11 or later, Intel and Apple silicon; app, VST3, AU
-and CLAP). It is not signed or notarized by Apple yet: open `1 - HOW TO OPEN - CÓMO ABRIR.txt` in the disk image
-first. Windows and Linux: build from source (on Windows the build also makes an installer, see [Windows](#windows)).
+**Version 0.2.0 — public preview.** Download it from
+[Releases](https://github.com/AVVibesDSP/av-dexed/releases/latest):
+
+- **macOS:** the `.dmg` (macOS 11 or later, Intel and Apple silicon; app, VST3, AU and CLAP). It is not signed or
+  notarized by Apple yet: open `1 - HOW TO OPEN - CÓMO ABRIR.txt` in the disk image first.
+- **Windows:** the `-win.exe` installer (Windows 10 or 11, x64; app, VST3 and CLAP). It is not signed yet: if Windows
+  says "Windows protected your PC", choose *More info*, then *Run anyway*.
+- **Linux:** build from source.
 
 <p align="center">
   <img src="doc/images/av-dexed-play.png" alt="AV Dexed Play view: sound browser, FM algorithm and effect knobs" width="49%">
@@ -132,11 +136,14 @@ AV Dexed es un fork **gratuito y no oficial** de [Dexed](https://github.com/asb2
 DX7 de Pascal Gauthier (Digital Suburban). Conserva el motor FM de Dexed y toda su edición clásica, y agrega una
 interfaz más sencilla para quien solo quiere tocar y que suene bien.
 
-**Versión 0.2.0, vista previa pública.** macOS: descarga el `.dmg` de
-[Releases](https://github.com/AVVibesDSP/av-dexed/releases/latest) (macOS 11 o posterior, Intel y Apple silicon; app,
-VST3, AU y CLAP). Todavía no está firmado ni notarizado por Apple: abre primero
-`1 - HOW TO OPEN - CÓMO ABRIR.txt`. Windows y Linux: compílalo desde el código (en Windows la compilación también
-crea un instalador, ver [Windows](#windows)).
+**Versión 0.2.0, vista previa pública.** Descárgala de
+[Releases](https://github.com/AVVibesDSP/av-dexed/releases/latest):
+
+- **macOS:** el `.dmg` (macOS 11 o posterior, Intel y Apple silicon; app, VST3, AU y CLAP). Todavía no está firmado ni
+  notarizado por Apple: abre primero `1 - HOW TO OPEN - CÓMO ABRIR.txt` dentro de la imagen de disco.
+- **Windows:** el instalador `-win.exe` (Windows 10 u 11, x64; app, VST3 y CLAP). Todavía no está firmado: si Windows
+  dice «Windows protegió tu PC», elige *Más información* y luego *Ejecutar de todas formas*.
+- **Linux:** compílalo desde el código.
 
 AV Dexed es una versión modificada de Dexed 1.1.0 (commit base `eebb748`), modificada por AV Vibes desde octubre de
 2026; el historial de git muestra cada cambio. No está afiliado ni cuenta con el respaldo de Pascal Gauthier / Digital
