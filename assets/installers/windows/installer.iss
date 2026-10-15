@@ -31,8 +31,9 @@ DefaultDirName={autopf}\{#Name}\
 DefaultGroupName={#Name}
 DisableDirPage=no
 DisableProgramGroupPage=yes
-; English or Spanish, following the Windows language.
-ShowLanguageDialog=auto
+; The first step chooses English or Spanish, with English selected.
+ShowLanguageDialog=yes
+LanguageDetectionMethod=none
 #ifdef License
 LicenseFile={#License}
 #endif

@@ -92,8 +92,8 @@ Build the regression tests in another folder, because they change the plugin bui
 ASIO drivers as well as Windows Audio and DirectSound (JUCE's bundled ASIO SDK, under its GPLv3 option).
 
 With [Inno Setup](https://jrsoftware.org/isinfo.php) 6.3 or newer installed, add `--target installer` to the build line
-to make `build-release/installer/AVDexed-<version>-win.exe` (and a `.zip` of the same files). In English or Spanish,
-it installs the VST3 in `C:\Program Files\Common Files\VST3`, the CLAP in `C:\Program Files\Common Files\CLAP` and the
+to make `build-release/installer/AVDexed-<version>-win.exe` (and a `.zip` of the same files). Its first step chooses
+English or Spanish; it installs the VST3 in `C:\Program Files\Common Files\VST3`, the CLAP in `C:\Program Files\Common Files\CLAP` and the
 app in `C:\Program Files\AV Dexed`. Setup and Uninstall never touch the sounds and settings in
 `%APPDATA%\AV Vibes\AV Dexed`. The installer is not signed yet: if Windows says "Windows protected your PC", choose
 *More info*, then *Run anyway*.
