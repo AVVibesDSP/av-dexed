@@ -17,6 +17,9 @@ interface for people who just want to play and sound good.
 - **Windows:** the `-win.exe` installer (Windows 10 or 11, x64; app, VST3 and CLAP). It is not signed yet: if Windows
   says "Windows protected your PC", choose *More info*, then *Run anyway*.
 - **Linux:** build from source.
+- **Sound expansions:** `AV-Dexed-Expansions.zip`, 7 free banks (DX7 format, 32 sounds each). Unzip it, drag the
+  `AV Dexed Expansions` folder (or the 7 `.syx` files together) onto AV Dexed, type a name for the folder and click
+  *Import*: the banks appear in the browser, organized in that folder.
 
 <p align="center">
   <img src="doc/images/screenshot-play.png" alt="AV Dexed Play view: sound browser, FM algorithm and effect knobs" width="49%">
@@ -154,6 +157,9 @@ interfaz más sencilla para quien solo quiere tocar y que suene bien.
 - **Windows:** el instalador `-win.exe` (Windows 10 u 11, x64; app, VST3 y CLAP). Todavía no está firmado: si Windows
   dice «Windows protegió tu PC», elige *Más información* y luego *Ejecutar de todas formas*.
 - **Linux:** compílalo desde el código.
+- **Expansiones de sonidos:** `AV-Dexed-Expansions.zip`, 7 bancos gratis (formato DX7, 32 sonidos cada uno).
+  Descomprímelo, arrastra la carpeta `AV Dexed Expansions` (o los 7 `.syx` juntos) a AV Dexed, escribe un nombre para
+  la carpeta y haz clic en *Import*: los bancos aparecen en el navegador, organizados en esa carpeta.
 
 AV Dexed es una versión modificada de Dexed 1.1.0 (commit base `eebb748`), modificada por AV Vibes desde octubre de
 2026; el historial de git muestra cada cambio. No está afiliado ni cuenta con el respaldo de Pascal Gauthier / Digital
