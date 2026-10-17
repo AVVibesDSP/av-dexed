@@ -9,7 +9,7 @@ AV Dexed is a free, unofficial fork of [Dexed](https://github.com/asb2m10/dexed)
 Pascal Gauthier (Digital Suburban). It keeps Dexed's FM engine and all of its classic editing, and adds a simpler
 interface for people who just want to play and sound good.
 
-**Version 0.2.0 — public preview.** Download it from
+**Version 0.2.1 — public preview.** Download it from
 [Releases - DESCARGA AQUÍ](https://github.com/AVVibesDSP/av-dexed/releases/latest):
 
 - **macOS:** the `.dmg` (macOS 11 or later, Intel and Apple silicon; app, VST3, AU and CLAP). It is not signed or
@@ -150,7 +150,7 @@ AV Dexed es un fork **gratuito y no oficial** de [Dexed](https://github.com/asb2
 DX7 de Pascal Gauthier (Digital Suburban). Conserva el motor FM de Dexed y toda su edición clásica, y agrega una
 interfaz más sencilla para quien solo quiere tocar y que suene bien.
 
-**Versión 0.2.0, vista previa pública.** Descárgala de
+**Versión 0.2.1, vista previa pública.** Descárgala de
 [Releases](https://github.com/AVVibesDSP/av-dexed/releases/latest):
 
 - **macOS:** el `.dmg` (macOS 11 o posterior, Intel y Apple silicon; app, VST3, AU y CLAP). Todavía no está firmado ni
