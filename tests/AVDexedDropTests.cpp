@@ -208,6 +208,19 @@ bool runAVDexedDropTests()
         passed &= expect(AVDexedStandaloneAccess::AVSystemOpenPaths({}).isEmpty()
                              && AVDexedStandaloneAccess::AVSystemOpenPaths("-NSDocumentRevisionsDebugMode YES").isEmpty(),
                          "a command line without files gives nothing");
+        // A relative path (a launch from a terminal, ".\sonido.avdexpreset" on
+        // Windows) is taken from the folder the app was started in.
+        const auto separator = File::getSeparatorString();
+        const auto inOutside = outside.getFileName() + separator + sound.getFileName();
+        const auto relativePaths = AVDexedStandaloneAccess::AVSystemOpenPaths(
+            inOutside.quoted() + " " + ("." + separator + inOutside).quoted() + " missing.avdexpreset -psn_0_123 "
+                + outside.getFileName(),
+            outside.getParentDirectory());
+        passed &= expect(relativePaths.size() == 2 && relativePaths[0] == path(sound) && relativePaths[1] == path(outside),
+                         "relative paths are taken from the starting folder, once each, as full paths");
+        passed &= expect(AVDexedStandaloneAccess::AVSystemOpenPaths(sound.getFileName().quoted(), outside.getParentDirectory()).isEmpty()
+                             && AVDexedStandaloneAccess::AVSystemOpenPaths("-NSDocumentRevisionsDebugMode YES", outside).isEmpty(),
+                         "a relative name that is not there, or a flag, gives nothing");
 #if ! JUCE_WINDOWS
         // A quote inside a name arrives escaped (\"), with and without spaces
         // around it. Windows allows no quote in a file name.

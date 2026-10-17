@@ -21,17 +21,23 @@ inline std::function<void(const juce::StringArray&)> AVOpenFiles;
 
 /** The paths of a command line as JUCE hands it over: space separated, quoted
     when they hold spaces, a quote inside a name escaped as \" (macOS:
-    quotedIfContainsSpaces). The absolute ones that exist, in order, once each;
-    flags and the "-psn_…" token macOS adds are left out. */
-inline juce::StringArray AVSystemOpenPaths(const juce::String& commandLine) {
+    quotedIfContainsSpaces). The ones that exist, in order, once each, as full
+    paths: a relative one (a Windows or Linux launch from a terminal, such as
+    .\sonido.avdexpreset) is taken from `base`, the folder the app was started
+    in. Flags and the "-psn_…" token macOS adds are left out. */
+inline juce::StringArray AVSystemOpenPaths(const juce::String& commandLine,
+                                           const juce::File& base = juce::File::getCurrentWorkingDirectory()) {
     juce::StringArray paths;
     juce::String token;
     bool inQuotes = false;
-    const auto endToken = [&paths, &token] {
-        const auto path = token.trim();
+    const auto endToken = [&paths, &token, &base] {
+        const auto text = token.trim();
         token.clear();
-        if (path.isNotEmpty() && juce::File::isAbsolutePath(path) && juce::File(path).exists())
-            paths.addIfNotAlreadyThere(path);
+        if (text.isEmpty() || (! juce::File::isAbsolutePath(text) && text.startsWithChar('-')))
+            return;
+        const auto file = juce::File::isAbsolutePath(text) ? juce::File(text) : base.getChildFile(text);
+        if (file.exists())
+            paths.addIfNotAlreadyThere(file.getFullPathName());
     };
     for (auto text = commandLine.getCharPointer(); ! text.isEmpty();) {
         const auto c = text.getAndAdvance();
