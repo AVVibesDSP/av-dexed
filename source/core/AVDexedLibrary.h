@@ -221,6 +221,11 @@ bool isSoundFile(const juce::File& file);
     level; a symbolic link back into the library is not entered twice. */
 juce::Array<juce::File> findSoundFiles(const juce::File& root);
 
+// Last-modified time in milliseconds. JUCE reports whole seconds on Linux, too
+// coarse to tell two saves in the same second apart; this reads the filesystem's
+// sub-second time there and defers to JUCE everywhere else.
+juce::int64 modificationMillis(const juce::File& file);
+
 /** A cheap fingerprint of the library's shape for polling: relative path and
     modification time of every folder at any depth, plus name, size and time of
     the sound files loose in the root. No file is opened. The root's own time is

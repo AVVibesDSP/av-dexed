@@ -4,6 +4,10 @@
 #include "AVDexedLibrary.h"
 #include <set>
 
+#if JUCE_LINUX
+ #include <sys/stat.h>
+#endif
+
 #if JUCE_WINDOWS
  // removeToTrash() hands items to the Recycle Bin through IFileOperation, which
  // can refuse a permanent delete; JUCE's File::moveToTrash() cannot.
@@ -843,19 +847,29 @@ Array<File> findSoundFiles(const File& root) {
     return files;
 }
 
+int64 modificationMillis(const File& file) {
+   #if JUCE_LINUX
+    struct stat info;
+    if (::stat(file.getFullPathName().toRawUTF8(), &info) == 0)
+        return (int64) info.st_mtim.tv_sec * 1000 + (int64) (info.st_mtim.tv_nsec / 1000000);
+   #endif
+    return file.getLastModificationTime().toMilliseconds();
+}
+
 String librarySignature(const File& root) {
     if (! root.isDirectory()) return {};
     StringArray lines;
-    // File times come from File (milliseconds): the directory iterator's own
-    // times are whole seconds on macOS, too coarse for a save right after a load.
+    // File times come from modificationMillis (milliseconds): the directory iterator's own
+    // times are whole seconds on macOS, and JUCE's File times are whole seconds on Linux,
+    // too coarse for a save right after a load.
     for (const auto& entry : RangedDirectoryIterator(root, false, "*", File::findFiles))
         if (isSoundFile(entry.getFile()))
             lines.add(entry.getFile().getFileName() + "|" + String(entry.getFileSize()) + "|"
-                      + String(entry.getFile().getLastModificationTime().toMilliseconds()));
+                      + String(modificationMillis(entry.getFile())));
     forEachFolder(root, true, [&lines, &root](const File& folder) {
         // A folder's time changes when an entry is added, removed or renamed in
         // it, including the atomic rename that every library write ends with.
-        lines.add(folder.getRelativePathFrom(root) + "/|" + String(folder.getLastModificationTime().toMilliseconds()));
+        lines.add(folder.getRelativePathFrom(root) + "/|" + String(modificationMillis(folder)));
     });
     lines.sort(false);
     const auto text = lines.joinIntoString("\n");

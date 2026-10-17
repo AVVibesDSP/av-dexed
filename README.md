@@ -16,7 +16,7 @@ interface for people who just want to play and sound good.
   notarized by Apple yet: open `1 - HOW TO OPEN - CÓMO ABRIR.txt` in the disk image first.
 - **Windows:** the `-win.exe` installer (Windows 10 or 11, x64; app, VST3 and CLAP). It is not signed yet: if Windows
   says "Windows protected your PC", choose *More info*, then *Run anyway*.
-- **Linux:** build from source.
+- **Linux:** build from source ([instructions](#linux)).
 - **Sound expansions:** `AV-Dexed-Expansions.zip`, 7 free banks (DX7 format, 32 sounds each). Unzip it, drag the
   `AV Dexed Expansions` folder (or the 7 `.syx` files together) onto AV Dexed, type a name for the folder and click
   *Import*: the banks appear in the browser, organized in that folder.
@@ -91,8 +91,28 @@ Targets: Standalone, VST3 and CLAP, plus AU on macOS. Results are in `build/sour
 copied into your plugin folders unless you add `-DDEXED_COPY_PLUGIN_AFTER_BUILD=ON`. The `libs/JUCE` submodule is
 JUCE 8.0.14; to use another JUCE 8 checkout, pass `-DDEXED_JUCE_PATH=/path/to/JUCE`. Add `-DDEXED_BUILD_TESTS=ON` to
 build the regression tests. AV Dexed is developed and tested on macOS and also builds and runs on Windows 11 (see
-below); Linux builds are untested. `Dexed.jucer` is not maintained — use CMake. The macOS installer is made with
+below) and on Linux (see below). `Dexed.jucer` is not maintained — use CMake. The macOS installer is made with
 [packaging/macos/build_installer.sh](packaging/macos/README.md).
+
+### Linux
+
+Tested on Ubuntu 24.04 (aarch64, Raspberry Pi 5) with GCC 13 and CMake 3.28; the sources have no other Linux-specific
+requirements, so x86-64 should build the same way. Install the build dependencies first (Debian/Ubuntu names):
+
+```sh
+sudo apt install build-essential cmake pkg-config libasound2-dev libjack-jackd2-dev libfreetype-dev \
+    libfontconfig1-dev libgl-dev libx11-dev libxext-dev libxrandr-dev libxinerama-dev libxcursor-dev libgtk-3-dev
+```
+
+Then build as above. JACK support is added when the JACK headers are found; pass `-DDEXED_NO_ALSA=ON` to leave ALSA
+out. The `installer` target packs the standalone app, the VST3 and the CLAP into `build/installer/AVDexed-<version>-lnx.zip`:
+
+```sh
+cmake --build build --target installer
+```
+
+To use the plugins, copy `AV Dexed.vst3` to `~/.vst3/` and `AV Dexed.clap` to `~/.clap/` (or to `/usr/lib/vst3`,
+`/usr/lib/clap`). Sounds and settings live in `~/.local/share/AV Vibes/AV Dexed` (or under `$XDG_DATA_HOME`).
 
 ### Windows
 
