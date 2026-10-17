@@ -6,8 +6,8 @@
 // folders, DX7 banks and mixes of them, through the real editor and its
 // in-editor dialogs, in an isolated library under /tmp. The dialogs answer and
 // the copies run on the message thread, which the test pumps between steps.
-// That pumping is macOS-only (as the UI evidence): elsewhere only the
-// synchronous checks run.
+// That pumping is macOS and Windows only: elsewhere only the synchronous
+// checks run.
 
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
@@ -38,6 +38,24 @@ void pump(int milliseconds)
     const auto deadline = juce::Time::getMillisecondCounterHiRes() + milliseconds;
     while (juce::Time::getMillisecondCounterHiRes() < deadline)
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, true);
+}
+#elif JUCE_WINDOWS
+}
+namespace juce::detail {
+// JUCE's own step of runDispatchLoopUntil (juce_Messaging_windows.cpp), which
+// JUCE_MODAL_LOOPS_PERMITTED=0 leaves out.
+bool dispatchNextMessageOnSystemQueue(bool returnIfNoPendingMessages);
+}
+namespace {
+constexpr bool canPump = true;
+/** Runs the message thread for a while: a console app has no message loop, so
+    the thread's Windows messages (JUCE's queue, its timers) are dispatched here. */
+void pump(int milliseconds)
+{
+    const auto deadline = juce::Time::getMillisecondCounterHiRes() + milliseconds;
+    while (juce::Time::getMillisecondCounterHiRes() < deadline)
+        if (! juce::detail::dispatchNextMessageOnSystemQueue(true))
+            juce::Thread::sleep(1);
 }
 #else
 constexpr bool canPump = false;
@@ -190,7 +208,9 @@ bool runAVDexedDropTests()
         passed &= expect(AVDexedStandaloneAccess::AVSystemOpenPaths({}).isEmpty()
                              && AVDexedStandaloneAccess::AVSystemOpenPaths("-NSDocumentRevisionsDebugMode YES").isEmpty(),
                          "a command line without files gives nothing");
-        // A quote inside a name arrives escaped (\"), with and without spaces around it.
+#if ! JUCE_WINDOWS
+        // A quote inside a name arrives escaped (\"), with and without spaces
+        // around it. Windows allows no quote in a file name.
         const auto quotedName = outside.getChildFile("Mi \"Piano\" favorito.avdexpreset");
         const auto quotedNoSpace = outside.getChildFile("12\".avdexpreset");
         passed &= expect(writeSound(quotedName, "Comillas") && writeSound(quotedNoSpace, "Pulgadas"),
@@ -201,9 +221,10 @@ bool runAVDexedDropTests()
         passed &= expect(quotedPaths.size() == 3 && quotedPaths[0] == path(quotedName) && quotedPaths[1] == path(quotedNoSpace)
                              && quotedPaths[2] == path(sound),
                          "names with a quote inside arrive as the system escapes them");
+#endif
 
         if (! canPump) {
-            std::cout << "Drop checks: the dialogs and copies run on macOS only.\n";
+            std::cout << "Drop checks: the dialogs and copies run on macOS and Windows only.\n";
         } else {
             passed &= expect(pumpUntil([&] { return ! editor->playView.libraryIndexing; }, 15000), "the library is indexed");
             const auto userPresets = root.getChildFile(AVDexedLibrary::userPresetsFolderName);
