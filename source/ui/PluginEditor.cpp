@@ -232,6 +232,28 @@ AVImportFiles avCollectImportFiles(const juce::Array<juce::File>& items) {
     return found;
 }
 
+/** The footer line for a drop of files the library already holds: their folder
+    when they share one ("Ya estaba en «Pianos»"; "Sin carpeta" for the root),
+    else the general line. */
+juce::String avAlreadyInLibraryNotice(const AVImportFiles& found, const juce::File& root) {
+    auto& language = AVDexedLanguageService::getInstance();
+    juce::File folder;
+    bool shared = true;
+    int count = 0;
+    for (const auto* list : { &found.banks, &found.presets })
+        for (const auto& file : *list) {
+            ++count;
+            const auto parent = file.getParentDirectory();
+            if (folder == juce::File()) folder = parent;
+            else if (parent != folder) shared = false;
+        }
+    const bool many = count > 1;
+    // Loose in the root: no folder to name ("Sin carpeta" would read as one).
+    if (! shared || folder == juce::File() || folder == root)
+        return language.text(many ? "alreadyInLibraryMany" : "alreadyInLibrary");
+    return language.format(many ? "alreadyInFolderMany" : "alreadyInFolder", {{"folder", avFolderDisplayName(folder, root)}});
+}
+
 // Footer notice timing (ms): GOZO's toast fades, held for about 3 s in all.
 constexpr double noticeFadeIn = 83.0, noticeHoldUntil = 2800.0, noticeFadeOut = 200.0, helpFadeIn = 117.0;
 
@@ -545,8 +567,13 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     addKeyListener(this);
     addMouseListener(&focusModality, true);
     Desktop::getInstance().addFocusChangeListener(this);
-    if (JUCEApplicationBase::isStandaloneApp())
+    if (JUCEApplicationBase::isStandaloneApp()) {
         AVDexedStandaloneAccess::AVShowProductSettings = [this] { parmShow(); };
+        Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+        AVDexedStandaloneAccess::AVOpenFiles = [safeThis](const StringArray& paths) {
+            if (safeThis != nullptr) safeThis->AVOpenFilesFromSystem(paths);
+        };
+    }
     updateUI();
     startTimer(20);
     AVPresetStepPoll.startTimer(20);
@@ -555,8 +582,10 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
 
 DexedAudioProcessorEditor::~DexedAudioProcessorEditor() {
     processor->setAVEditorOpen(false);
-    if (JUCEApplicationBase::isStandaloneApp())
+    if (JUCEApplicationBase::isStandaloneApp()) {
         AVDexedStandaloneAccess::AVShowProductSettings = {};
+        AVDexedStandaloneAccess::AVOpenFiles = {};
+    }
     PopupMenu::dismissAllActiveMenus();  // their LookAndFeel belongs to this editor
     removeMouseListener(&focusModality);
     Desktop::getInstance().removeFocusChangeListener(this);
@@ -858,6 +887,9 @@ void DexedAudioProcessorEditor::importBanks(const Array<File>& files) {
             if (! avIsInVisibleLibrary(file, root)) outside.add(file);
     if (outside.isEmpty()) {
         // Everything is in the library already: nothing to copy, nothing to ask.
+        // The footer says so: a sound dragged from its own library folder just
+        // loads, which otherwise looks as if the drop had been ignored.
+        showAVFooterNotice(avAlreadyInLibraryNotice(found, root));
         AVOpenImportedSounds(found.banks, found.presets, {}, {}, {});
         return;
     }
@@ -1085,18 +1117,7 @@ void DexedAudioProcessorEditor::parmShow() {
     Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
     AVDexedSettingsPanel::AVCallbacks actions;
     actions.openAudioSettings = AVDexedStandaloneAccess::AVOpenAudioSettings;
-    actions.close = [safeThis] {
-        if (!safeThis || !safeThis->AVSettingsOverlay) return;
-        // Hide immediately; destroy after the button callback has unwound.
-        Desktop::getInstance().getAnimator().cancelAnimation(safeThis->AVSettingsOverlay.get(), false);
-        safeThis->AVSettingsOverlay->exitModalState(0);
-        // GOZO settings timing: in ~6 frames, out ~8 frames.
-        Desktop::getInstance().getAnimator().fadeOut(safeThis->AVSettingsOverlay.get(), 133);
-        Timer::callAfterDelay(1, [safeThis] {
-            if (safeThis && safeThis->AVSettingsOverlay && !safeThis->AVSettingsOverlay->isVisible())
-                safeThis->AVSettingsOverlay.reset();
-        });
-    };
+    actions.close = [safeThis] { if (safeThis) safeThis->AVCloseSettings(false); };
     actions.applyInstrumentSettings = [safeThis](ParamDialog* dialog) {
         if (!safeThis) return;
         float scale = safeThis->processor->getZoomFactor();
@@ -1323,11 +1344,33 @@ void DexedAudioProcessorEditor::showAVNotice(const String& title, const String& 
 bool DexedAudioProcessorEditor::AVCanShowNoticeNow() const {
     if (hasAVPromptOpen())
         return false;
-    const int modal = Component::getNumCurrentlyModalComponents();
-    if (modal == 0)
+    if (Component::getNumCurrentlyModalComponents() == 0)
         return true;
     // Settings is a full page, not a dialog: its own errors may show over it.
-    return modal == 1 && AVSettingsOverlay != nullptr && Component::getCurrentlyModalComponent() == AVSettingsOverlay.get();
+    return AVOnlySettingsIsModal();
+}
+
+bool DexedAudioProcessorEditor::AVOnlySettingsIsModal() const {
+    return Component::getNumCurrentlyModalComponents() == 1 && AVSettingsOverlay != nullptr
+        && Component::getCurrentlyModalComponent() == AVSettingsOverlay.get();
+}
+
+void DexedAudioProcessorEditor::AVCloseSettings(bool instantly) {
+    if (! AVSettingsOverlay || ! AVSettingsOverlay->isVisible())
+        return;
+    // Hide now; destroy after the button callback (or the drop) has unwound.
+    Desktop::getInstance().getAnimator().cancelAnimation(AVSettingsOverlay.get(), false);
+    if (AVSettingsOverlay->isCurrentlyModal())
+        AVSettingsOverlay->exitModalState(0);
+    if (instantly)
+        AVSettingsOverlay->setVisible(false);
+    else
+        Desktop::getInstance().getAnimator().fadeOut(AVSettingsOverlay.get(), 133);   // GOZO settings timing: in ~6 frames, out ~8 frames
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    Timer::callAfterDelay(1, [safeThis] {
+        if (safeThis && safeThis->AVSettingsOverlay && !safeThis->AVSettingsOverlay->isVisible())
+            safeThis->AVSettingsOverlay.reset();
+    });
 }
 
 void DexedAudioProcessorEditor::AVPumpNotices() {
@@ -2046,7 +2089,8 @@ void DexedAudioProcessorEditor::resetZoomFactor() {
 
 bool DexedAudioProcessorEditor::isInterestedInFileDrag (const StringArray &files) {
     // Not while a dialog is open: the drop would be swallowed or close it.
-    if (hasAVPromptOpen() || isCurrentlyBlockedByAnotherModalComponent()) return false;
+    // Settings is a page, not a dialog: it gives way to the drop.
+    if (hasAVPromptOpen() || (isCurrentlyBlockedByAnotherModalComponent() && ! AVOnlySettingsIsModal())) return false;
     // Any mix of banks, presets and folders is added to the library; a tuning
     // file loads on its own.
     if (avAllImportable(files)) return true;
@@ -2069,6 +2113,16 @@ void DexedAudioProcessorEditor::fileDragExit(const StringArray&) {
 void DexedAudioProcessorEditor::filesDropped (const StringArray &files, int, int) {
     // JUCE does not call fileDragExit after a drop.
     AVDropOverlay.hide(false);
+    // Settings (JUCE already took it out of its modal state for the drop) goes
+    // away at once: the import's question photographs the editor behind it.
+    AVCloseSettings(true);
+    // A drop from the Finder leaves the Finder in front: the folder question
+    // would open behind it, with Return and the typed name going to the Finder.
+    // Come to the front (in a host, the host comes).
+    if (auto* peer = getPeer()) {
+        Process::makeForegroundProcess();
+        peer->toFront(true);
+    }
     if (avAllImportable(files)) {
         Array<File> items;
         for (const auto& path : files) items.add(File(path));
@@ -2096,6 +2150,45 @@ void DexedAudioProcessorEditor::filesDropped (const StringArray &files, int, int
         processor->applySCLTuning(file);
     else
         processor->applyKBMMapping(file);
+}
+
+void DexedAudioProcessorEditor::AVOpenFilesFromSystem(const StringArray& paths) {
+    // What a drop on the window takes: banks, sounds and folders of them. A
+    // tuning file is not a document of the app; anything else is left alone.
+    for (const auto& path : paths)
+        if (File::isAbsolutePath(path) && File(path).exists()
+            && (avIsBankPath(path) || avIsPresetPath(path) || File(path).isDirectory()))
+            AVPendingSystemFiles.addIfNotAlreadyThere(path);
+    AVOpenPendingSystemFiles();
+}
+
+void DexedAudioProcessorEditor::AVOpenPendingSystemFiles() {
+    if (AVPendingSystemFiles.isEmpty())
+        return;
+    // Settings is a page, not a dialog: it gives way to the import's question.
+    if (AVOnlySettingsIsModal())
+        AVCloseSettings(true);
+    // A dialog must finish first, never stacked on: one that is open, one whose
+    // result has not run yet (it arrives asynchronously and may open the next
+    // dialog, "save changes" after an import), or any other modal thing (a
+    // menu, a file chooser). Look again shortly, with a single poll however
+    // many files arrive; the files wait as long as it takes.
+    if (! AVPrompts.empty() || AVInPromptResult || isCurrentlyBlockedByAnotherModalComponent()) {
+        if (AVPendingSystemPollPending)
+            return;
+        AVPendingSystemPollPending = true;
+        Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+        Timer::callAfterDelay(300, [safeThis] {
+            if (safeThis == nullptr) return;
+            safeThis->AVPendingSystemPollPending = false;
+            safeThis->AVOpenPendingSystemFiles();
+        });
+        return;
+    }
+    Array<File> items;
+    for (const auto& path : AVPendingSystemFiles) items.add(File(path));
+    AVPendingSystemFiles.clear();
+    importBanks(items);
 }
 
 void DexedAudioProcessorEditor::AVFocusModality::mouseDown(const MouseEvent& event) {

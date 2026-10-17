@@ -48,6 +48,7 @@ interface for people who just want to play and sound good.
   Chorus.
 - **A library made of real folders:** every folder in the browser is a folder on disk, and the other way round. Drop
   `.syx` banks, `.avdexpreset` sounds or whole folders on AV Dexed (or use *Import bank*) and they are copied into it.
+  On macOS the app also opens them from the Finder: double-click a sound, or drop files or a folder on its Dock icon.
 - **Advanced view:** every classic Dexed parameter, redrawn.
 - **Built-in effects:** reverb, tempo-synced delay and chorus. Each sound keeps its own volume, pan, cutoff and
   effects, also the voices of a `.syx` bank (see below).
@@ -170,7 +171,8 @@ Suburban. Reporta los problemas de AV Dexed en este repositorio, no en el proyec
 - **Biblioteca de carpetas reales:** cada carpeta del buscador es una carpeta en el disco
   (`~/Library/Application Support/AV Vibes/AV Dexed`; en Windows, `%APPDATA%\AV Vibes\AV Dexed`), y al revés.
   Arrastra bancos `.syx`, sonidos `.avdexpreset` o carpetas completas sobre AV Dexed (o usa *Importar banco*) y se
-  copian ahí.
+  copian ahí. En macOS la app también los abre desde el Finder: doble clic en un sonido, o suelta archivos o una
+  carpeta sobre su ícono del Dock.
 - **Cada sonido guarda su volumen, paneo, corte y efectos**, también las voces de un banco `.syx` (van dentro del
   mismo archivo, en un mensaje SysEx extra que un DX7 ignora).
 - **Advanced:** todos los parámetros clásicos de Dexed.

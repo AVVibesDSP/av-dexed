@@ -162,6 +162,16 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     std::unique_ptr<juce::ThreadPool> AVAdoptionPool;
     void AVAdoptExternalSoundsOnce();
     AVDexedDropOverlay AVDropOverlay;
+    // Files the system asked to open while a dialog was up: they wait (one
+    // poll at a time, nothing is ever dropped) and are imported when it closes.
+    StringArray AVPendingSystemFiles;
+    bool AVPendingSystemPollPending = false;
+    void AVOpenPendingSystemFiles();
+    /** Settings is the only modal thing (a page, not a dialog). */
+    bool AVOnlySettingsIsModal() const;
+    /** Closes Settings: with its fade, or at once when a dialog is about to
+        photograph the editor for its backdrop. */
+    void AVCloseSettings(bool instantly);
     std::unique_ptr<FileChooser> fileChooser;
     int labelRefreshTicks = 0;
     int AVStatusTicks = 0;
@@ -256,6 +266,11 @@ public:
         preset) loads. Used by "Importar banco", drag and drop and the Advanced
         bank manager. */
     void importBanks(const Array<File>& files);
+    /** Files the system asks the app to open (a double-click in the Finder, a
+        drop on the Dock icon, "Open with"): the same import as a drop on the
+        window. While a dialog is open (an earlier import's question, "save
+        changes") they wait and are imported once it closes. */
+    void AVOpenFilesFromSystem(const StringArray& paths);
     std::unique_ptr<ComponentTraverser> createFocusTraverser() override;
     std::unique_ptr<ComponentTraverser> createKeyboardFocusTraverser() override;
 
@@ -278,6 +293,7 @@ public:
 #if defined(AVDEXED_TESTING)
     friend bool AVRenderUIEvidence(const juce::File& directory);
     friend bool AVRunLibraryQA(const juce::File& outputDirectory);
+    friend bool runAVDexedDropTests();
 #endif
 
 private:

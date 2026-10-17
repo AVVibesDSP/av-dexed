@@ -14,6 +14,7 @@ bool AVRenderBankVoice(const juce::File& bankFile, int slot);
 bool AVScanBankVoices(const juce::File& folder);
 bool AVAuditVoices(const juce::File& folder, const juce::File& output);
 bool runAVDexedVoiceTests();
+bool runAVDexedDropTests();
 
 namespace {
 bool expect(bool condition, const char* message)
@@ -102,6 +103,7 @@ int main(int argc, char** argv)
     passed &= runAVDexedStateTests();
     passed &= runAVDexedLibraryTests();
     passed &= runAVDexedVoiceTests();
+    passed &= runAVDexedDropTests();
     std::cout << (passed ? "AV Dexed regression tests passed.\n" : "AV Dexed regression tests FAILED.\n");
     return passed ? 0 : 1;
 }

@@ -13,6 +13,102 @@ endif()
 
 message(STATUS "Building Dexed in formats: ${DEXED_JUCE_FORMATS}")
 
+# macOS: the app opens AV Dexed's files from the Finder (a double-click, a drop
+# on the Dock icon, "Open with"): sounds (.avdexpreset, and the old .dexedpreset
+# name), DX7 banks (.syx, as an alternative to whatever else opens them) and
+# folders of them (never offered as an "Open with" choice for folders). They are
+# imported like a drop on the window. JUCE merges this into every bundle's
+# Info.plist; only the Standalone acts on it. Sounds are claimed through their
+# own exported type; banks by extension, because the imported .syx type below
+# loses to any installed app that exports one of its own for .syx, and a claim
+# on it would then stop matching (the Finder kind string is all it is for).
+set(AVDEXED_PLIST_TO_MERGE [=[
+<plist version="1.0">
+<dict>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>AV Dexed sound</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>org.avvibes.avdexed.sound</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>DX7 SysEx bank</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>syx</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Folder of sounds</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>None</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.folder</string>
+      </array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.avvibes.avdexed.sound</string>
+      <key>UTTypeDescription</key>
+      <string>AV Dexed sound</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>avdexpreset</string>
+          <string>dexedpreset</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.avvibes.avdexed.sysex-bank</string>
+      <key>UTTypeDescription</key>
+      <string>DX7 SysEx bank</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>syx</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>
+]=])
+
 juce_add_plugin("${BaseTargetName}"
         VERSION "${PROJECT_VERSION}"
         COMPANY_NAME "AV Vibes"
@@ -30,6 +126,7 @@ juce_add_plugin("${BaseTargetName}"
         ICON_BIG "${PROJECT_SOURCE_DIR}/assets/branding/AVDexed_AppIcon.png"
         ICON_SMALL "${PROJECT_SOURCE_DIR}/assets/branding/AVDexed_AppIcon.png"
         COPY_PLUGIN_AFTER_BUILD ${DEXED_COPY_PLUGIN_AFTER_BUILD}
+        PLIST_TO_MERGE "${AVDEXED_PLIST_TO_MERGE}"
 )
 
 clap_juce_extensions_plugin(TARGET ${BaseTargetName}
@@ -163,6 +260,7 @@ if(DEXED_BUILD_TESTS)
         ../tests/AVDexedStateTests.cpp
         ../tests/AVDexedUIEvidence.cpp
         ../tests/AVDexedLibraryTests.cpp
+        ../tests/AVDexedDropTests.cpp
         ../tests/AVDexedQALibrary.cpp
         ../tests/AVDexedVoiceTests.cpp)
     target_include_directories(AVDexedRegressionTests PRIVATE

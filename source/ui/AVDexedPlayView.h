@@ -225,6 +225,7 @@ private:
     struct PresetEntry;
     friend bool AVRenderUIEvidence(const juce::File&);
     friend bool AVRunLibraryQA(const juce::File&);
+    friend bool runAVDexedDropTests();
     int getNumRows() override;
     void paintListBoxItem(int row, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
     void listBoxItemClicked(int row, const juce::MouseEvent& event) override;

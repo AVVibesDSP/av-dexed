@@ -87,9 +87,13 @@ public:
     const juce::String getApplicationName() override { return juce::CharPointer_UTF8(JucePlugin_Name); }
     const juce::String getApplicationVersion() override { return JucePlugin_VersionString; }
     bool moreThanOneInstanceAllowed() override { return true; }
-    void anotherInstanceStarted(const juce::String&) override {}
+    /** macOS: files the system hands the running app (a double-click in the
+        Finder, a drop on the Dock icon, "Open with"). On Windows and Linux files
+        only come on the command line of a launch (initialise): another launch
+        opens its own window, since more than one instance is allowed. */
+    void anotherInstanceStarted(const juce::String& commandLine) override { openFilesFromSystem(commandLine); }
 
-    void initialise(const juce::String&) override {
+    void initialise(const juce::String& commandLine) override {
         mainWindow.reset(createWindow());
         if (mainWindow) {
             AVDexedStandaloneAccess::AVDeviceManager = &mainWindow->pluginHolder->deviceManager;
@@ -111,6 +115,9 @@ public:
         } else {
             pluginHolder = createPluginHolder();
         }
+        // Files on the command line (a Windows or Linux launch with files); on
+        // macOS they arrive just after this, through anotherInstanceStarted.
+        openFilesFromSystem(commandLine);
     }
 
     void shutdown() override {
@@ -143,6 +150,24 @@ public:
     }
 
 private:
+    /** Hands the paths in `commandLine` to the editor, which imports them like a
+        drop on the window. The editor is created with the window, so it is
+        there when files arrive; should it not be yet, this looks again a few
+        times before giving up. */
+    void openFilesFromSystem(const juce::String& commandLine, int attempt = 0) {
+        const auto paths = AVDexedStandaloneAccess::AVSystemOpenPaths(commandLine);
+        if (paths.isEmpty()) return;
+        if (AVDexedStandaloneAccess::AVOpenFiles) {
+            AVDexedStandaloneAccess::AVOpenFiles(paths);
+            return;
+        }
+        if (attempt < 20)
+            juce::Timer::callAfterDelay(250, [commandLine, attempt] {
+                if (auto* app = dynamic_cast<AVDexedStandaloneApp*>(juce::JUCEApplication::getInstance()))
+                    app->openFilesFromSystem(commandLine, attempt + 1);
+            });
+    }
+
     juce::StringArray getMenuBarNames() override { return {"Audio / MIDI"}; }
     juce::PopupMenu getMenuForIndex(int, const juce::String&) override {
         juce::PopupMenu menu;
