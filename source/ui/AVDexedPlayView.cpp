@@ -1907,7 +1907,7 @@ void AVDexedPlayView::reindexLibrary() {
             const auto folder = AVDexedLibrary::folderOf(file, root);
             const auto path = file.getFullPathName();
             const auto fileSize = file.getSize();
-            const auto modified = file.getLastModificationTime().toMilliseconds();
+            const auto modified = AVDexedLibrary::modificationMillis(file);
             if (file.getFileExtension().equalsIgnoreCase(".syx")) {
                 std::shared_ptr<AVPresetBank> bank;
                 const auto cached = cachedBanks.find(path);
