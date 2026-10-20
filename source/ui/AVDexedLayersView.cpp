@@ -381,9 +381,24 @@ AVDexedLayersView::AVDexedLayersView(DexedAudioProcessor& owner) : processor(own
     addAndMakeVisible(modePills);
 
     stackButton.onClick = [this] {
-        processor.stackAVLayers(DexedAudioProcessor::AVLayerCount, 7.0f);
-        refresh();
-        if (onNotice) onNotice(AVDexedLanguageService::getInstance().text("layerStacked"));
+        // The classic first; a few more widths and sizes after it.
+        auto& language = AVDexedLanguageService::getInstance();
+        struct Stack { int layers; float cents; };
+        static constexpr Stack stacks[] = { { 8, 7.0f }, { 8, 12.0f }, { 4, 5.0f }, { 2, 3.0f } };
+        PopupMenu menu;
+        for (int i = 0; i < 4; ++i)
+            menu.addItem(i + 1, language.format(i == 0 ? "layerStackClassic" : "layerStackItem",
+                                                {{"layers", String(stacks[i].layers)}, {"cents", String(stacks[i].cents, 0)}}));
+        menu.setLookAndFeel(&getLookAndFeel());
+        Component::SafePointer<AVDexedLayersView> safeThis(this);
+        menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&stackButton), [safeThis](int result) {
+            if (safeThis == nullptr || result < 1 || result > 4) return;
+            const auto& chosen = stacks[result - 1];
+            safeThis->processor.stackAVLayers(chosen.layers, chosen.cents);
+            safeThis->refresh();
+            if (safeThis->onNotice)
+                safeThis->onNotice(AVDexedLanguageService::getInstance().format("layerStacked", {{"layers", String(chosen.layers)}}));
+        });
     };
     resetButton.onClick = [this] {
         processor.resetAVLayers();
