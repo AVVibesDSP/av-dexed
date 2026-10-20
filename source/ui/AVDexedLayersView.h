@@ -31,6 +31,8 @@ public:
     void loadPerformanceFile(const juce::File& file);
     /** True for a file with performances and no banks (what a drop opens here). */
     static bool isPerformanceOnlyFile(const juce::File& file);
+    /** Plays a layers file (.avdexlayers) saved by "Guardar capas…". */
+    void loadLayersFile(const juce::File& file);
 
     /** A short line for the footer (what a button did). */
     std::function<void(const juce::String&)> onNotice;
@@ -42,7 +44,9 @@ private:
     DexedAudioProcessor& processor;
     juce::ToggleButton modeToggle;
     AVDexedSettingsStyle::OnOffPills modePills { modeToggle };
-    juce::TextButton openButton, stackButton, resetButton;
+    juce::TextButton openButton, saveButton, stackButton, resetButton;
+    juce::String lastSetName;   // the performance or layers file last opened: the name a save suggests
+    void saveLayersFile();
     // The performance file last opened: its performances fill the list.
     juce::ComboBox performanceList;
     std::unique_ptr<juce::FileChooser> chooser;

@@ -111,6 +111,7 @@ bool avIsPresetPath(const juce::String& path) {
     return path.endsWithIgnoreCase(AVDexedLibrary::presetExtension) || path.endsWithIgnoreCase(AVDexedLibrary::legacyPresetExtension);
 }
 bool avIsTuningPath(const juce::String& path) { return path.endsWithIgnoreCase(".scl") || path.endsWithIgnoreCase(".kbm"); }
+bool avIsLayersPath(const juce::String& path) { return path.endsWithIgnoreCase(DexedAudioProcessor::AVLayersExtension); }
 
 /** Every dragged item is a single sound (.avdexpreset), not a bank or folder. */
 bool avAllSounds(const juce::StringArray& files) {
@@ -191,7 +192,7 @@ juce::String avBankWriteError(const juce::File& file) {
 /** Every dragged item is a bank, a preset or a folder (whose sounds are added). */
 bool avAllImportable(const juce::StringArray& files) {
     return ! files.isEmpty() && std::all_of(files.begin(), files.end(), [](const juce::String& path) {
-        return avIsBankPath(path) || avIsPresetPath(path) || juce::File(path).isDirectory();
+        return avIsBankPath(path) || avIsPresetPath(path) || avIsLayersPath(path) || juce::File(path).isDirectory();
     });
 }
 
@@ -919,14 +920,19 @@ void DexedAudioProcessorEditor::importBanks(const Array<File>& dropped) {
     // A DX7II or TX802 performance file (no banks in it) opens in the Layers page.
     Array<File> files;
     File performances;
+    File layers;
     for (const auto& file : dropped) {
-        if (! file.isDirectory() && AVDexedLayersView::isPerformanceOnlyFile(file)) performances = file;
+        if (file.isDirectory()) files.add(file);
+        else if (avIsLayersPath(file.getFileName())) layers = file;
+        else if (AVDexedLayersView::isPerformanceOnlyFile(file)) performances = file;
         else files.add(file);
     }
-    if (performances != File()) {
+    if (performances != File() || layers != File())
         showAVView(AVView::layers);
+    if (performances != File())
         layersView.loadPerformanceFile(performances);
-    }
+    if (layers != File())
+        layersView.loadLayersFile(layers);
     if (files.isEmpty()) return;
     auto& language = AVDexedLanguageService::getInstance();
     const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);

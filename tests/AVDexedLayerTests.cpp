@@ -316,6 +316,35 @@ bool testStackAndSession() {
     return passed;
 }
 
+bool testLayersFile() {
+    bool passed = true;
+    auto bank = varietyBank();
+    auto processor = makeProcessor(bank, 6);
+    auto& p = *processor;
+    p.stackAVLayers(5, 9.0f);
+    p.getAVLayerSettings(2).channel = 4;
+    p.getAVLayerSettings(3).unison = 3.0f;
+    p.setAVLayerProgram(4, bank.unpackProgram(20));
+    p.selectAVLayer(3);
+    const auto text = p.createAVLayersFile("Mi stack");
+    auto opened = makeProcessor(bank, 0);
+    opened->setAVLayerMode(false);
+    passed &= expect(opened->loadAVLayersFile(text), "a layers file opens");
+    bool same = opened->isAVLayerModeOn() && opened->getAVSelectedLayer() == 3;
+    for (int layer = 0; layer < 8; ++layer) {
+        const auto& a = p.getAVLayerSettings(layer);
+        const auto& b = opened->getAVLayerSettings(layer);
+        same &= a.enabled.load() == b.enabled.load() && a.channel.load() == b.channel.load()
+             && std::abs(a.detune.load() - b.detune.load()) < 1.0e-4f && std::abs(a.pan.load() - b.pan.load()) < 1.0e-4f
+             && std::abs(a.unison.load() - b.unison.load()) < 1.0e-4f
+             && std::memcmp(p.getAVLayerProgram(layer).getRawData(), opened->getAVLayerProgram(layer).getRawData(), 155) == 0;
+    }
+    passed &= expect(same, "every layer, its voice and the selected layer come back");
+    passed &= expect(opened->activeProgram.getName() == p.activeProgram.getName(), "the editor shows the selected layer's voice");
+    passed &= expect(! opened->loadAVLayersFile("<notLayers/>") && ! opened->loadAVLayersFile("garbage"), "other files are refused");
+    return passed;
+}
+
 bool testUnisonAndRandomPitch() {
     bool passed = true;
     auto bank = varietyBank();
@@ -348,6 +377,7 @@ bool runAVDexedLayerTests() {
     passed &= testEditsStayWithTheirLayer();
     passed &= testStackAndSession();
     passed &= testUnisonAndRandomPitch();
+    passed &= testLayersFile();
     std::cout << (passed ? "Layer checks passed.\n" : "Layer checks FAILED.\n");
     return passed;
 }

@@ -230,6 +230,11 @@ public :
     /** Message thread: a whole set of layers at once (a DX7II or TX802
         performance). The first layer that sounds becomes the selected one. */
     void applyAVLayerSetup(const std::array<AVDexedPerformance::ResolvedLayer, AVLayerCount>& layers);
+    /** A layers file (.avdexlayers): every layer with its voice, as XML. */
+    juce::String createAVLayersFile(const juce::String& name) const;
+    /** Message thread: plays a layers file; false when it is not one. */
+    bool loadAVLayersFile(const juce::String& text);
+    static constexpr const char* AVLayersExtension = ".avdexlayers";
     /** Message thread: every layer back to its defaults (off, every channel,
         whole keyboard, no transposition or detune, full volume, centre). */
     void resetAVLayers();

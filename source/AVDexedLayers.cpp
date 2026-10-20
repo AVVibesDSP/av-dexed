@@ -352,34 +352,58 @@ juce::ValueTree DexedAudioProcessor::createAVLayersState() const {
     return layers;
 }
 
+namespace {
+/** One layer of a session or a layers file; a missing one has the defaults
+    (only the first layer on). */
+AVDexedPerformance::ResolvedLayer readLayerTree(const juce::ValueTree& layer, int index) {
+    AVDexedPerformance::ResolvedLayer read;
+    auto& plan = read.plan;
+    const bool valid = layer.isValid() && layer.hasType("layer");
+    plan.used = true;
+    plan.enabled = valid ? bool(layer.getProperty("enabled", false)) : index == 0;
+    if (! valid) return read;
+    plan.channel = juce::jlimit(0, 16, int(layer.getProperty("channel", 0)));
+    const int low = juce::jlimit(0, 127, int(layer.getProperty("lowNote", 0)));
+    const int high = juce::jlimit(0, 127, int(layer.getProperty("highNote", 127)));
+    plan.lowNote = juce::jmin(low, high);
+    plan.highNote = juce::jmax(low, high);
+    plan.transpose = juce::jlimit(-24, 24, int(layer.getProperty("transpose", 0)));
+    plan.detune = juce::jlimit(-DexedAudioProcessor::AVLayerMaxDetune, DexedAudioProcessor::AVLayerMaxDetune, float(layer.getProperty("detune", 0.0f)));
+    plan.volume = juce::jlimit(0.0f, 1.0f, float(layer.getProperty("volume", 1.0f)));
+    plan.pan = juce::jlimit(0.0f, 1.0f, float(layer.getProperty("pan", 0.5f)));
+    plan.alternateGroup = juce::jlimit(-1, DexedAudioProcessor::AVLayerCount - 1, int(layer.getProperty("alternateGroup", -1)));
+    read.unison = juce::jlimit(0.0f, DexedAudioProcessor::AVLayerMaxDetune, float(layer.getProperty("unison", 0.0f)));
+    read.randomPitch = juce::jlimit(0.0f, 100.0f, float(layer.getProperty("randomPitch", 0.0f)));
+    read.mono = juce::jlimit(-1, 1, int(layer.getProperty("mono", -1)));
+    juce::MemoryBlock data;
+    if (data.fromBase64Encoding(layer.getProperty("voice").toString()) && data.getSize() >= size_t(Program::PROGRAM_SIZE)) {
+        read.voice = Program(static_cast<const uint8_t*>(data.getData()));
+        Cartridge::applyBankRules(read.voice);
+        read.voiceFound = true;
+    }
+    return read;
+}
+}
+
 void DexedAudioProcessor::restoreAVLayersState(const juce::ValueTree& layers) {
     const juce::ScopedLock lock(getCallbackLock());
     for (int index = 0; index < AVLayerCount; ++index) {
-        const auto layer = layers.isValid() ? layers.getChild(index) : juce::ValueTree();
+        const auto read = readLayerTree(layers.isValid() ? layers.getChild(index) : juce::ValueTree(), index);
+        const auto& plan = read.plan;
         auto& settings = avLayerSettings[size_t(index)];
-        const bool valid = layer.isValid() && layer.hasType("layer");
-        settings.enabled.store(valid ? bool(layer.getProperty("enabled", false)) : index == 0, std::memory_order_relaxed);
-        settings.channel.store(juce::jlimit(0, 16, valid ? int(layer.getProperty("channel", 0)) : 0), std::memory_order_relaxed);
-        const int low = juce::jlimit(0, 127, valid ? int(layer.getProperty("lowNote", 0)) : 0);
-        const int high = juce::jlimit(0, 127, valid ? int(layer.getProperty("highNote", 127)) : 127);
-        settings.lowNote.store(juce::jmin(low, high), std::memory_order_relaxed);
-        settings.highNote.store(juce::jmax(low, high), std::memory_order_relaxed);
-        settings.transpose.store(juce::jlimit(-24, 24, valid ? int(layer.getProperty("transpose", 0)) : 0), std::memory_order_relaxed);
-        settings.detune.store(juce::jlimit(-AVLayerMaxDetune, AVLayerMaxDetune, valid ? float(layer.getProperty("detune", 0.0f)) : 0.0f), std::memory_order_relaxed);
-        settings.volume.store(juce::jlimit(0.0f, 1.0f, valid ? float(layer.getProperty("volume", 1.0f)) : 1.0f), std::memory_order_relaxed);
-        settings.pan.store(juce::jlimit(0.0f, 1.0f, valid ? float(layer.getProperty("pan", 0.5f)) : 0.5f), std::memory_order_relaxed);
-        settings.alternateGroup.store(valid ? juce::jlimit(-1, AVLayerCount - 1, int(layer.getProperty("alternateGroup", -1))) : -1,
-                                      std::memory_order_relaxed);
-        settings.unison.store(valid ? juce::jlimit(0.0f, AVLayerMaxDetune, float(layer.getProperty("unison", 0.0f))) : 0.0f, std::memory_order_relaxed);
-        settings.randomPitch.store(valid ? juce::jlimit(0.0f, 100.0f, float(layer.getProperty("randomPitch", 0.0f))) : 0.0f, std::memory_order_relaxed);
-        settings.mono.store(valid ? juce::jlimit(-1, 1, int(layer.getProperty("mono", -1))) : -1, std::memory_order_relaxed);
-        Program voice = Program::initialProgram();
-        juce::MemoryBlock data;
-        if (valid && data.fromBase64Encoding(layer.getProperty("voice").toString()) && data.getSize() >= size_t(Program::PROGRAM_SIZE)) {
-            voice = Program(static_cast<const uint8_t*>(data.getData()));
-            Cartridge::applyBankRules(voice);
-        }
-        avLayers[size_t(index)].setProgram(voice);
+        settings.enabled.store(plan.enabled, std::memory_order_relaxed);
+        settings.channel.store(plan.channel, std::memory_order_relaxed);
+        settings.lowNote.store(plan.lowNote, std::memory_order_relaxed);
+        settings.highNote.store(plan.highNote, std::memory_order_relaxed);
+        settings.transpose.store(plan.transpose, std::memory_order_relaxed);
+        settings.detune.store(plan.detune, std::memory_order_relaxed);
+        settings.volume.store(plan.volume, std::memory_order_relaxed);
+        settings.pan.store(plan.pan, std::memory_order_relaxed);
+        settings.alternateGroup.store(plan.alternateGroup, std::memory_order_relaxed);
+        settings.unison.store(read.unison, std::memory_order_relaxed);
+        settings.randomPitch.store(read.randomPitch, std::memory_order_relaxed);
+        settings.mono.store(read.mono, std::memory_order_relaxed);
+        avLayers[size_t(index)].setProgram(read.voice);
     }
     const int selected = juce::jlimit(0, AVLayerCount - 1, layers.isValid() ? int(layers.getProperty("selected", 0)) : 0);
     avSelectedLayer.store(selected, std::memory_order_release);
@@ -387,6 +411,30 @@ void DexedAudioProcessor::restoreAVLayersState(const juce::ValueTree& layers) {
     avLayers[size_t(selected)].setProgram(activeProgram);
     avLayerMode.store(layers.isValid() && bool(layers.getProperty("mode", false)), std::memory_order_release);
     avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
+}
+
+juce::String DexedAudioProcessor::createAVLayersFile(const juce::String& name) const {
+    juce::ValueTree file("avDexedLayers");
+    file.setProperty("formatVersion", 1, nullptr);
+    file.setProperty("name", name, nullptr);
+    auto layers = createAVLayersState();
+    layers.setProperty("mode", true, nullptr);   // a layers file is always played as layers
+    file.addChild(layers, -1, nullptr);
+    return file.toXmlString();
+}
+
+bool DexedAudioProcessor::loadAVLayersFile(const juce::String& text) {
+    const auto xml = juce::parseXML(text);
+    if (xml == nullptr || ! xml->hasTagName("avDexedLayers")) return false;
+    const auto file = juce::ValueTree::fromXml(*xml);
+    const auto layers = file.getChildWithName("avLayers");
+    if (int(file.getProperty("formatVersion", 0)) != 1 || ! layers.isValid()) return false;
+    std::array<AVDexedPerformance::ResolvedLayer, AVLayerCount> read {};
+    for (int index = 0; index < AVLayerCount; ++index)
+        read[size_t(index)] = readLayerTree(layers.getChild(index), index);
+    applyAVLayerSetup(read);
+    selectAVLayer(juce::jlimit(0, AVLayerCount - 1, int(layers.getProperty("selected", 0))));
+    return true;
 }
 
 void DexedAudioProcessor::applyAVLayerSetup(const std::array<AVDexedPerformance::ResolvedLayer, AVLayerCount>& layers) {

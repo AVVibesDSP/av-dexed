@@ -5,6 +5,7 @@
 #include "AVDexedLanguage.h"
 #include "AVDexedTheme.h"
 #include "../core/AVDexedSysex.h"
+#include "../core/AVDexedLibrary.h"
 
 using namespace juce;
 
@@ -365,11 +366,12 @@ AVDexedLayersView::AVDexedLayersView(DexedAudioProcessor& owner) : processor(own
         if (onNotice) onNotice(AVDexedLanguageService::getInstance().text("layerResetDone"));
     };
     openButton.onClick = [this] { openPerformanceFile(); };
+    saveButton.onClick = [this] { saveLayersFile(); };
     performanceList.onChange = [this] {
         if (performanceList.getSelectedId() > 0) applyPerformance(performanceList.getSelectedId() - 1);
     };
     addChildComponent(performanceList);
-    for (auto* button : { &openButton, &stackButton, &resetButton }) addAndMakeVisible(*button);
+    for (auto* button : { &openButton, &saveButton, &stackButton, &resetButton }) addAndMakeVisible(*button);
     for (int layer = 0; layer < DexedAudioProcessor::AVLayerCount; ++layer) {
         strips[size_t(layer)] = std::make_unique<Strip>(processor, layer);
         addAndMakeVisible(*strips[size_t(layer)]);
@@ -397,6 +399,8 @@ void AVDexedLayersView::applyLanguage() {
     modePills.setTexts(language.text("optionOn"), language.text("optionOff"));
     openButton.setButtonText(language.text("layerOpenPerformance"));
     openButton.setTooltip(language.text("layerOpenPerformanceTooltip"));
+    saveButton.setButtonText(language.text("layerSave"));
+    saveButton.setTooltip(language.text("layerSaveTooltip"));
     performanceList.setTooltip(language.text("layerPerformanceListTooltip"));
     performanceList.setTitle(language.text("layerPerformanceListTooltip"));
     stackButton.setButtonText(language.text("layerStack"));
@@ -448,11 +452,59 @@ void AVDexedLayersView::openPerformanceFile() {
     auto start = performanceFile.getParentDirectory();
     if (! start.isDirectory()) start = File::getSpecialLocation(File::userHomeDirectory).getChildFile("Downloads");
     if (! start.isDirectory()) start = File::getSpecialLocation(File::userDocumentsDirectory);
-    chooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("layerOpenPerformance"), start, "*.syx;*.SYX", true);
+    chooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("layerOpenPerformance"), start,
+                                            String("*.syx;*.SYX;*") + DexedAudioProcessor::AVLayersExtension, true);
     Component::SafePointer<AVDexedLayersView> safeThis(this);
     chooser->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [safeThis](const FileChooser& result) {
-        if (safeThis != nullptr && result.getResult().existsAsFile())
+        if (safeThis == nullptr || ! result.getResult().existsAsFile()) return;
+        if (result.getResult().getFileExtension().equalsIgnoreCase(DexedAudioProcessor::AVLayersExtension))
+            safeThis->loadLayersFile(result.getResult());
+        else
             safeThis->loadPerformanceFile(result.getResult());
+    });
+}
+
+void AVDexedLayersView::loadLayersFile(const File& file) {
+    auto& language = AVDexedLanguageService::getInstance();
+    if (file.getSize() > 4 * 1024 * 1024 || ! processor.loadAVLayersFile(file.loadFileAsString())) {
+        if (onNotice) onNotice(language.format("layerOpenFailed", {{"file", file.getFileName()}}));
+        return;
+    }
+    // A layers file is its own set: the list of the last performance file goes.
+    performanceList.setVisible(false);
+    performances.clear();
+    voicePool.reset();
+    performanceFile = file;
+    lastSetName = file.getFileNameWithoutExtension();
+    resized();
+    refresh();
+    repaint();
+    if (onNotice) onNotice(language.format("layerOpened", {{"file", file.getFileName()}}));
+}
+
+void AVDexedLayersView::saveLayersFile() {
+    auto& language = AVDexedLanguageService::getInstance();
+    auto folder = performanceFile.getParentDirectory();
+    if (! performanceFile.getFileExtension().equalsIgnoreCase(DexedAudioProcessor::AVLayersExtension) || ! folder.isDirectory())
+        folder = File::getSpecialLocation(File::userDocumentsDirectory);
+    const auto name = File::createLegalFileName(lastSetName.isNotEmpty() ? lastSetName : language.text("layers"));
+    chooser = std::make_unique<FileChooser>(language.text("layerSave"), folder.getChildFile(name + DexedAudioProcessor::AVLayersExtension),
+                                            String("*") + DexedAudioProcessor::AVLayersExtension, true);
+    Component::SafePointer<AVDexedLayersView> safeThis(this);
+    chooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles
+                             | FileBrowserComponent::warnAboutOverwriting,
+                         [safeThis](const FileChooser& result) {
+        if (safeThis == nullptr || result.getResult() == File()) return;
+        auto& lang = AVDexedLanguageService::getInstance();
+        const auto target = result.getResult().withFileExtension(DexedAudioProcessor::AVLayersExtension);
+        const auto text = safeThis->processor.createAVLayersFile(target.getFileNameWithoutExtension());
+        const bool saved = AVDexedLibrary::writeAtomically(target, MemoryBlock(text.toRawUTF8(), text.getNumBytesAsUTF8()));
+        if (saved) {
+            safeThis->performanceFile = target;
+            safeThis->lastSetName = target.getFileNameWithoutExtension();
+        }
+        if (safeThis->onNotice)
+            safeThis->onNotice(lang.format(saved ? "layerSaved" : "layerSaveFailed", {{"file", target.getFileName()}}));
     });
 }
 
@@ -467,6 +519,7 @@ void AVDexedLayersView::loadPerformanceFile(const File& file) {
         return;
     }
     performanceFile = file;
+    lastSetName = file.getFileNameWithoutExtension();
     performances = std::move(found);
     voicePool = std::make_unique<AVDexedPerformance::VoicePool>(file, contents);
     performanceList.clear(dontSendNotification);
@@ -487,6 +540,7 @@ void AVDexedLayersView::applyPerformance(int index) {
     const auto& performance = performances[size_t(index)];
     const auto layers = AVDexedPerformance::resolve(performance, *voicePool);
     processor.applyAVLayerSetup(layers);
+    if (performance.name.isNotEmpty()) lastSetName = performance.name;
     int used = 0, missing = 0;
     for (const auto& layer : layers) {
         used += layer.plan.used ? 1 : 0;
@@ -508,10 +562,12 @@ void AVDexedLayersView::resized() {
     modePills.setBounds(int(modeLabelArea.getRight()), (toolbar - 30) / 2, modePills.idealWidth(), 30);
     const int resetWidth = AVDexedSettingsStyle::pillWidth(resetButton.getButtonText(), 90);
     const int stackWidth = AVDexedSettingsStyle::pillWidth(stackButton.getButtonText(), 120);
-    const int openWidth = AVDexedSettingsStyle::pillWidth(openButton.getButtonText(), 120);
+    const int openWidth = AVDexedSettingsStyle::pillWidth(openButton.getButtonText(), 90);
+    const int saveWidth = AVDexedSettingsStyle::pillWidth(saveButton.getButtonText(), 90);
     resetButton.setBounds(getWidth() - resetWidth, (toolbar - 30) / 2, resetWidth, 30);
     stackButton.setBounds(resetButton.getX() - 10 - stackWidth, (toolbar - 30) / 2, stackWidth, 30);
-    openButton.setBounds(stackButton.getX() - 10 - openWidth, (toolbar - 30) / 2, openWidth, 30);
+    saveButton.setBounds(stackButton.getX() - 10 - saveWidth, (toolbar - 30) / 2, saveWidth, 30);
+    openButton.setBounds(saveButton.getX() - 10 - openWidth, (toolbar - 30) / 2, openWidth, 30);
     hintArea = { float(modePills.getRight() + 24), 0.0f, float(openButton.getX() - 24 - modePills.getRight() - 24), float(toolbar) };
     performanceList.setBounds(hintArea.toNearestInt().withSizeKeepingCentre(jmin(380, int(hintArea.getWidth())), 30)
                                   .withX(int(hintArea.getX())));
