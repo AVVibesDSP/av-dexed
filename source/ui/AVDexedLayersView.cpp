@@ -319,11 +319,36 @@ private:
         const int selected = processor.getAVSelectedLayer();
         menu.addItem(1, language.format("layerCopySelected", {{"number", String(selected + 1)}}), selected != layer);
         menu.addItem(2, language.text("layerResetOne"));
+        // The DX7II voice functions the layer adds around the engine.
+        const auto& settings = processor.getAVLayerSettings(layer);
+        PopupMenu unison, random, mono;
+        static constexpr float unisonSteps[] = { 0.0f, 3.0f, 5.0f, 7.0f, 12.0f };
+        static constexpr float randomSteps[] = { 0.0f, 5.0f, 10.0f, 20.0f, 41.0f };
+        const auto amount = [&language](float cents) {
+            return cents <= 0.0f ? language.text("optionOff") : String(cents, cents < 10.0f ? 1 : 0) + " ct";
+        };
+        for (int i = 0; i < 5; ++i) {
+            unison.addItem(10 + i, amount(unisonSteps[i]), true, std::abs(settings.unison.load() - unisonSteps[i]) < 0.05f);
+            random.addItem(20 + i, amount(randomSteps[i]), true, std::abs(settings.randomPitch.load() - randomSteps[i]) < 0.05f);
+        }
+        mono.addItem(30, language.text("layerFollowInstrument"), true, settings.mono.load() < 0);
+        mono.addItem(31, language.text("layerPoly"), true, settings.mono.load() == 0);
+        mono.addItem(32, language.text("layerMonoChoice"), true, settings.mono.load() == 1);
+        menu.addSeparator();
+        menu.addSubMenu(language.text("layerUnisonMenu"), unison);
+        menu.addSubMenu(language.text("layerRandomMenu"), random);
+        menu.addSubMenu(language.text("layerMonoMenu"), mono);
         menu.setLookAndFeel(&getLookAndFeel());
         Component::SafePointer<Strip> safeThis(this);
         menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&voice), [safeThis, selected](int result) {
             if (safeThis == nullptr) return;
             auto& p = safeThis->processor;
+            auto& chosen = p.getAVLayerSettings(safeThis->layer);
+            static constexpr float unisonValues[] = { 0.0f, 3.0f, 5.0f, 7.0f, 12.0f };
+            static constexpr float randomValues[] = { 0.0f, 5.0f, 10.0f, 20.0f, 41.0f };
+            if (result >= 10 && result < 15) chosen.unison.store(unisonValues[result - 10]);
+            else if (result >= 20 && result < 25) chosen.randomPitch.store(randomValues[result - 20]);
+            else if (result >= 30 && result <= 32) chosen.mono.store(result - 31);
             if (result == 1) {
                 p.setAVLayerProgram(safeThis->layer, p.getAVLayerProgram(selected));
                 p.setAVLayerEnabled(safeThis->layer, true);
