@@ -8,6 +8,7 @@
 #include "midi/MidiCCHandler.h"
 #include "parameter/Model.h"
 #include "core/AVDexedMicroTuning.h"
+#include <cmath>
 
 namespace {
 float leftBalance(float pan) { return pan <= 0.5f ? 1.0f : 2.0f * (1.0f - pan); }

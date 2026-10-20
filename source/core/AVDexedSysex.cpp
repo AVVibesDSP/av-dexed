@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "AVDexedSysex.h"
+#include <algorithm>
 
 namespace AVDexedSysex {
 namespace {

@@ -6,6 +6,8 @@
 #include "../parameter/Model.h"
 #include "libMTSClient.h"
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 
 AVDexedLayer::AVDexedLayer() {
     // Controllers has a constructor that leaves most fields unset: every one

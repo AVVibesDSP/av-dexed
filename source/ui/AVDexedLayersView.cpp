@@ -4,6 +4,7 @@
 #include "AVDexedLayersView.h"
 #include "AVDexedLanguage.h"
 #include "AVDexedTheme.h"
+#include <cmath>
 #include "../core/AVDexedSysex.h"
 #include "../core/AVDexedLibrary.h"
 
