@@ -15,6 +15,7 @@ bool AVScanBankVoices(const juce::File& folder);
 bool AVAuditVoices(const juce::File& folder, const juce::File& output);
 bool runAVDexedVoiceTests();
 bool runAVDexedDropTests();
+int AVRunGolden(const juce::StringArray& arguments);
 
 namespace {
 bool expect(bool condition, const char* message)
@@ -97,6 +98,11 @@ int main(int argc, char** argv)
         return AVScanBankVoices(juce::File(argv[2])) ? 0 : 1;
     if (argc == 4 && juce::String(argv[1]) == "--render-voice")
         return AVRenderBankVoice(juce::File(argv[2]), juce::String(argv[3]).getIntValue()) ? 0 : 1;
+    if (argc >= 2 && juce::String(argv[1]) == "--golden") {
+        juce::StringArray arguments;
+        for (int i = 2; i < argc; ++i) arguments.add(juce::String::fromUTF8(argv[i]));
+        return AVRunGolden(arguments);
+    }
     // Every suite runs even after a failure, so one run lists every problem.
     bool passed = testDryPathAndZeroSamples();
     passed &= testDelayTailAfterSendIsRemoved();

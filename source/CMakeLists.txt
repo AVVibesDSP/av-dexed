@@ -262,7 +262,8 @@ if(DEXED_BUILD_TESTS)
         ../tests/AVDexedLibraryTests.cpp
         ../tests/AVDexedDropTests.cpp
         ../tests/AVDexedQALibrary.cpp
-        ../tests/AVDexedVoiceTests.cpp)
+        ../tests/AVDexedVoiceTests.cpp
+        ../tests/AVDexedGolden.cpp)
     target_include_directories(AVDexedRegressionTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../libs
