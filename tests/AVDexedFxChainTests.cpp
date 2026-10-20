@@ -21,6 +21,7 @@ bool runAVDexedPerformanceTests();
 int AVRunGolden(const juce::StringArray& arguments);
 int AVRunImport(const juce::StringArray& arguments);
 int AVRunPerformanceReport(const juce::File& file);
+int AVRunLayersCpu(const juce::File& bankFile, int slot);
 int AVRunLoaderReport(const juce::File& folder, const juce::File& output);
 
 namespace {
@@ -106,6 +107,8 @@ int main(int argc, char** argv)
         return AVRenderBankVoice(juce::File(argv[2]), juce::String(argv[3]).getIntValue()) ? 0 : 1;
     if (argc == 4 && juce::String(argv[1]) == "--loader-report")
         return AVRunLoaderReport(juce::File(juce::String::fromUTF8(argv[2])), juce::File(juce::String::fromUTF8(argv[3])));
+    if (argc == 4 && juce::String(argv[1]) == "--layers-cpu")
+        return AVRunLayersCpu(juce::File(juce::String::fromUTF8(argv[2])), juce::String(argv[3]).getIntValue());
     if (argc == 3 && juce::String(argv[1]) == "--performances")
         return AVRunPerformanceReport(juce::File(juce::String::fromUTF8(argv[2])));
     if (argc >= 4 && juce::String(argv[1]) == "--import") {

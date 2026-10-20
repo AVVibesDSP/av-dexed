@@ -228,6 +228,32 @@ int AVRunPerformanceReport(const juce::File& file) {
     return 0;
 }
 
+/** --layers-cpu <bank.syx> <slot>: the share of one core the whole instrument
+    takes for 10 s of 16 held notes, with one layer and with eight stacked. */
+int AVRunLayersCpu(const juce::File& bankFile, int slot) {
+    Cartridge bank;
+    if (bank.load(bankFile) < 0) return 2;
+    for (int layers : { 1, 8 }) {
+        auto processor = makeProcessor(bank, juce::jlimit(0, 31, slot - 1), 1);
+        if (layers > 1) processor->stackAVLayers(layers, 7.0f);
+        juce::AudioBuffer<float> buffer(2, 256);
+        juce::MidiBuffer start;
+        for (int n = 0; n < 16; ++n) start.addEvent(juce::MidiMessage::noteOn(1, 36 + n * 3, (juce::uint8) 100), 0);
+        const int blocks = int(10.0 * goldenRate / 256);
+        const auto t0 = juce::Time::getHighResolutionTicks();
+        for (int b = 0; b < blocks; ++b) {
+            juce::MidiBuffer midi;
+            if (b == 0) midi = start;
+            buffer.clear();
+            processor->processBlock(buffer, midi);
+        }
+        const double seconds = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
+        std::cout << layers << " layer(s), " << processor->getAVActiveVoices() << " voices: "
+                  << juce::String(100.0 * seconds / 10.0, 2) << " % of one core\n";
+    }
+    return 0;
+}
+
 int AVRunGolden(const juce::StringArray& arguments) {
     if (arguments.size() < 3 || (arguments[0] != "write" && arguments[0] != "check")) {
         std::cerr << "--golden write|check <list.txt> <bank.syx>...\n";
