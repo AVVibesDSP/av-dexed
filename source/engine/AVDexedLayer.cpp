@@ -113,6 +113,22 @@ void AVDexedLayer::keydown(int channel, int pitch, int velo) {
     if (normalizeDxVelocity)
         velo = int(float(velo) * 0.7874015f);
 
+    const auto cents = [](float value) { return int32_t(std::lround(double(value) * double(1 << 24) / 1200.0)); };
+    int32_t randomOffset = 0;
+    if (randomPitch > 0.0f) {   // the DX7II's random pitch: a new tuning for each key
+        randomState = randomState * 1664525u + 1013904223u;
+        const float unit = float(randomState >> 8) / float(1 << 24) * 2.0f - 1.0f;
+        randomOffset = cents(unit * randomPitch);
+    }
+    if (unison > 0.0f && ! monoMode) {
+        startVoice(channel, pitch, velo, randomOffset + cents(unison), true);
+        startVoice(channel, pitch, velo, randomOffset - cents(unison), true);
+    } else {
+        startVoice(channel, pitch, velo, randomOffset, false);
+    }
+}
+
+void AVDexedLayer::startVoice(int channel, int pitch, int velo, int32_t pitchOffset, bool unisonPair) {
     bool triggerLfo = true;
     int bestNote = currentNote;
     int bestScore = -1;
@@ -144,6 +160,8 @@ void AVDexedLayer::keydown(int channel, int pitch, int velo) {
     voice.sustained = sustain;
     voice.keydown = true;
     voice.keydown_seq = nextKeydownSeq++;
+    voice.pitchOffset = pitchOffset;
+    voice.unisonPair = unisonPair;
     const bool voiceSteal = voice.dx7_note->isPlaying();
     voice.dx7_note->init(program.getRawData(), pitch, velo, channel, &controllers);
     if (program.getRawData()[IDs::oscKeySync.pos] && ! voiceSteal)
@@ -195,7 +213,19 @@ void AVDexedLayer::keyup(int channel, int pitch) {
     }
     if (note >= voiceCount)
         return;
+    const bool pair = voices[size_t(note)].unisonPair;
+    releaseVoice(note);
+    // The other voice of a unison key goes with it.
+    if (pair)
+        for (int other = 0; other < voiceCount; ++other)
+            if (voices[size_t(other)].midi_note == pitch && voices[size_t(other)].keydown && voices[size_t(other)].unisonPair) {
+                voices[size_t(other)].keydown = false;
+                releaseVoice(other);
+                break;
+            }
+}
 
+void AVDexedLayer::releaseVoice(int note) {
     if (monoMode) {
         int highNote = -1;
         int target = 0;
@@ -279,7 +309,13 @@ void AVDexedLayer::renderBlock(float* out) {
         if (! voice.live) continue;
         if (checkMTSESPRetuning)
             voice.dx7_note->updateBasePitches();
-        voice.dx7_note->compute(audiobuf.get(), lfovalue, lfodelay, &controllers);
+        if (voice.pitchOffset != 0) {   // unison / random pitch: this voice's own tuning
+            Controllers tuned = controllers;
+            tuned.masterTune += voice.pitchOffset;
+            voice.dx7_note->compute(audiobuf.get(), lfovalue, lfodelay, &tuned);
+        } else {
+            voice.dx7_note->compute(audiobuf.get(), lfovalue, lfodelay, &controllers);
+        }
         for (int j = 0; j < N; ++j) {
             int32_t val = audiobuf.get()[j];
             val = val >> 4;

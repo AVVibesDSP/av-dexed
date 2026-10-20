@@ -43,6 +43,11 @@ public:
         layer's own tuning offset; its live controller values are its own. */
     void followFunction(const Controllers& instrument, int32_t tuneOffset, bool mono, bool normalizeVelocity);
 
+    /** The DX7II voice functions a layer adds around the engine: unison (two
+        voices per key, tuned `unisonCents` up and down) and a random tuning
+        of each note within ±`randomCents`. Zero leaves the layer as it was. */
+    void setVoiceExtras(float unisonCents, float randomCents) noexcept { unison = unisonCents; randomPitch = randomCents; }
+
     void keydown(int channel, int pitch, int velocity);
     void keyup(int channel, int pitch);
     void controlChange(int controller, int value);
@@ -70,7 +75,13 @@ private:
         bool live = false;
         int32_t keydown_seq = -1;
         Dx7Note* dx7_note = nullptr;
+        int32_t pitchOffset = 0;      // unison / random tuning of this voice (engine pitch units)
+        bool unisonPair = false;      // one of the two voices of a unison key
     };
+    void startVoice(int channel, int pitch, int velo, int32_t pitchOffset, bool unisonPair);
+    void releaseVoice(int note);
+    float unison = 0.0f, randomPitch = 0.0f;
+    uint32_t randomState = 1;
     std::array<Voice, voiceCount> voices {};
     Controllers controllers {};
     Lfo lfo {};

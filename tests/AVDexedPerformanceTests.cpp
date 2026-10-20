@@ -206,6 +206,22 @@ bool testInstall() {
                      "the layers of an alternate group take turns; a layer on another channel stays quiet");
     return passed;
 }
+
+bool testVoiceExtras() {
+    std::array<uint8_t, 35> amem {};
+    amem[4] = 3 << 4;      // random pitch 3
+    amem[5] = 2;           // unison poly
+    amem[34] = 4;          // unison detune 4
+    AVDexedPerformance::ResolvedLayer layer;
+    AVDexedPerformance::applyVoiceExtras(layer, amem.data());
+    bool passed = expect(near(layer.randomPitch, 15.0f) && near(layer.unison, 4.8f) && layer.mono == -1,
+                         "AMEM: random pitch, unison and its detune");
+    amem = {};
+    amem[5] = 1;           // mono
+    AVDexedPerformance::applyVoiceExtras(layer, amem.data());
+    passed &= expect(layer.mono == 1 && layer.unison == 0.0f && layer.randomPitch == 0.0f, "AMEM: mono, nothing else");
+    return passed;
+}
 }
 
 bool runAVDexedPerformanceTests() {
@@ -213,6 +229,7 @@ bool runAVDexedPerformanceTests() {
     passed &= testTx802();
     passed &= testVoicesNextToThePerformance();
     passed &= testInstall();
+    passed &= testVoiceExtras();
     std::cout << (passed ? "Performance checks passed.\n" : "Performance checks FAILED.\n");
     return passed;
 }

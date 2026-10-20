@@ -199,7 +199,7 @@ VoicePool::VoicePool(const juce::File& performanceFile, const AVDexedSysex::Cont
     // The performance file's own banks are its internal memory.
     if (! contents.banks.empty()) {
         for (size_t half = 0; half < std::min<size_t>(2, contents.banks.size()); ++half)
-            setBank(VoiceRef::Source::internal, int(half), contents.banks[half].voices, self);
+            setBank(VoiceRef::Source::internal, int(half), contents.banks[half], self);
     }
     const auto folder = performanceFile.getParentDirectory();
     if (! folder.isDirectory()) return;
@@ -214,7 +214,7 @@ VoicePool::VoicePool(const juce::File& performanceFile, const AVDexedSysex::Cont
             const auto source = n.endsWith("a1") || n.endsWith("a2") ? VoiceRef::Source::presetA
                               : n.endsWith("b1") || n.endsWith("b2") ? VoiceRef::Source::presetB : VoiceRef::Source::none;
             if (source != VoiceRef::Source::none)
-                setBank(source, n.endsWith("2") ? 1 : 0, sibling.banks.front().voices, sibling.file.getFileName());
+                setBank(source, n.endsWith("2") ? 1 : 0, sibling.banks.front(), sibling.file.getFileName());
         }
     };
     takePresets(siblings);
@@ -242,10 +242,17 @@ VoicePool::VoicePool(const juce::File& performanceFile, const AVDexedSysex::Cont
     for (const auto* sibling : chosen)
         for (const auto& bank : sibling->banks)
             if (half < 2) {
-                setBank(VoiceRef::Source::internal, half, bank.voices, sibling->file.getFileName());
-                setBank(VoiceRef::Source::cartridge, half, bank.voices, sibling->file.getFileName());
+                setBank(VoiceRef::Source::internal, half, bank, sibling->file.getFileName());
+                setBank(VoiceRef::Source::cartridge, half, bank, sibling->file.getFileName());
                 ++half;
             }
+}
+
+void VoicePool::setBank(VoiceRef::Source source, int half, const AVDexedSysex::Bank& bank, const juce::String& from) {
+    setBank(source, half, bank.voices, from);
+    auto& slot = banks[size_t(source)][size_t(juce::jlimit(0, 1, half))];
+    slot.hasAmem = bank.hasAmem;
+    slot.amem = bank.amem;
 }
 
 void VoicePool::setBank(VoiceRef::Source source, int half, const std::array<uint8_t, AVDexedSysex::bankBytes>& voices,
@@ -253,7 +260,31 @@ void VoicePool::setBank(VoiceRef::Source source, int half, const std::array<uint
     auto& slot = banks[size_t(source)][size_t(juce::jlimit(0, 1, half))];
     slot.present = true;
     slot.voices = voices;
+    slot.hasAmem = false;
     slot.from = from;
+}
+
+std::optional<std::array<uint8_t, AVDexedSysex::amemVoiceBytes>> VoicePool::extrasFor(const VoiceRef& ref) const {
+    if (ref.source == VoiceRef::Source::none) return std::nullopt;
+    const auto& half = banks[size_t(ref.source)][size_t(juce::jlimit(0, 63, ref.number) / 32)];
+    if (! half.present || ! half.hasAmem) return std::nullopt;
+    std::array<uint8_t, AVDexedSysex::amemVoiceBytes> extras {};
+    std::copy_n(half.amem.begin() + (ref.number % 32) * AVDexedSysex::amemVoiceBytes, AVDexedSysex::amemVoiceBytes, extras.begin());
+    return extras;
+}
+
+void applyVoiceExtras(ResolvedLayer& layer, const uint8_t* amem) {
+    // AMEM byte 4: random pitch in bits 6-4; byte 5: poly/mono (bit 0) and
+    // unison (bit 1); byte 34: unison detune in bits 2-0. The cents are
+    // estimates (Yamaha gives the steps): random pitch ±5 to ±41 cents as the
+    // DX7II/DX7s manuals describe, unison detune in steps of the dual detune.
+    static constexpr float randomCents[8] = { 0.0f, 5.0f, 10.0f, 15.0f, 21.0f, 27.0f, 34.0f, 41.0f };
+    layer.randomPitch = randomCents[(amem[4] >> 4) & 7];
+    const int mode = amem[5] & 3;
+    layer.mono = (mode & 1) != 0 ? 1 : -1;
+    const int unisonDetune = amem[34] & 7;
+    // Unison without detune would only double the voice: left as one.
+    layer.unison = (mode & 2) != 0 && unisonDetune > 0 ? float(unisonDetune) * 1.2f : 0.0f;
 }
 
 std::optional<Program> VoicePool::voiceFor(const VoiceRef& ref) const {
@@ -283,6 +314,8 @@ std::array<ResolvedLayer, layerCount> resolve(const Performance& performance, co
         if (const auto voice = pool.voiceFor(layer.plan.voice)) {
             layer.voice = *voice;
             layer.voiceFound = true;
+            if (const auto extras = pool.extrasFor(layer.plan.voice))
+                applyVoiceExtras(layer, extras->data());
         } else {
             // Silent rather than a sine: the voice it names is not here.
             layer.voice = Program::initialProgram();

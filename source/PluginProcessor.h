@@ -201,6 +201,10 @@ public :
         std::atomic<float> volume { 1.0f };    // gain, 0..1
         std::atomic<float> pan { 0.5f };       // 0 left, 0.5 centre, 1 right
         std::atomic<int> alternateGroup { -1 }; // TX802 alternate assign: the layers of one group take turns (-1: none)
+        // DX7II voice functions (from a performance's voices): 0 = off.
+        std::atomic<float> unison { 0.0f };    // two voices per key, ± these cents
+        std::atomic<float> randomPitch { 0.0f };   // each note tuned at random within ± these cents
+        std::atomic<int> mono { -1 };          // -1: as the instrument, 0: poly, 1: mono
     };
     static constexpr float AVLayerMaxDetune = 50.0f;
     bool isAVLayerModeOn() const noexcept { return avLayerMode.load(std::memory_order_acquire); }

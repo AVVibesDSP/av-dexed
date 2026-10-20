@@ -478,3 +478,6 @@ layerPerformanceLoaded=“$name” in $count layers · voices from $sources
 layerVoicesMissing= · $count voices missing (their layers stay off)
 layerPerformanceNotes= · the original's dynamic pan and micro tuning are not applied
 layerAlternate=alternates with $number
+layerUnison=unison
+layerRandom=random
+layerMono=mono

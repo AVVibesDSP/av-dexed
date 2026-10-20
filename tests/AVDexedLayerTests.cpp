@@ -315,6 +315,30 @@ bool testStackAndSession() {
                      "with the layer mode off the selected voice plays as one sound");
     return passed;
 }
+
+bool testUnisonAndRandomPitch() {
+    bool passed = true;
+    auto bank = varietyBank();
+    auto processor = makeProcessor(bank, 2);
+    oneLayer(*processor);
+    auto& settings = processor->getAVLayerSettings(0);
+    settings.unison = 5.0f;
+    render(*processor, { { 0.0, 1, 60, 100 } }, 0.05);
+    passed &= expect(processor->getAVLayerSoundingVoices(0) == 2, "unison plays two voices per key");
+    render(*processor, { { 0.0, 1, 60, 0 } }, 3.0);
+    passed &= expect(processor->getAVLayerSoundingVoices(0) == 0, "and its note-off releases both");
+    settings.unison = 0.0f;
+
+    auto plain = makeProcessor(bank, 2), random = makeProcessor(bank, 2), again = makeProcessor(bank, 2);
+    for (auto* p : { plain.get(), random.get(), again.get() }) oneLayer(*p);
+    random->getAVLayerSettings(0).randomPitch = 20.0f;
+    again->getAVLayerSettings(0).randomPitch = 20.0f;
+    const std::vector<Note> notes { { 0.0, 1, 60, 100 }, { 0.1, 1, 64, 100 } };
+    const auto randomSound = render(*random, notes, 0.4);
+    passed &= expect(! (randomSound == render(*plain, notes, 0.4)) && randomSound == render(*again, notes, 0.4),
+                     "random pitch retunes each note, the same way on every run");
+    return passed;
+}
 }
 
 bool runAVDexedLayerTests() {
@@ -323,6 +347,7 @@ bool runAVDexedLayerTests() {
     passed &= testTransposeAndDetune();
     passed &= testEditsStayWithTheirLayer();
     passed &= testStackAndSession();
+    passed &= testUnisonAndRandomPitch();
     std::cout << (passed ? "Layer checks passed.\n" : "Layer checks FAILED.\n");
     return passed;
 }

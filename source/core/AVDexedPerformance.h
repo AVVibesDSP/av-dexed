@@ -74,11 +74,20 @@ public:
     void setBank(VoiceRef::Source source, int half, const std::array<uint8_t, AVDexedSysex::bankBytes>& voices,
                  const juce::String& from);
     std::optional<Program> voiceFor(const VoiceRef& ref) const;
+    /** The DX7II additional data (35 packed AMEM bytes) of that voice, when its bank had it. */
+    std::optional<std::array<uint8_t, AVDexedSysex::amemVoiceBytes>> extrasFor(const VoiceRef& ref) const;
     /** The files the voices came from, for the notice. */
     juce::StringArray sources() const;
 
 private:
-    struct Half { bool present = false; std::array<uint8_t, AVDexedSysex::bankBytes> voices {}; juce::String from; };
+    struct Half {
+        bool present = false;
+        std::array<uint8_t, AVDexedSysex::bankBytes> voices {};
+        bool hasAmem = false;
+        std::array<uint8_t, AVDexedSysex::amemBytes> amem {};
+        juce::String from;
+    };
+    void setBank(VoiceRef::Source source, int half, const AVDexedSysex::Bank& bank, const juce::String& from);
     struct Sibling { juce::File file; juce::String name; std::vector<AVDexedSysex::Bank> banks; };
     static std::vector<Sibling> readSiblings(const juce::File& folder, const juce::File& except);
     std::array<std::array<Half, 2>, 5> banks {};   // by Source, then 1-32 / 33-64
@@ -89,6 +98,12 @@ struct ResolvedLayer {
     LayerPlan plan;
     Program voice = Program::initialProgram();
     bool voiceFound = false;
+    // From the voice's DX7II additional data (none: the DX7's behaviour).
+    float unison = 0.0f;        // cents up and down for the two voices of a key
+    float randomPitch = 0.0f;   // cents
+    int mono = -1;              // -1: as the instrument, 1: mono
 };
+/** Unison, random pitch and mono of one voice's AMEM (35 bytes). */
+void applyVoiceExtras(ResolvedLayer& layer, const uint8_t* amem35);
 std::array<ResolvedLayer, layerCount> resolve(const Performance& performance, const VoicePool& pool);
 }

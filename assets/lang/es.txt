@@ -478,3 +478,6 @@ layerPerformanceLoaded=«$name» en $count capas · voces de $sources
 layerVoicesMissing= · faltan $count voces (sus capas quedan apagadas)
 layerPerformanceNotes= · el paneo dinámico y la micro afinación del original no se aplican
 layerAlternate=alterna con $number
+layerUnison=unísono
+layerRandom=al azar
+layerMono=mono

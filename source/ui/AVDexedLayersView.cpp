@@ -179,6 +179,10 @@ public:
         auto voices = language.format("layerVoices", {{"count", String(sounding)}});
         if (group >= 0)   // TX802 alternate assign: this layer takes turns with others
             voices << String::fromUTF8(" · ") << language.format("layerAlternate", {{"number", String(group + 1)}});
+        // DX7II voice functions the layer plays (from a performance).
+        if (settings.unison.load() > 0.0f) voices << String::fromUTF8(" · ") << language.text("layerUnison");
+        if (settings.randomPitch.load() > 0.0f) voices << String::fromUTF8(" · ") << language.text("layerRandom");
+        if (settings.mono.load() == 1) voices << String::fromUTF8(" · ") << language.text("layerMono");
         if (name != voice.name || voices != voice.voices || selected != voice.selected || (sounding > 0) != voice.sounding) {
             voice.name = name.isNotEmpty() ? name : String("—");
             voice.voices = voices;
@@ -331,6 +335,10 @@ private:
                 settings.detune.store(0.0f);
                 settings.volume.store(1.0f);
                 settings.pan.store(0.5f);
+                settings.alternateGroup.store(-1);
+                settings.unison.store(0.0f);
+                settings.randomPitch.store(0.0f);
+                settings.mono.store(-1);
             }
             safeThis->refresh();
             safeThis->repaint();
