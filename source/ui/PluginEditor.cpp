@@ -914,7 +914,19 @@ void DexedAudioProcessorEditor::loadCart(File file) {
     applyCart(cart, file);
 }
 
-void DexedAudioProcessorEditor::importBanks(const Array<File>& files) {
+void DexedAudioProcessorEditor::importBanks(const Array<File>& dropped) {
+    if (dropped.isEmpty()) return;
+    // A DX7II or TX802 performance file (no banks in it) opens in the Layers page.
+    Array<File> files;
+    File performances;
+    for (const auto& file : dropped) {
+        if (! file.isDirectory() && AVDexedLayersView::isPerformanceOnlyFile(file)) performances = file;
+        else files.add(file);
+    }
+    if (performances != File()) {
+        showAVView(AVView::layers);
+        layersView.loadPerformanceFile(performances);
+    }
     if (files.isEmpty()) return;
     auto& language = AVDexedLanguageService::getInstance();
     const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);

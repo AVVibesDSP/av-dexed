@@ -26,16 +26,31 @@ public:
     void applyLanguage();
     void visibilityChanged() override;
 
+    /** Reads the DX7II/TX802 performances of `file` into the list and plays
+        the first one. */
+    void loadPerformanceFile(const juce::File& file);
+    /** True for a file with performances and no banks (what a drop opens here). */
+    static bool isPerformanceOnlyFile(const juce::File& file);
+
     /** A short line for the footer (what a button did). */
     std::function<void(const juce::String&)> onNotice;
 
     class Strip;
 
 private:
+    friend bool AVRenderUIEvidence(const juce::File& directory);
     DexedAudioProcessor& processor;
     juce::ToggleButton modeToggle;
     AVDexedSettingsStyle::OnOffPills modePills { modeToggle };
-    juce::TextButton stackButton, resetButton;
+    juce::TextButton openButton, stackButton, resetButton;
+    // The performance file last opened: its performances fill the list.
+    juce::ComboBox performanceList;
+    std::unique_ptr<juce::FileChooser> chooser;
+    juce::File performanceFile;
+    std::vector<AVDexedPerformance::Performance> performances;
+    std::unique_ptr<AVDexedPerformance::VoicePool> voicePool;
+    void openPerformanceFile();
+    void applyPerformance(int index);
     std::array<std::unique_ptr<Strip>, DexedAudioProcessor::AVLayerCount> strips;
     juce::Rectangle<float> modeLabelArea, hintArea;
     bool shownMode = false;
