@@ -173,6 +173,7 @@ target_sources(${BaseTargetName} PRIVATE
 
     ui/PluginEditor.cpp
 	ui/AVDexedPlayView.cpp
+	ui/AVDexedLayersView.cpp
 	ui/AVDexedPromptOverlay.cpp
 	ui/AVDexedLanguage.cpp
 	ui/AVDexedKeyboard.cpp

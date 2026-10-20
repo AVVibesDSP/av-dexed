@@ -144,6 +144,36 @@ bool AVRenderUIEvidence(const juce::File& directory) {
                     passed &= output != nullptr && PNGImageFormat().writeImageToStream(image, *output);
                     std::cout << "UI evidence: " << name << " " << editor->getWidth() << "x" << editor->getHeight() << '\n';
                 }
+                // Layers: off, then a TX816 stack with a split and a layer off.
+                // The instrument comes back as it was (the checks below compare
+                // the whole state with the one at the start).
+                MemoryBlock beforeLayers;
+                processor.getStateInformation(beforeLayers);
+                for (bool layered : { false, true }) {
+                    if (layered) {
+                        processor.stackAVLayers(DexedAudioProcessor::AVLayerCount, 7.0f);
+                        processor.getAVLayerSettings(6).channel = 2;
+                        processor.getAVLayerSettings(7).lowNote = 60;
+                        processor.setAVLayerEnabled(5, false);
+                        processor.selectAVLayer(2);
+                    } else {
+                        processor.setAVLayerMode(false);
+                    }
+                    editor->showAVView(DexedAudioProcessorEditor::AVView::layers, false);
+                    editor->layersView.setVisible(false);   // visibilityChanged() reads the processor
+                    editor->layersView.setVisible(true);
+                    checkBounds(editor->layersView);
+                    for (auto* strip : editor->layersView.getChildren()) checkBounds(*strip);
+                    auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true, 1.0f);
+                    const auto name = String("Layers-") + (layered ? "on-" : "off-") + locale + (scale == 1.0f ? "-normal.png" : "-compact.png");
+                    auto output = directory.getChildFile(name).createOutputStream();
+                    if (output) { output->setPosition(0); output->truncate(); }
+                    passed &= output != nullptr && PNGImageFormat().writeImageToStream(image, *output);
+                    std::cout << "UI evidence: " << name << '\n';
+                }
+                passed &= processor.loadAVStateInformation(beforeLayers.getData(), int(beforeLayers.getSize()));
+                processor.keyboardState.noteOn(2, 60, 0.8f);   // a restore lets go of held keys; this is no UI change
+                editor->showAVDexedPlayView(true, false);
             }
         }
         for (auto locale : {"es", "en"}) {

@@ -29,6 +29,7 @@
 #include "window/CartManager.h"
 #include "component/ParameterObserver.h"
 #include "AVDexedPlayView.h"
+#include "AVDexedLayersView.h"
 #include "AVDexedKeyboard.h"
 #include "AVDexedResizeGrip.h"
 #include "AVDexedWheel.h"
@@ -102,6 +103,11 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     Label modifiedLabel;
     TextButton playTabButton { "Play" };
     TextButton advancedTabButton { "Advanced" };
+    TextButton layersTabButton { "Layers" };
+    AVDexedLayersView layersView;
+    enum class AVView { play, advanced, layers };
+    AVView AVVisibleView = AVView::play;
+    Component& AVViewComponent(AVView view);
     DrawableButton saveButton { "Save", DrawableButton::ImageFitted };
     TextButton languageButton { "ES" };
     AVDexedPanicButton panicButton;
@@ -183,6 +189,8 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     void resetSize();
     void resized() override;
     void showAVDexedPlayView(bool showPlay, bool animate = true);
+    /** Play, Advanced or Layers: the GOZO cross-fade between any two. */
+    void showAVView(AVView view, bool animate = true);
     void refreshPresetHeader();
     void applyLanguage();
     void changeListenerCallback(ChangeBroadcaster*) override;

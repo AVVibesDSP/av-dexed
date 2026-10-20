@@ -313,6 +313,7 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     : AudioProcessorEditor (ownerFilter),
       midiKeyboard (ownerFilter->keyboardState),
       playView (*ownerFilter),
+      layersView (*ownerFilter),
       cartManager(this), global(*ownerFilter, this) {
     ownerFilter->setAVEditorOpen(true);   // learned arrow presses now walk this editor's list
     processor = ownerFilter;
@@ -344,7 +345,7 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     identityLabel.setBounds(22, 38, 130, 16);
     frameComponent.addAndMakeVisible(identityLabel);
 
-    for (auto* button : std::array<Button*, 3>{ &playTabButton, &advancedTabButton, &saveButton }) {
+    for (auto* button : std::array<Button*, 4>{ &playTabButton, &advancedTabButton, &layersTabButton, &saveButton }) {
         button->setColour(TextButton::buttonColourId, AVDexedTheme::panelTop);
         button->setColour(TextButton::buttonOnColourId, AVDexedTheme::oceanBottom);
         button->setColour(TextButton::textColourOffId, AVDexedTheme::textSecondary);
@@ -361,15 +362,15 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     panicButton.setColour(TextButton::buttonColourId, AVDexedTheme::dangerBottom);
     panicButton.setColour(TextButton::buttonOnColourId, AVDexedTheme::dangerTop);
     playTabButton.onClick = [this] { showAVDexedPlayView(true); };
-    playTabButton.getProperties().set("AVTab", true);
-    advancedTabButton.getProperties().set("AVTab", true);
     // GOZO tabs switch on mouse down. A click leaves the keyboard where it was
     // (Tab still reaches them).
-    playTabButton.setTriggeredOnMouseDown(true);
-    advancedTabButton.setTriggeredOnMouseDown(true);
-    playTabButton.setMouseClickGrabsKeyboardFocus(false);
-    advancedTabButton.setMouseClickGrabsKeyboardFocus(false);
+    for (auto* tab : { &playTabButton, &advancedTabButton, &layersTabButton }) {
+        tab->getProperties().set("AVTab", true);
+        tab->setTriggeredOnMouseDown(true);
+        tab->setMouseClickGrabsKeyboardFocus(false);
+    }
     advancedTabButton.onClick = [this] { showAVDexedPlayView(false); };
+    layersTabButton.onClick = [this] { showAVView(AVView::layers); };
     saveButton.onClick = [this] {
         auto& language = AVDexedLanguageService::getInstance();
         PopupMenu menu;
@@ -458,6 +459,8 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     playView.setBounds(24, 70, WINDOW_SIZE_X - 48, 550);
     frameComponent.addAndMakeVisible(classicView);
     classicView.setBounds(24, 70, WINDOW_SIZE_X - 48, 750);
+    layersView.onNotice = [this](const String& text) { showAVFooterNotice(text); };
+    frameComponent.addChildComponent(layersView);
 
     // OPERATORS
     for (int i=0;i<6;i++) {
@@ -639,8 +642,10 @@ void DexedAudioProcessorEditor::paint (Graphics& g) {
     AVDexedTheme::drawGreyText(g, "AV Vibes", avIdentityFont(), identity.text, Justification::centredLeft);
     AVDexedTheme::fillBox(g, identity.rule, 0.0f, false, 3.0f);
     // Separator between the tabs.
-    const auto separator = Rectangle<float>(float(playTabButton.getRight()) + 10.0f, AVTopBarAxis - 13.0f, 2.0f, 26.0f);
-    AVDexedTheme::fillBox(g, separator, 0.0f, false, 4.0f);
+    for (const auto* tab : { &playTabButton, &advancedTabButton }) {
+        const auto separator = Rectangle<float>(float(tab->getRight()) + 10.0f, AVTopBarAxis - 13.0f, 2.0f, 26.0f);
+        AVDexedTheme::fillBox(g, separator, 0.0f, false, 4.0f);
+    }
 }
 
 DexedAudioProcessorEditor::AVIdentityLayout DexedAudioProcessorEditor::AVGetIdentityLayout() {
@@ -668,19 +673,34 @@ DexedAudioProcessorEditor::AVIdentityLayout DexedAudioProcessorEditor::AVGetIden
     return layout;
 }
 
+Component& DexedAudioProcessorEditor::AVViewComponent(AVView view) {
+    switch (view) {
+        case AVView::play: return playView;
+        case AVView::advanced: return classicView;
+        case AVView::layers: break;
+    }
+    return layersView;
+}
+
 void DexedAudioProcessorEditor::showAVDexedPlayView(bool showPlay, bool animate) {
+    showAVView(showPlay ? AVView::play : AVView::advanced, animate);
+}
+
+void DexedAudioProcessorEditor::showAVView(AVView view, bool animate) {
     midiKeyboard.releaseAVUINotes();
     if (cartManagerCover.isVisible()) cartManager.hideCartridgeManager();
     PopupMenu::dismissAllActiveMenus();
-    auto& outgoing = showPlay ? classicView : static_cast<Component&>(playView);
-    auto& incoming = showPlay ? static_cast<Component&>(playView) : classicView;
-    const bool isChangingView = playTabButton.getToggleState() != showPlay;
+    const auto previous = AVVisibleView;
+    auto& incoming = AVViewComponent(view);
+    const bool isChangingView = previous != view;
     const auto generation = ++viewTransitionGeneration;
     auto& animator = Desktop::getInstance().getAnimator();
-    animator.cancelAnimation(&outgoing, false);
-    animator.cancelAnimation(&incoming, false);
+    for (auto other : { AVView::play, AVView::advanced, AVView::layers })
+        animator.cancelAnimation(&AVViewComponent(other), false);
     incoming.setInterceptsMouseClicks(true, true);
+    AVVisibleView = view;
     if (animate && isChangingView) {
+        auto& outgoing = AVViewComponent(previous);
         outgoing.setInterceptsMouseClicks(false, false);
         incoming.setAlpha(0.0f);
         incoming.setVisible(true);
@@ -688,24 +708,32 @@ void DexedAudioProcessorEditor::showAVDexedPlayView(bool showPlay, bool animate)
         animator.fadeOut(&outgoing, 220);
         animator.fadeIn(&incoming, 220);
         Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
-        Timer::callAfterDelay(230, [safeThis, generation, showPlay] {
+        Timer::callAfterDelay(230, [safeThis, generation, view] {
             if (safeThis == nullptr || safeThis->viewTransitionGeneration != generation)
                 return;
-            auto& oldView = showPlay ? safeThis->classicView : static_cast<Component&>(safeThis->playView);
+            for (auto other : { AVView::play, AVView::advanced, AVView::layers }) {
+                if (other == view) continue;
+                auto& oldView = safeThis->AVViewComponent(other);
+                oldView.setVisible(false);
+                oldView.setAlpha(1.0f);
+                oldView.setInterceptsMouseClicks(true, true);
+            }
+        });
+    } else {
+        for (auto other : { AVView::play, AVView::advanced, AVView::layers }) {
+            if (other == view) continue;
+            auto& oldView = AVViewComponent(other);
             oldView.setVisible(false);
             oldView.setAlpha(1.0f);
             oldView.setInterceptsMouseClicks(true, true);
-        });
-    } else {
-        outgoing.setVisible(false);
-        outgoing.setAlpha(1.0f);
-        outgoing.setInterceptsMouseClicks(true, true);
+        }
         incoming.setAlpha(1.0f);
         incoming.setVisible(true);
     }
-    playTabButton.setToggleState(showPlay, dontSendNotification);
-    advancedTabButton.setToggleState(!showPlay, dontSendNotification);
-    if (showPlay)
+    playTabButton.setToggleState(view == AVView::play, dontSendNotification);
+    advancedTabButton.setToggleState(view == AVView::advanced, dontSendNotification);
+    layersTabButton.setToggleState(view == AVView::layers, dontSendNotification);
+    if (view == AVView::play)
         playView.refreshLabels();
 }
 
@@ -714,6 +742,9 @@ void DexedAudioProcessorEditor::applyLanguage() {
     AVDropOverlay.setHint(language.text("dropBanksHere"));
     playTabButton.setButtonText(language.text("play"));
     advancedTabButton.setButtonText(language.text("advanced"));
+    layersTabButton.setButtonText(language.text("layers"));
+    layersTabButton.setTooltip(language.text("layersTooltip"));
+    layersView.applyLanguage();
     saveButton.setButtonText(language.text("save"));
     saveButton.setTitle(language.text("save"));
     saveButton.setTooltip(language.text("save"));
@@ -2295,7 +2326,13 @@ void DexedAudioProcessorEditor::AVUpdateFooter() {
     if (++AVStatusTicks >= 12) {
         AVStatusTicks = 0;
         AVCpuLabel.setText(String::fromUTF8("CPU · ") + String(processor->getAVAudioCpuPercent(), 1) + "%", dontSendNotification);
-        AVVoicesLabel.setText(language.text("voices") + ": " + String(processor->getAVActiveVoices()) + " / 16", dontSendNotification);
+        int layers = 1;
+        if (processor->isAVLayerModeOn()) {
+            layers = 0;
+            for (int layer = 0; layer < DexedAudioProcessor::AVLayerCount; ++layer)
+                layers += processor->getAVLayerSettings(layer).enabled.load() ? 1 : 0;
+        }
+        AVVoicesLabel.setText(language.text("voices") + ": " + String(processor->getAVActiveVoices()) + " / " + String(16 * jmax(1, layers)), dontSendNotification);
     }
 }
 
@@ -2367,22 +2404,25 @@ void DexedAudioProcessorEditor::AVLayoutFrame() {
     const auto tabFont = AVDexedTheme::font(30.0f, "SemiBold");
     const int playWidth = roundToInt(GlyphArrangement::getStringWidth(tabFont, playTabButton.getButtonText())) + 12;
     const int advancedWidth = roundToInt(GlyphArrangement::getStringWidth(tabFont, advancedTabButton.getButtonText())) + 12;
+    const int layersWidth = roundToInt(GlyphArrangement::getStringWidth(tabFont, layersTabButton.getButtonText())) + 12;
     // Everything in the top bar shares one centre line (AVTopBarAxis): the logo
     // mark, the tab text, the preset name with its arrows and star, and the
     // icons, which keep GOZO's even 14 px gaps against a 30 px right margin.
     const int axis = int(AVTopBarAxis);
     playTabButton.setBounds(262, axis - 21, playWidth, 42);
     advancedTabButton.setBounds(playTabButton.getRight() + 22, axis - 21, advancedWidth, 42);
+    layersTabButton.setBounds(advancedTabButton.getRight() + 22, axis - 21, layersWidth, 42);
     AVSettingsButton.setBounds(WINDOW_SIZE_X - 60, axis - 15, 30, 30);
     AVOutputMeter.setBounds(AVSettingsButton.getX() - 14 - 16, axis - 15, 16, 30);
     saveButton.setBounds(AVOutputMeter.getX() - 14 - 30, axis - 15, 30, 30);
-    const int navLeft = advancedTabButton.getRight() + 50;
+    const int navLeft = layersTabButton.getRight() + 50;
     playView.getPresetNavigator().setBounds(navLeft, axis - 21, saveButton.getX() - 50 - navLeft, 58);
     const int bottom = processor->showKeyboard ? 158 : 30;
     const int contentBottom = height - bottom;
     playView.setBounds(0, topBar, WINDOW_SIZE_X, contentBottom - topBar);
     const auto content = Rectangle<int>(20, topBar + 2, WINDOW_SIZE_X - 40, contentBottom - topBar - 10);
     classicView.setBounds(content);
+    layersView.setBounds(content);
     const int globalHeight = 178;
     const int gap = 10;
     const int rowHeight = (content.getHeight() - globalHeight - 2 * gap) / 2;
