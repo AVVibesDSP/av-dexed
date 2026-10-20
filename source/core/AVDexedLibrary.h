@@ -150,13 +150,32 @@ struct FolderIndex {
 struct ImportResult {
     enum class Status { copied, alreadyThere, notABank, failed };
     Status status = Status::failed;
-    juce::File file;   // the file inside the library (copied or already there)
+    juce::File file;   // the file inside the library (copied or already there): the first one
+    juce::Array<juce::File> files;   // every file the import produced or reused (banks split from one file)
+    int sounds = 0;    // sounds added by the copies (32 per bank; the real voices of a bank built from single voices)
 };
+
+/** Largest file an import reads (archives of many banks). */
+inline constexpr juce::int64 maxImportBytes = 16 * 1024 * 1024;
 
 /** Copies a bank into `folder` (created if needed). A file already in that
     folder, or identical content there under any name, is reused; a different
-    file with the same name gets " 2". Never overwrites. */
+    file with the same name gets " 2". Never overwrites.
+    A standard bank file (one bank, complete messages, under 64 KB) is copied as
+    it is. Anything else of the DX7 family becomes standard banks, one file per
+    bank ("name A"/"name B", or "name 01"… for more): several banks in one file
+    (DX7II/TX802 64-voice dumps, archives larger than 64 KB), a cartridge saved
+    without its SysEx header, messages after a librarian's header, the last F7
+    missing, single voices (their voices in order, the rest of the bank Init).
+    The DX7II/TX802 additional data (AMEM) sent with a bank stays with it. */
 ImportResult importBank(const juce::File& source, const juce::File& folder, FolderIndex* index = nullptr);
+/** True for a file of single DX7 voices (VCED) without any bank: the import
+    gathers those of one folder into banks of 32 (importVoices). */
+bool isSingleVoiceFile(const juce::File& file);
+/** The voices of `sources` (in file-name order) as banks of 32 in `folder`,
+    named `bankName` ("bankName 1", "bankName 2"… for more than one bank). */
+ImportResult importVoices(const juce::Array<juce::File>& sources, const juce::File& folder,
+                          const juce::String& bankName, FolderIndex* index = nullptr);
 /** Same for an .avdexpreset (or .dexedpreset) sound (no content check beyond its size). */
 ImportResult importPreset(const juce::File& source, const juce::File& folder, FolderIndex* index = nullptr);
 

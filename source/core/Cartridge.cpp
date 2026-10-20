@@ -1,5 +1,6 @@
 #include "Cartridge.h"
 #include "AVDexedLibrary.h"
+#include "AVDexedSysex.h"
 
 void exportSysexPgm(uint8_t *dest, const uint8_t *src) {
     uint8_t header[] = { 0xF0, 0x43, 0x00, 0x00, 0x01, 0x1B };
@@ -51,6 +52,20 @@ int Cartridge::load(const uint8_t *stream, int size) {
 
     const uint8_t *pos = stream;
 
+    // AV Dexed: the first bank of what the standard reading below does not
+    // find (a cartridge saved without its header, a librarian's header before
+    // the messages, the last F7 missing). A file the standard reading accepts
+    // is read exactly as before.
+    const auto firstScannedBank = [this, stream, size]() -> int {
+        const auto contents = AVDexedSysex::scan(stream, size_t(juce::jmin(size, 65535)));
+        if (contents.banks.empty())
+            return -1;
+        const auto& bank = contents.banks.front();
+        memcpy(voiceData + 6, bank.voices.data(), AVDexedSysex::bankBytes);
+        hasData = true;
+        return bank.checksumOk ? 0 : 1;
+    };
+
     if ( size < 4096 ) {
         memcpy(voiceData+6, pos, size);
         hasData = true;
@@ -59,6 +74,8 @@ int Cartridge::load(const uint8_t *stream, int size) {
     }
 
     if ( pos[0] != 0xF0 ) {
+        if (const int rc = firstScannedBank(); rc >= 0)
+            return rc;
         // it is not, just copy the first 4096 bytes
         memcpy(voiceData + 6, pos, 4096);
         hasData = true;
@@ -86,6 +103,9 @@ int Cartridge::load(const uint8_t *stream, int size) {
         }
         offset = end + 1;
     }
+
+    if (const int rc = firstScannedBank(); rc >= 0)
+        return rc;
 
     // it is a sysex, but doesn't seems to be related to any DX series ...
     memcpy(voiceData + 6, stream, 4096);

@@ -162,6 +162,7 @@ target_sources(${BaseTargetName} PRIVATE
 	Tuning.cpp
 
 	core/Cartridge.cpp
+	core/AVDexedSysex.cpp
 	core/AVDexedLibrary.cpp
 	core/Program.cpp
 
@@ -263,7 +264,8 @@ if(DEXED_BUILD_TESTS)
         ../tests/AVDexedDropTests.cpp
         ../tests/AVDexedQALibrary.cpp
         ../tests/AVDexedVoiceTests.cpp
-        ../tests/AVDexedGolden.cpp)
+        ../tests/AVDexedGolden.cpp
+        ../tests/AVDexedSysexTests.cpp)
     target_include_directories(AVDexedRegressionTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../libs

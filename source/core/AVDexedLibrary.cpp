@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "AVDexedLibrary.h"
+#include "AVDexedSysex.h"
+#include "Program.h"
 #include <set>
 
 #if JUCE_WINDOWS
@@ -497,12 +499,12 @@ uint64 contentHash(const MemoryBlock& bytes) {
     return stableHash64(bytes.getData(), bytes.getSize()) ^ static_cast<uint64>(bytes.getSize());
 }
 
-/** Copies `source` into `folder` unless the folder already holds the same bytes
-    (under any name). Never overwrites: a different file with the name gets " 2". */
-ImportResult copyIntoFolder(const File& source, const File& folder, FolderIndex* index, const String& fileName) {
+/** Writes `bytes` into `folder` as `fileName` unless the folder already holds
+    the same bytes (under any name). Never overwrites: a different file with the
+    name gets " 2". */
+ImportResult writeIntoFolder(const MemoryBlock& bytes, const String& extension, const File& folder,
+                             FolderIndex* index, const String& fileName) {
     ImportResult result;
-    MemoryBlock bytes;
-    if (! source.loadFileAsData(bytes)) return result;
     const auto hash = contentHash(bytes);
     LibraryScope lock(lockTimeoutMs);
     if (! lock.held || ! folder.createDirectory().wasOk()) return result;
@@ -522,8 +524,8 @@ ImportResult copyIntoFolder(const File& source, const File& folder, FolderIndex*
     const auto candidates = known.files.equal_range(hash);
     for (auto candidate = candidates.first; candidate != candidates.second; ++candidate) {
         MemoryBlock existingBytes;
-        if ((candidate->second.getFileExtension().equalsIgnoreCase(source.getFileExtension())
-             || (isPresetFile(candidate->second) && isPresetFile(source)))
+        if ((candidate->second.getFileExtension().equalsIgnoreCase(extension)
+             || (isPresetFile(candidate->second) && isPresetFile(File("x" + extension))))
             && candidate->second.loadFileAsData(existingBytes) && existingBytes == bytes) {
             result.status = ImportResult::Status::alreadyThere;
             result.file = candidate->second;
@@ -538,21 +540,165 @@ ImportResult copyIntoFolder(const File& source, const File& folder, FolderIndex*
     }
     return result;
 }
+
+/** Copies `source` into `folder` unless the folder already holds the same bytes. */
+ImportResult copyIntoFolder(const File& source, const File& folder, FolderIndex* index, const String& fileName) {
+    MemoryBlock bytes;
+    if (! source.loadFileAsData(bytes)) return {};
+    return writeIntoFolder(bytes, source.getFileExtension(), folder, index, fileName);
+}
+
+/** One standard bank, complete messages only, under 64 KB: the files the
+    library keeps as they are (and "Guardar" can rewrite). */
+bool isPlainBankFile(const MemoryBlock& bytes) {
+    const auto* data = static_cast<const uint8*>(bytes.getData());
+    const auto size = bytes.getSize();
+    if (size == 0 || size >= 65536 || data[0] != 0xF0) return false;
+    int banks = 0;
+    size_t pos = 0;
+    while (pos < size) {
+        if (data[pos] != 0xF0) return false;
+        size_t end = pos + 1;
+        while (end < size && data[end] != 0xF7) ++end;
+        if (end >= size) return false;
+        if (end - pos + 1 == size_t(SYSEX_SIZE) && data[pos + 1] == 0x43 && (data[pos + 2] & 0xF0) == 0
+            && data[pos + 3] == 9 && data[pos + 4] == 0x20 && data[pos + 5] == 0)
+            ++banks;
+        pos = end + 1;
+    }
+    return banks == 1;
+}
+
+bool readImportable(const File& source, MemoryBlock& bytes) {
+    return source.existsAsFile() && source.getSize() > 0 && source.getSize() <= maxImportBytes
+        && source.loadFileAsData(bytes);
+}
+
+/** A standard bank file for a bank found in a dump: its AMEM first (the order
+    of a DX7II/TX802 bank dump), then the 32 voices. */
+MemoryBlock standardBankFile(const AVDexedSysex::Bank& bank) {
+    MemoryBlock file;
+    if (bank.hasAmem) {
+        const auto amem = AVDexedSysex::amemMessage(bank.amem.data());
+        file.append(amem.data(), amem.size());
+    }
+    const auto voices = AVDexedSysex::bankMessage(bank.voices.data());
+    file.append(voices.data(), voices.size());
+    return file;
+}
+
+/** Single voices as banks of 32: the voices in order, the rest Init. */
+std::vector<std::pair<MemoryBlock, int>> voicesToBankFiles(const std::vector<std::array<uint8_t, AVDexedSysex::voiceBytes>>& voices) {
+    std::vector<std::pair<MemoryBlock, int>> files;
+    const auto init = Program::initialProgram();
+    for (size_t first = 0; first < voices.size(); first += 32) {
+        Cartridge bank;
+        for (int slot = 0; slot < 32; ++slot)
+            bank.packProgram(init.getRawData(), slot, "INIT VOICE");
+        const int count = int(std::min<size_t>(32, voices.size() - first));
+        for (int slot = 0; slot < count; ++slot) {
+            auto packed = AVDexedSysex::packVoice(voices[first + size_t(slot)].data());
+            bank.setPackedProgram(slot, reinterpret_cast<char*>(packed.data()));
+        }
+        const auto message = AVDexedSysex::bankMessage(reinterpret_cast<const uint8_t*>(bank.getRawVoice()));
+        files.emplace_back(MemoryBlock(message.data(), message.size()), count);
+    }
+    return files;
+}
+
+/** "name" for one bank, "name A"/"name B" for two, "name 01"… for more. */
+String bankFileName(const String& stem, size_t index, size_t count) {
+    if (count <= 1) return stem;
+    if (count == 2) return stem + (index == 0 ? " A" : " B");
+    return stem + " " + String(int(index + 1)).paddedLeft('0', count > 99 ? 3 : 2);
+}
+
+/** Writes every produced bank; copied when any was written, alreadyThere when
+    the folder held all of them. */
+ImportResult writeBankFiles(const std::vector<std::pair<MemoryBlock, int>>& banks, const String& stem,
+                            const File& folder, FolderIndex* index, bool numberFromOne) {
+    ImportResult result;
+    int copied = 0, reused = 0;
+    for (size_t i = 0; i < banks.size(); ++i) {
+        const auto name = numberFromOne && banks.size() > 1 ? stem + " " + String(int(i + 1)) : bankFileName(stem, i, banks.size());
+        const auto written = writeIntoFolder(banks[i].first, ".syx", folder, index, name + ".syx");
+        if (written.file == File()) continue;
+        result.files.add(written.file);
+        if (written.status == ImportResult::Status::copied) { ++copied; result.sounds += banks[i].second; }
+        else ++reused;
+    }
+    result.file = result.files.isEmpty() ? File() : result.files.getFirst();
+    result.status = copied > 0 ? ImportResult::Status::copied
+                  : reused > 0 && reused == int(banks.size()) ? ImportResult::Status::alreadyThere
+                  : ImportResult::Status::failed;
+    return result;
+}
 }
 
 ImportResult importBank(const File& source, const File& folder, FolderIndex* index) {
     ImportResult result;
-    Cartridge bank;
-    if (! readBank(source, bank)) {
+    MemoryBlock bytes;
+    if (! readImportable(source, bytes)) {
         result.status = ImportResult::Status::notABank;
         return result;
     }
-    if (source.getParentDirectory() == folder) {
-        result.status = ImportResult::Status::alreadyThere;
-        result.file = source;
+    Cartridge bank;
+    if (isPlainBankFile(bytes) && readBank(source, bank)) {
+        if (source.getParentDirectory() == folder) {
+            result.status = ImportResult::Status::alreadyThere;
+            result.file = source;
+            result.files.add(source);
+            return result;
+        }
+        result = copyIntoFolder(source, folder, index, source.getFileName());
+        if (result.file != File()) result.files.add(result.file);
+        if (result.status == ImportResult::Status::copied) result.sounds = 32;
         return result;
     }
-    return copyIntoFolder(source, folder, index, source.getFileName());
+    const auto contents = AVDexedSysex::scan(bytes);
+    std::vector<std::pair<MemoryBlock, int>> banks;
+    std::vector<const AVDexedSysex::Bank*> distinct;   // a bank repeated in one file is one bank
+    for (const auto& found : contents.banks)
+        if (std::none_of(distinct.begin(), distinct.end(), [&found](const auto* kept) { return kept->voices == found.voices; }))
+            distinct.push_back(&found);
+    for (const auto* found : distinct)
+        banks.emplace_back(standardBankFile(*found), 32);
+    if (banks.empty())
+        banks = voicesToBankFiles(contents.voices);
+    if (banks.empty()) {
+        result.status = ImportResult::Status::notABank;
+        return result;
+    }
+    return writeBankFiles(banks, source.getFileNameWithoutExtension(), folder, index, false);
+}
+
+bool isSingleVoiceFile(const File& file) {
+    MemoryBlock bytes;
+    if (! file.getFileExtension().equalsIgnoreCase(".syx") || file.getSize() > 64 * 1024 || ! readImportable(file, bytes))
+        return false;
+    const auto contents = AVDexedSysex::scan(bytes);
+    return contents.banks.empty() && ! contents.voices.empty();
+}
+
+ImportResult importVoices(const Array<File>& sources, const File& folder, const String& bankName, FolderIndex* index) {
+    auto ordered = sources;
+    std::sort(ordered.begin(), ordered.end(), [](const File& a, const File& b) {
+        return a.getFileName().compareNatural(b.getFileName()) < 0;
+    });
+    std::vector<std::array<uint8_t, AVDexedSysex::voiceBytes>> voices;
+    for (const auto& source : ordered) {
+        MemoryBlock bytes;
+        if (! readImportable(source, bytes)) continue;
+        const auto contents = AVDexedSysex::scan(bytes);
+        voices.insert(voices.end(), contents.voices.begin(), contents.voices.end());
+    }
+    if (voices.empty()) {
+        ImportResult result;
+        result.status = ImportResult::Status::notABank;
+        return result;
+    }
+    const auto name = sanitizeFolderName(bankName).isNotEmpty() ? sanitizeFolderName(bankName) : String("Voices");
+    return writeBankFiles(voicesToBankFiles(voices), name, folder, index, true);
 }
 
 ImportResult importPreset(const File& source, const File& folder, FolderIndex* index) {

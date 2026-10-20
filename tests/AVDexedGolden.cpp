@@ -18,6 +18,7 @@
 #include "../source/PluginProcessor.h"
 #include "../source/parameter/Model.h"
 #include <iostream>
+#include <map>
 
 namespace {
 constexpr double goldenRate = 48000.0;
@@ -136,6 +137,68 @@ std::vector<std::pair<juce::String, uint64_t>> renderBank(const juce::File& file
     }
     return lines;
 }
+}
+
+/** --loader-report <folder> <out.txt>: how every .syx under `folder` loads,
+    one line each (path, Cartridge::load result, readBank, bank fingerprint).
+    Comparing two reports shows what a change to the reader accepts anew and
+    proves that every file that loaded before still loads the same bank. */
+int AVRunLoaderReport(const juce::File& folder, const juce::File& output) {
+    juce::StringArray lines;
+    for (const auto& entry : juce::RangedDirectoryIterator(folder, true, "*", juce::File::findFiles)) {
+        const auto file = entry.getFile();
+        if (! file.getFileExtension().equalsIgnoreCase(".syx") || file.getSize() > 4 * 1024 * 1024)
+            continue;
+        Cartridge bank;
+        const int rc = bank.load(file);
+        Cartridge viaLibrary;
+        const bool readable = AVDexedLibrary::readBank(file, viaLibrary);
+        lines.add(file.getRelativePathFrom(folder) + "\t" + juce::String(rc) + "\t" + (readable ? "bank" : "-")
+                  + "\t" + (readable ? AVDexedLibrary::bankFingerprint(viaLibrary) : juce::String("-")));
+    }
+    lines.sort(true);
+    if (! output.replaceWithText(lines.joinIntoString("\n") + "\n"))
+        return 2;
+    std::cout << lines.size() << " files reported\n";
+    return 0;
+}
+
+/** --import <library folder> <file or folder>...: imports as the editor does
+    (single voices of one folder gathered into banks) and lists what came out. */
+int AVRunImport(const juce::StringArray& arguments) {
+    if (arguments.size() < 2) return 2;
+    const juce::File folder(arguments[0]);
+    juce::Array<juce::File> files;
+    for (int i = 1; i < arguments.size(); ++i) {
+        const juce::File item(arguments[i]);
+        if (item.isDirectory())
+            for (const auto& entry : juce::RangedDirectoryIterator(item, false, "*.syx;*.SYX", juce::File::findFiles))
+                files.add(entry.getFile());
+        else
+            files.add(item);
+    }
+    std::map<juce::String, juce::Array<juce::File>> singles;
+    int sounds = 0;
+    const auto report = [&sounds](const AVDexedLibrary::ImportResult& result, const juce::String& name) {
+        sounds += result.sounds;
+        std::cout << name << " -> status " << int(result.status) << ", " << result.sounds << " sounds:";
+        for (const auto& file : result.files) {
+            Cartridge bank;
+            const bool ok = AVDexedLibrary::readBank(file, bank);
+            std::cout << " [" << file.getFileName() << (ok ? "" : " UNREADABLE") << " " << (ok ? bank.getProgramName(0).trim() : "") << "]";
+        }
+        std::cout << '\n';
+    };
+    for (const auto& file : files) {
+        if (AVDexedLibrary::isSingleVoiceFile(file)) { singles[file.getParentDirectory().getFullPathName()].add(file); continue; }
+        report(AVDexedLibrary::importBank(file, folder), file.getFileName());
+    }
+    for (const auto& [directory, voices] : singles)
+        report(voices.size() < 2 ? AVDexedLibrary::importBank(voices.getFirst(), folder)
+                                 : AVDexedLibrary::importVoices(voices, folder, juce::File(directory).getFileName()),
+               juce::File(directory).getFileName() + " (" + juce::String(voices.size()) + " single voices)");
+    std::cout << sounds << " sounds added\n";
+    return 0;
 }
 
 int AVRunGolden(const juce::StringArray& arguments) {

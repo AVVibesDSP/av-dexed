@@ -26,6 +26,7 @@
 #include "midi/MidiCCHandler.h"
 #include "window/TuningShow.h"
 #include "../core/AVDexedLibrary.h"
+#include "../core/AVDexedSysex.h"
 #include "../debugger/Logger.h"
 #include "math.h"
 #include <algorithm>
@@ -852,6 +853,19 @@ void DexedAudioProcessorEditor::loadCart(File file) {
     }
 
     if ( rc != 0 ) {
+        // A file of single voices (no bank): its first voice becomes the sound
+        // being played, as when one arrives by SysEx.
+        MemoryBlock bytes;
+        if (file.getSize() <= AVDexedLibrary::maxImportBytes && file.loadFileAsData(bytes)) {
+            const auto contents = AVDexedSysex::scan(bytes);
+            if (contents.banks.empty() && ! contents.voices.empty()) {
+                std::array<uint8_t, AVDexedSysex::voiceBytes + 1> voice {};
+                std::copy(contents.voices.front().begin(), contents.voices.front().end(), voice.begin());
+                voice[AVDexedSysex::voiceBytes] = AVDexedSysex::checksum(voice.data(), AVDexedSysex::voiceBytes);
+                processor->updateProgramFromSysex(voice.data());
+                return;
+            }
+        }
         AVDexedPromptOverlay::Options options;
         options.title = language.text("invalidBankTitle");
         options.message = language.text("invalidBank") + " " + language.text("invalidBankQuestion");
@@ -939,22 +953,42 @@ void DexedAudioProcessorEditor::importBanks(const Array<File>& files) {
         StringArray refused, failed;
         int added = 0, alreadyThere = 0;   // sounds copied; files the folder already held
         AVDexedLibrary::FolderIndex folderContents;   // the folder is read once for the whole batch
-        const auto take = [&](const File& file, bool isBank) {
+        const auto record = [&](const AVDexedLibrary::ImportResult& result, const String& name, bool isBank) {
             auto& list = isBank ? banks : presets;
-            if (avIsInVisibleLibrary(file, root)) { list.add(file); return; }   // already in the library: stays where it is
-            const auto result = isBank ? AVDexedLibrary::importBank(file, folder, &folderContents)
-                                       : AVDexedLibrary::importPreset(file, folder, &folderContents);
-            if (result.status == Status::notABank) refused.add(file.getFileName());
-            else if (result.status == Status::failed) failed.add(file.getFileName());
+            if (result.status == Status::notABank) refused.add(name);
+            else if (result.status == Status::failed) failed.add(name);
             else {
                 // Content the folder already held is reused (it still loads),
-                // but it was not added: only real copies count.
-                list.add(result.file);
-                if (result.status == Status::copied) added += isBank ? 32 : 1;
+                // but it was not added: only real copies count. One file can
+                // give several banks (a 64-voice dump, an archive).
+                for (const auto& produced : result.files) list.addIfNotAlreadyThere(produced);
+                if (result.files.isEmpty()) list.add(result.file);
+                if (result.status == Status::copied) added += isBank ? result.sounds : 1;
                 else ++alreadyThere;
             }
         };
-        for (const auto& bank : found.banks) take(bank, true);
+        const auto take = [&](const File& file, bool isBank) {
+            auto& list = isBank ? banks : presets;
+            if (avIsInVisibleLibrary(file, root)) { list.add(file); return; }   // already in the library: stays where it is
+            record(isBank ? AVDexedLibrary::importBank(file, folder, &folderContents)
+                          : AVDexedLibrary::importPreset(file, folder, &folderContents), file.getFileName(), isBank);
+        };
+        // Single voices (one DX7 voice per file) of one folder become banks of
+        // 32 named after that folder; a lone one becomes a bank of its own.
+        std::map<String, Array<File>> singleVoices;
+        Array<File> bankFiles;
+        for (const auto& bank : found.banks) {
+            if (! avIsInVisibleLibrary(bank, root) && AVDexedLibrary::isSingleVoiceFile(bank))
+                singleVoices[bank.getParentDirectory().getFullPathName()].add(bank);
+            else
+                bankFiles.add(bank);
+        }
+        for (const auto& [directory, voices] : singleVoices) {
+            if (voices.size() < 2) { bankFiles.add(voices.getFirst()); continue; }
+            record(AVDexedLibrary::importVoices(voices, folder, File(directory).getFileName(), &folderContents),
+                   File(directory).getFileName(), true);
+        }
+        for (const auto& bank : bankFiles) take(bank, true);
         for (const auto& preset : found.presets) take(preset, false);
         if (added > 0)
             safeThis->showAVFooterNotice(lang.format(added == 1 ? "importedNoticeOne" : "importedNotice",
