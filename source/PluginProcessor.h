@@ -83,7 +83,9 @@ class DexedAudioProcessor  : public AudioProcessor, public MidiInputCallback, pu
     int currentNote;
 
     // The original DX7 had one single LFO. Later units had an LFO per note.
-    Lfo lfo;
+    // AV Dexed: value-initialised (phase, delay and sample-and-hold state
+    // start at zero instead of whatever the memory held).
+    Lfo lfo {};
 
     bool sustain;
     bool monoMode;

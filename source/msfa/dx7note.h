@@ -83,7 +83,9 @@ private:
     FmOpParams params_[6];
     PitchEnv pitchenv_;
     int32_t basepitch_[6];
-    int32_t fb_buf_[2];
+    // AV Dexed: zero until the first sample (left unset in Dexed: the first
+    // note of a new voice read whatever the memory held).
+    int32_t fb_buf_[2] = { 0, 0 };
     int32_t fb_shift_;
     int32_t ampmodsens_[6];
     int32_t opMode[6];

@@ -130,6 +130,10 @@ DexedAudioProcessor::DexedAudioProcessor(SetupMode setupMode)
     controllers.pitch_range_dn = 3;
     controllers.pitch_step = 0;
     controllers.masterTune = 0;
+    // AV Dexed: the glissando switch follows its parameter (off by default);
+    // Dexed left it unset until the parameter changed, so a new instance
+    // could glide in semitones on its own.
+    controllers.portamento_gliss_cc = false;
     
     if (setupMode == SetupMode::userData)
         loadPreference();
