@@ -277,6 +277,16 @@ void AVDexedLayer::aftertouch(int value) {
     controllers.refresh();
 }
 
+void AVDexedLayer::releaseControllers() {
+    controlChange(64, 0);
+    controllers.pitch_cc = 0x2000;
+    controllers.modwheel_cc = 0;
+    controllers.breath_cc = 0;
+    controllers.foot_cc = 0;
+    controllers.aftertouch_cc = 0;
+    controllers.refresh();
+}
+
 void AVDexedLayer::allNotesOff() {
     if (! prepared) return;
     for (auto& voice : voices)

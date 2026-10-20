@@ -89,7 +89,9 @@ private:
     };
     void setBank(VoiceRef::Source source, int half, const AVDexedSysex::Bank& bank, const juce::String& from);
     struct Sibling { juce::File file; juce::String name; std::vector<AVDexedSysex::Bank> banks; };
-    static std::vector<Sibling> readSiblings(const juce::File& folder, const juce::File& except);
+    /** The banks of the .syx files in `folder`; with `presetsOnly`, only
+        those named like TX802 presets (…A1/A2/B1/B2), not read otherwise. */
+    static std::vector<Sibling> readSiblings(const juce::File& folder, const juce::File& except, bool presetsOnly = false);
     std::array<std::array<Half, 2>, 5> banks {};   // by Source, then 1-32 / 33-64
 };
 

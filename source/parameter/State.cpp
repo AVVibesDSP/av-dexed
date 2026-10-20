@@ -178,6 +178,8 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
         // it was applied as a voice of its own (no known origin), so "Guardar"
         // goes to "Guardar como…" rather than over the bank voice.
         avSoundFromBankSlot.store(hasAVKnownPresetOrigin(), std::memory_order_relaxed);
+        if (! avLoadingSoundFile)
+            restoreAVLayersState({});   // a Dexed 1.0 state knows no layers: one layer
         return true;
     }
 
@@ -305,7 +307,9 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
     // State restoration must not echo parameter changes to an attached DX7.
     const juce::ScopedLock avStateLock(getCallbackLock());
     juce::ScopedValueSetter<bool> disableSysexEcho(sendSysexChange, false);
-    panic();
+    // A sound file is one sound: in layer mode only the selected layer stops.
+    if (avLoadingSoundFile) panicForSoundChange();
+    else panic();
     // The parsed parameter tree is still parented by the temporary state XML
     // tree. Clone it before installing it into the live preference root so the
     // ValueTree is never reparented implicitly (which JUCE asserts against).

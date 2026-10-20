@@ -5,7 +5,10 @@
 #include "ui/PluginEditor.h"
 
 int DexedAudioProcessor::tuningTranspositionShift() {
-    int transpose = activeProgram[IDs::transpose.pos];
+    return tuningTranspositionShift(activeProgram[IDs::transpose.pos]);
+}
+
+int DexedAudioProcessor::tuningTranspositionShift(int transpose) {
     if( synthTuningState->is_standard_tuning() || ! controllers.transpose12AsScale )
         return transpose - 24;
     else {

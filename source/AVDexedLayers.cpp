@@ -54,10 +54,16 @@ void DexedAudioProcessor::renderAVLayers(float* left, float* right, int numSampl
         for (int layer = 0; layer < AVLayerCount; ++layer) {
             auto& gainLeft = avLayerGainLeft[size_t(layer)];
             auto& gainRight = avLayerGainRight[size_t(layer)];
-            // Off and faded out: nothing to hear (its voices were stopped).
+            // Off and faded out: nothing to hear; its notes stop now.
             if (! avLayerSettings[size_t(layer)].enabled.load(std::memory_order_relaxed)
-                && ! gainLeft.isSmoothing() && ! gainRight.isSmoothing())
+                && ! gainLeft.isSmoothing() && ! gainRight.isSmoothing()) {
+                const auto bit = 1u << layer;
+                if (avLayerFadeStopMask.fetch_and(~bit, std::memory_order_acq_rel) & bit) {
+                    avLayers[size_t(layer)].panic();
+                    avLayerHeld[size_t(layer)].fill(-1);
+                }
                 continue;
+            }
             avLayers[size_t(layer)].renderBlock(block);
             for (int j = 0; j < N; ++j) {
                 mixLeft[j] += block[j] * gainLeft.getNextValue();
@@ -87,10 +93,13 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
         const int wanted = settings.channel.load(std::memory_order_relaxed);
         return settings.enabled.load(std::memory_order_relaxed) && (wanted == 0 || wanted == channel);
     };
+    // Each layer's own voice transpose (its "middle C"), not the selected one's.
     const auto pitchFor = [this](int layer, int note) {
+        const int voiceTranspose = avLayers[size_t(layer)].getProgram().getRawData()[IDs::transpose.pos];
         return juce::jlimit(0, 127, note + avLayerSettings[size_t(layer)].transpose.load(std::memory_order_relaxed)
-                                        + tuningTranspositionShift());
+                                        + tuningTranspositionShift(voiceTranspose));
     };
+    const int key = buf[1] & 0x7F;   // a data byte, whatever the host passed
     const auto inRange = [this](int layer, int note) {
         const auto& settings = avLayerSettings[size_t(layer)];
         return note >= settings.lowNote.load(std::memory_order_relaxed) && note <= settings.highNote.load(std::memory_order_relaxed);
@@ -101,19 +110,19 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
             if (buf[2] > 0) {
                 // As the single path: MTS-ESP may filter the note.
                 if (synthTuningState->is_standard_tuning() && MTS_HasMaster(mtsClient)
-                    && MTS_ShouldFilterNote(mtsClient, buf[1], channel - 1))
+                    && MTS_ShouldFilterNote(mtsClient, key, channel - 1))
                     return;
                 const auto play = [&](int layer) {
-                    const int pitch = pitchFor(layer, buf[1]);
-                    avLayerHeld[size_t(layer)][size_t((channel - 1) * 128 + buf[1])] = int8_t(pitch);
-                    avLayers[size_t(layer)].keydown(channel, pitch, buf[2]);
+                    const int pitch = pitchFor(layer, key);
+                    avLayerHeld[size_t(layer)][size_t((channel - 1) * 128 + key)] = int8_t(pitch);
+                    avLayers[size_t(layer)].keydown(channel, pitch, buf[2] & 0x7F);
                 };
                 // The layers of an alternate group take turns (one of them
                 // plays each note); every other layer plays.
                 std::array<std::array<int, AVLayerCount>, AVLayerCount> groups {};
                 std::array<int, AVLayerCount> groupSize {};
                 for (int layer = 0; layer < AVLayerCount; ++layer) {
-                    if (! listens(layer) || ! inRange(layer, buf[1])) continue;
+                    if (! listens(layer) || ! inRange(layer, key)) continue;
                     const int group = avLayerSettings[size_t(layer)].alternateGroup.load(std::memory_order_relaxed);
                     if (group >= 0 && group < AVLayerCount) groups[size_t(group)][size_t(groupSize[size_t(group)]++)] = layer;
                     else play(layer);
@@ -126,13 +135,15 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
             [[fallthrough]];
         case 0x80:
             for (int layer = 0; layer < AVLayerCount; ++layer) {
-                auto& held = avLayerHeld[size_t(layer)][size_t((channel - 1) * 128 + buf[1])];
+                auto& held = avLayerHeld[size_t(layer)][size_t((channel - 1) * 128 + key)];
                 // The pitch it was played at; a note-on repeated without its
-                // note-off is released as the single path releases it.
+                // note-off is released as the single path releases it (not
+                // in an alternate group: its members always record the key,
+                // and must not release a note another member played).
                 if (held >= 0)
                     avLayers[size_t(layer)].keyup(channel, held);
-                else if (listens(layer) && inRange(layer, buf[1]))
-                    avLayers[size_t(layer)].keyup(channel, pitchFor(layer, buf[1]));
+                else if (listens(layer) && inRange(layer, key) && avLayerSettings[size_t(layer)].alternateGroup.load(std::memory_order_relaxed) < 0)
+                    avLayers[size_t(layer)].keyup(channel, pitchFor(layer, key));
                 held = -1;
             }
             return;
@@ -144,6 +155,7 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
                 if (const int steps = consumeAVPresetSteps(); steps != 0) {
                     setCurrentProgram(((currentProgram + steps) % 32 + 32) % 32);
                     avHostProgramDirty.store(true, std::memory_order_release);
+                    applySoundChangeNow();
                 }
             switch (ctrl) {
                 case 1:
@@ -165,7 +177,8 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
         }
 
         case 0xC0:
-            setCurrentProgram(buf[1]);   // into the selected layer
+            setCurrentProgram(buf[1] & 0x7F);   // into the selected layer
+            applySoundChangeNow();
             return;
 
         case 0xD0:
@@ -186,6 +199,19 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
         default:
             return;
     }
+}
+
+void DexedAudioProcessor::applySoundChangeNow() {
+    // Render, in the middle of a block: the notes after a program change in
+    // the same block play the new voice (the single path silences and loads
+    // at once too); otherwise the next block's panic would cut them.
+    const int selected = avSelectedLayer.load(std::memory_order_acquire);
+    const auto bit = 1u << selected;
+    if (avLayerPanicMask.fetch_and(~bit, std::memory_order_acq_rel) & bit) {
+        avLayers[size_t(selected)].panic();
+        avLayerHeld[size_t(selected)].fill(-1);
+    }
+    avLayers[size_t(selected)].setProgram(activeProgram);
 }
 
 void DexedAudioProcessor::panicForSoundChange() {
@@ -264,9 +290,18 @@ void DexedAudioProcessor::setAVLayerProgram(int layer, const Program& voice) {
 
 void DexedAudioProcessor::setAVLayerEnabled(int layer, bool enabled) {
     layer = juce::jlimit(0, AVLayerCount - 1, layer);
+    // Off: its volume fades out, then its notes stop (they never come back
+    // when it is turned on again). On again before that: it just plays on.
+    if (enabled) avLayerFadeStopMask.fetch_and(~(1u << layer), std::memory_order_acq_rel);
+    else avLayerFadeStopMask.fetch_or(1u << layer, std::memory_order_acq_rel);
     avLayerSettings[size_t(layer)].enabled.store(enabled, std::memory_order_release);
-    if (! enabled)   // its notes stop; they never come back when it is turned on again
-        avLayerPanicMask.fetch_or(1u << layer, std::memory_order_acq_rel);
+}
+
+void DexedAudioProcessor::setAVLayerChannel(int layer, int channel) {
+    layer = juce::jlimit(0, AVLayerCount - 1, layer);
+    channel = juce::jlimit(0, 16, channel);
+    if (avLayerSettings[size_t(layer)].channel.exchange(channel, std::memory_order_acq_rel) != channel)
+        avLayerReleaseMask.fetch_or(1u << layer, std::memory_order_acq_rel);
 }
 
 void DexedAudioProcessor::stackAVLayers(int count, float cents) {
@@ -378,6 +413,8 @@ AVDexedPerformance::ResolvedLayer readLayerTree(const juce::ValueTree& layer, in
     juce::MemoryBlock data;
     if (data.fromBase64Encoding(layer.getProperty("voice").toString()) && data.getSize() >= size_t(Program::PROGRAM_SIZE)) {
         read.voice = Program(static_cast<const uint8_t*>(data.getData()));
+        if (data.getSize() > size_t(Program::PROGRAM_SIZE))
+            read.voice.setOperatorSwitches(static_cast<const uint8_t*>(data.getData())[Program::PROGRAM_SIZE]);
         Cartridge::applyBankRules(read.voice);
         read.voiceFound = true;
     }

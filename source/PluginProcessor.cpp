@@ -290,6 +290,10 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
                 avLayers[size_t(layer)].panic();
                 avLayerHeld[size_t(layer)].fill(-1);
             }
+    if (const auto mask = avLayerReleaseMask.exchange(0, std::memory_order_acq_rel); mask != 0)
+        for (int layer = 0; layer < AVLayerCount; ++layer)
+            if (mask & (1u << layer))
+                avLayers[size_t(layer)].releaseControllers();
 
     if (fxResetRequested.exchange(false, std::memory_order_relaxed))
         effects.reset();
@@ -715,7 +719,7 @@ void DexedAudioProcessor::resetMonoMode() {
 bool DexedAudioProcessor::peekVoiceStatus() {
     if ( currentNote == -1 )
         return false;
-    if (avLayerModeRendered)
+    if (isAVLayerModeOn())
         return avLayers[size_t(avSelectedLayer.load(std::memory_order_acquire))].peekVoiceStatus(voiceStatus);
 
     // Report what is actually sounding: each operator's loudest level across

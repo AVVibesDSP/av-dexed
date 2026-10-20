@@ -55,6 +55,8 @@ public:
     void aftertouch(int value);
     void allNotesOff();
     void panic();
+    /** Sustain pedal up, pitch bend centred, wheel, breath, foot and aftertouch at rest. */
+    void releaseControllers();
 
     /** One engine block (N samples) of this layer's voices, mono, in the
         instrument's float scale. */

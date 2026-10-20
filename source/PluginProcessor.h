@@ -222,8 +222,12 @@ public :
         into the editor). */
     void setAVLayerProgram(int layer, const Program& voice);
     int getAVLayerSoundingVoices(int layer) const noexcept { return avLayerVoices[size_t(juce::jlimit(0, AVLayerCount - 1, layer))].load(std::memory_order_relaxed); }
-    /** Message thread. Turning a layer off stops its notes. */
+    /** Message thread. Turning a layer off fades it out and stops its notes. */
     void setAVLayerEnabled(int layer, bool enabled);
+    /** Message thread: the layer listens to `channel` (0: every channel). Its
+        pedal, pitch bend and wheels go back to rest: the old channel's
+        pedal-up would never reach it. */
+    void setAVLayerChannel(int layer, int channel);
     /** Message thread: the selected voice in `count` layers spread like a
         TX816 ensemble (alternating pan, symmetric detune of `cents`). */
     void stackAVLayers(int count, float cents);
@@ -241,6 +245,9 @@ public :
     /** Silences the voices a sound change affects: everything with one layer,
         only the selected layer in layer mode. */
     void panicForSoundChange();
+    /** Render: the selected layer takes a sound change at once (a program
+        change in the middle of a block). */
+    void applySoundChangeNow();
 #if defined(AVDEXED_TESTING)
     struct TestMode {};
     explicit DexedAudioProcessor(TestMode);
@@ -455,6 +462,8 @@ public :
     void retuneToStandard();
     void resetTuning(std::shared_ptr<TuningState> t);
     int tuningTranspositionShift();
+    /** The shift for a voice whose transpose (byte 144) is `transpose`: each layer uses its own voice's. */
+    int tuningTranspositionShift(int transpose);
 
     std::string currentSCLData = "";
     std::string currentKBMData = "";
@@ -534,6 +543,8 @@ private:
     std::atomic<bool> avLayerMode { false };
     std::atomic<int> avSelectedLayer { 0 };
     std::atomic<uint32_t> avLayerPanicMask { 0 };
+    std::atomic<uint32_t> avLayerReleaseMask { 0 };   // layers whose pedal, bend and wheels go back to rest (a new channel)
+    std::atomic<uint32_t> avLayerFadeStopMask { 0 };  // layers turned off: their notes stop once the volume has faded
     std::array<std::atomic<int>, AVLayerCount> avLayerVoices {};
     bool avLayerModeRendered = false;          // render: the mode of the last block
     std::array<unsigned, AVLayerCount> avAlternateTurn {};   // render: whose turn it is in each alternate group

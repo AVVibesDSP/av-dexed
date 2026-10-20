@@ -51,6 +51,12 @@ public:
         return data;
     }
 
+    /** The operator switches (byte 155, one bit per operator), which the
+        constructors set all on: a layer saved with an operator off keeps it. */
+    void setOperatorSwitches(uint8_t switches) {
+        data[155] = switches & ALL_OPERATORS_ON;
+    }
+
     /**
      * Push current program data into the given AudioProcessorValueTreeState
      * @param apvts

@@ -345,6 +345,102 @@ bool testLayersFile() {
     return passed;
 }
 
+/** The review's cases: each must hold (they did not before the fixes). */
+bool testReviewCases() {
+    bool passed = true;
+    auto bank = varietyBank();
+    // 1. Each layer uses its own voice's transpose, whichever layer is selected.
+    {
+        auto bass = bank.unpackProgram(9);
+        uint8_t data[Program::PROGRAM_SIZE + 1];
+        std::memcpy(data, bass.getRawData(), sizeof(data));
+        data[144] = 12;   // an octave down
+        bank.packProgram(data, 9, "BASS");
+        auto single = makeProcessor(bank, 9);
+        auto layered = makeProcessor(bank, 2);
+        layered->setAVLayerMode(true);
+        layered->setAVLayerProgram(1, bank.unpackProgram(9));
+        layered->setAVLayerEnabled(1, true);
+        layered->setAVLayerEnabled(0, false);   // layer 1 (another voice, transpose 0) stays selected
+        render(*layered, {}, 0.1);
+        passed &= expect(render(*layered, chord, 0.8) == render(*single, chord, 0.8),
+                         "a layer plays with its own voice transpose, not the selected layer's");
+    }
+    // 2. A program change and notes in the same block: the notes play the new voice.
+    {
+        auto processor = makeProcessor(bank, 0);
+        oneLayer(*processor);
+        render(*processor, {}, 0.05);
+        juce::AudioBuffer<float> buffer(2, 512);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::programChange(1, 5), 0);
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8) 100), 0);
+        buffer.clear();
+        processor->processBlock(buffer, midi);
+        render(*processor, {}, 0.1);
+        passed &= expect(processor->getAVLayerSoundingVoices(0) == 1 && processor->getAVLayerProgram(0).getName() == bank.unpackProgram(5).getName(),
+                         "notes after a program change in the same block keep sounding, with the new voice");
+    }
+    // 3. Operators off in a layer that is not selected come back off.
+    {
+        auto processor = makeProcessor(bank, 0);
+        processor->setAVLayerMode(true);
+        auto voice = bank.unpackProgram(4);
+        voice.setOperatorSwitches(0x2B);
+        processor->setAVLayerProgram(3, voice);
+        juce::MemoryBlock state;
+        processor->getStateInformation(state);
+        auto restored = makeProcessor(bank, 0);
+        restored->setStateInformation(state.getData(), int(state.getSize()));
+        passed &= expect(restored->getAVLayerProgram(3).getRawData()[155] == 0x2B, "a layer's operator switches survive the session");
+    }
+    // 4. A new channel while the pedal is down: the layer lets its notes go.
+    {
+        auto processor = makeProcessor(bank, 2);
+        oneLayer(*processor);
+        render(*processor, { { 0.0, 1, 60, 100 }, { 0.05, 1, 60, 0 } }, 0.1,
+               { { 0.0, juce::MidiMessage::controllerEvent(1, 64, 127) } });
+        processor->setAVLayerChannel(0, 2);
+        render(*processor, {}, 3.0);
+        passed &= expect(processor->getAVLayerSoundingVoices(0) == 0, "changing a layer's channel releases its pedal");
+    }
+    // 7. Alternate layers: one member's note-off leaves the other's note alone.
+    {
+        auto processor = makeProcessor(bank, 2);
+        oneLayer(*processor);
+        processor->setAVLayerProgram(1, bank.unpackProgram(2));
+        processor->setAVLayerEnabled(1, true);
+        processor->getAVLayerSettings(0).alternateGroup = 0;
+        processor->getAVLayerSettings(1).alternateGroup = 0;
+        render(*processor, { { 0.0, 1, 60, 100 }, { 0.01, 2, 60, 100 }, { 0.05, 2, 60, 0 } }, 2.5);
+        passed &= expect(processor->getAVLayerSoundingVoices(0) + processor->getAVLayerSoundingVoices(1) == 1,
+                         "in an alternate group a note-off releases only the note it ends");
+    }
+    // 8. Turning a layer off fades it, then stops it.
+    {
+        auto processor = makeProcessor(bank, 2);
+        oneLayer(*processor);
+        render(*processor, { { 0.0, 1, 60, 100 } }, 0.1);
+        processor->setAVLayerEnabled(0, false);
+        render(*processor, {}, 0.005);
+        const bool stillFading = processor->getAVLayerSoundingVoices(0) == 1;
+        render(*processor, {}, 0.1);
+        passed &= expect(stillFading && processor->getAVLayerSoundingVoices(0) == 0, "an off layer fades out before its notes stop");
+    }
+    // 6. A note-on with a data byte above 127 (passed through by a host) is harmless.
+    {
+        auto processor = makeProcessor(bank, 2);
+        oneLayer(*processor);
+        juce::AudioBuffer<float> buffer(2, 256);
+        juce::MidiBuffer midi;
+        const uint8_t bad[] = { 0x9F, 0xFF, 0x64 };
+        midi.addEvent(bad, 3, 0);
+        processor->processBlock(buffer, midi);
+        passed &= expect(true, "a malformed note-on does not write outside the held-notes table");
+    }
+    return passed;
+}
+
 bool testUnisonAndRandomPitch() {
     bool passed = true;
     auto bank = varietyBank();
@@ -378,6 +474,7 @@ bool runAVDexedLayerTests() {
     passed &= testStackAndSession();
     passed &= testUnisonAndRandomPitch();
     passed &= testLayersFile();
+    passed &= testReviewCases();
     std::cout << (passed ? "Layer checks passed.\n" : "Layer checks FAILED.\n");
     return passed;
 }

@@ -173,7 +173,7 @@ std::vector<Performance> readPerformances(const AVDexedSysex::Contents& contents
 }
 
 //==============================================================================
-std::vector<VoicePool::Sibling> VoicePool::readSiblings(const juce::File& folder, const juce::File& except) {
+std::vector<VoicePool::Sibling> VoicePool::readSiblings(const juce::File& folder, const juce::File& except, bool presetsOnly) {
     std::vector<Sibling> siblings;
     if (! folder.isDirectory()) return siblings;
     int read = 0;
@@ -181,6 +181,10 @@ std::vector<VoicePool::Sibling> VoicePool::readSiblings(const juce::File& folder
         const auto file = entry.getFile();
         if (file == except || ! file.getFileExtension().equalsIgnoreCase(".syx") || file.getSize() > 4 * 1024 * 1024)
             continue;
+        if (presetsOnly) {
+            const auto n = normalisedName(file, true);
+            if (! (n.endsWith("a1") || n.endsWith("a2") || n.endsWith("b1") || n.endsWith("b2"))) continue;
+        }
         if (++read > 400) break;   // a folder of thousands of banks is not a set
         juce::MemoryBlock bytes;
         if (! file.loadFileAsData(bytes)) continue;
@@ -219,7 +223,7 @@ VoicePool::VoicePool(const juce::File& performanceFile, const AVDexedSysex::Cont
     };
     takePresets(siblings);
     if (! banks[size_t(VoiceRef::Source::presetA)][0].present && folder.getParentDirectory() != folder)
-        takePresets(readSiblings(folder.getParentDirectory(), performanceFile));
+        takePresets(readSiblings(folder.getParentDirectory(), performanceFile, true));
 
     if (! contents.banks.empty()) return;
     // The internal memory: the voice files named as the performance file

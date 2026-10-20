@@ -295,7 +295,7 @@ private:
         settings.pan.store(float(pan.getValue()));
         settings.detune.store(float(detune.getValue()));
         settings.transpose.store(roundToInt(transpose.getValue()));
-        if (channel.getSelectedId() > 0) settings.channel.store(channel.getSelectedId() - 1);
+        if (channel.getSelectedId() > 0) processor.setAVLayerChannel(layer, channel.getSelectedId() - 1);
     }
 
     void keysChanged(bool lowChanged) {
@@ -329,7 +329,7 @@ private:
                 p.setAVLayerEnabled(safeThis->layer, true);
             } else if (result == 2) {
                 auto& settings = p.getAVLayerSettings(safeThis->layer);
-                settings.channel.store(0);
+                p.setAVLayerChannel(safeThis->layer, 0);
                 settings.lowNote.store(0);
                 settings.highNote.store(127);
                 settings.transpose.store(0);
