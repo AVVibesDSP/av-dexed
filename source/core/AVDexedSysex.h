@@ -22,7 +22,7 @@ constexpr int voiceBytes = 155;        // VCED: one unpacked voice
 constexpr int acedBytes = 49;          // DX7II ACED: one voice's additional parameters
 constexpr int amemBytes = 1120;        // DX7II AMEM: 32 packed ACED of 35 bytes
 constexpr int amemVoiceBytes = 35;
-constexpr int tx7PerformanceBytes = 4096;  // TX7/TF1/DX1/DX5 PMEM: 64 performances of 64 bytes
+constexpr int tx7PerformanceBytes = 4096;  // TX7/DX1/DX5 (and rack module) PMEM: 64 performances of 64 bytes
 
 /** A universal bulk entry (`F0 43 0n 7E … "LM  " + 6 characters …`): the
     6-character name after "LM  " and its data bytes as sent (ASCII-hex

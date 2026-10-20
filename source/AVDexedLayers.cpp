@@ -1,7 +1,7 @@
 // Copyright (C) 2026 AV Vibes. Part of AV Dexed, a modified version of Dexed.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The layer mode of DexedAudioProcessor (TX816 style): MIDI routing by
+// The layer mode of DexedAudioProcessor (X816 mode): MIDI routing by
 // channel and key range, the stereo mix, and what the editor changes.
 
 #include "PluginProcessor.h"
@@ -15,6 +15,27 @@ float leftBalance(float pan) { return pan <= 0.5f ? 1.0f : 2.0f * (1.0f - pan); 
 float rightBalance(float pan) { return pan >= 0.5f ? 1.0f : 2.0f * pan; }
 /** Cents to the engine's pitch unit (an octave is 1 << 24). */
 int32_t centsToPitch(float cents) { return int32_t(std::lround(double(cents) * double(1 << 24) / 1200.0)); }
+/** Layer `layer` of a stack of `count`: where its tuning sits between the
+    lowest (-1) and the highest (1), and where its notes start (free phase, in
+    turns of the fundamental). Found by searching, for each size, the tunings
+    and starts whose sum stays nearest one layer's level over the first
+    harmonics (and the half ones of 0.50 ratios) and seconds: in step and evenly tuned, the copies add up at the
+    attack and then cancel out, over and over (a "pluck"); evenly spread
+    starts cancel at once. The tunings stay at least half a step apart. */
+struct StackPlace { float tuning, phase; };
+StackPlace stackPlace(int layer, int count) {
+    static constexpr StackPlace places[7][8] = {
+        { { -1.0f, 0.0f }, { 1.0f, 0.0f } },
+        { { -1.0f, 0.0f }, { -0.0018f, 0.025f }, { 1.0f, 0.5271f } },
+        { { -1.0f, 0.0f }, { -0.3353f, 0.1266f }, { 0.332f, 0.1131f }, { 1.0f, 0.7716f } },
+        { { -1.0f, 0.0f }, { -0.3837f, 0.5636f }, { -0.0098f, 0.5383f }, { 0.6169f, 0.5547f }, { 1.0f, 0.2764f } },
+        { { -1.0f, 0.0f }, { -0.6063f, 0.3844f }, { -0.3072f, 0.5974f }, { 0.2935f, 0.795f }, { 0.5926f, 0.5207f }, { 1.0f, 0.4954f } },
+        { { -1.0f, 0.0f }, { -0.5727f, 0.713f }, { -0.3562f, 0.0452f }, { 0.1131f, 0.8885f }, { 0.3647f, 0.8666f }, { 0.614f, 0.3814f }, { 1.0f, 0.495f } },
+        { { -1.0f, 0.0f }, { -0.6827f, 0.9696f }, { -0.4666f, 0.6507f }, { -0.0737f, 0.6194f }, { 0.147f, 0.4869f }, { 0.3513f, 0.091f }, { 0.7535f, 0.8629f }, { 1.0f, 0.8235f } },
+    };
+    if (count < 2 || layer < 0 || layer >= count || count > 8) return { 0.0f, 0.0f };
+    return places[count - 2][layer];
+}
 }
 
 void DexedAudioProcessor::renderAVLayers(float* left, float* right, int numSamples, MidiBufferIterator& it, MidiBufferIterator& end) {
@@ -89,6 +110,7 @@ void DexedAudioProcessor::syncAVLayer(int layer) {
     avLayers[size_t(layer)].followFunction(controllers, centsToPitch(cents), mono < 0 ? monoMode : mono == 1, normalizeDxVelocity);
     avLayers[size_t(layer)].setVoiceExtras(juce::jlimit(0.0f, AVLayerMaxDetune, settings.unison.load(std::memory_order_relaxed)),
                                            juce::jlimit(0.0f, 100.0f, settings.randomPitch.load(std::memory_order_relaxed)));
+    avLayers[size_t(layer)].setFreePhase(settings.phase.load(std::memory_order_relaxed));
 }
 
 void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
@@ -333,6 +355,11 @@ void DexedAudioProcessor::setAVLayerMicroTuning(int layer, int table, int key) {
     settings.microKey.store(key, std::memory_order_relaxed);
 }
 
+void DexedAudioProcessor::setAVLayerFreePhase(int layer, bool on) {
+    layer = juce::jlimit(0, AVLayerCount - 1, layer);
+    avLayerSettings[size_t(layer)].phase.store(on ? stackPlace(layer, AVLayerCount).phase : -1.0f, std::memory_order_relaxed);
+}
+
 void DexedAudioProcessor::setAVLayerChannel(int layer, int channel) {
     layer = juce::jlimit(0, AVLayerCount - 1, layer);
     channel = juce::jlimit(0, 16, channel);
@@ -352,9 +379,10 @@ void DexedAudioProcessor::stackAVLayers(int count, float cents) {
             const bool used = layer < count;
             if (used) avLayers[size_t(layer)].setProgram(voice);
             // From the lowest tuning on the left to the highest on the right,
-            // as the modules of a TX816 spread over a stereo mix; together as
+            // as the modules of an eight-module rack spread over a stereo mix; together as
             // loud as one layer.
             const float position = count > 1 ? 2.0f * float(layer) / float(count - 1) - 1.0f : 0.0f;
+            const auto place = used ? stackPlace(layer, count) : StackPlace { 0.0f, 0.0f };
             settings.enabled.store(used, std::memory_order_relaxed);
             settings.alternateGroup.store(-1, std::memory_order_relaxed);
             settings.unison.store(0.0f, std::memory_order_relaxed);
@@ -364,9 +392,12 @@ void DexedAudioProcessor::stackAVLayers(int count, float cents) {
             settings.lowNote.store(0, std::memory_order_relaxed);
             settings.highNote.store(127, std::memory_order_relaxed);
             settings.transpose.store(0, std::memory_order_relaxed);
-            settings.detune.store(used ? std::round(cents * position * 10.0f) / 10.0f : 0.0f, std::memory_order_relaxed);
+            settings.detune.store(used ? std::round(cents * place.tuning * 10.0f) / 10.0f : 0.0f, std::memory_order_relaxed);
             settings.pan.store(used ? 0.5f + 0.4f * position : 0.5f, std::memory_order_relaxed);
+            // Not in step, the layers add up as separate modules do: as
+            // loud together as one layer.
             settings.volume.store(used ? 1.0f / std::sqrt(float(count)) : 1.0f, std::memory_order_relaxed);
+            settings.phase.store(used && count > 1 ? place.phase : -1.0f, std::memory_order_relaxed);
         }
         for (int layer = 0; layer < AVLayerCount; ++layer) setAVLayerMicroTuning(layer, -1, 0);
         avSelectedLayer.store(0, std::memory_order_release);
@@ -395,6 +426,7 @@ void DexedAudioProcessor::resetAVLayers() {
         settings.detune.store(0.0f, std::memory_order_relaxed);
         settings.volume.store(1.0f, std::memory_order_relaxed);
         settings.pan.store(0.5f, std::memory_order_relaxed);
+        settings.phase.store(-1.0f, std::memory_order_relaxed);
     }
     avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
     avLayerReleaseMask.store((1u << AVLayerCount) - 1, std::memory_order_release);   // channels changed: controllers at rest
@@ -422,6 +454,7 @@ juce::ValueTree DexedAudioProcessor::createAVLayersState() const {
         layer.setProperty("mono", settings.mono.load(std::memory_order_relaxed), nullptr);
         layer.setProperty("microTable", settings.microTable.load(std::memory_order_relaxed), nullptr);
         layer.setProperty("microKey", settings.microKey.load(std::memory_order_relaxed), nullptr);
+        layer.setProperty("phase", settings.phase.load(std::memory_order_relaxed), nullptr);
         const auto voice = getAVLayerProgram(index);
         layer.setProperty("voice", juce::MemoryBlock(voice.getRawData(), Program::PROGRAM_SIZE + 1).toBase64Encoding(), nullptr);
         layers.addChild(layer, -1, nullptr);
@@ -454,6 +487,7 @@ AVDexedPerformance::ResolvedLayer readLayerTree(const juce::ValueTree& layer, in
     read.mono = juce::jlimit(-1, 1, int(layer.getProperty("mono", -1)));
     plan.microTable = juce::jlimit(-1, 10, int(layer.getProperty("microTable", -1)));
     plan.microKey = juce::jlimit(0, 11, int(layer.getProperty("microKey", 0)));
+    plan.phase = juce::jlimit(-1.0f, 1.0f, float(layer.getProperty("phase", -1.0f)));
     juce::MemoryBlock data;
     if (data.fromBase64Encoding(layer.getProperty("voice").toString()) && data.getSize() >= size_t(Program::PROGRAM_SIZE)) {
         read.voice = Program(static_cast<const uint8_t*>(data.getData()));
@@ -484,6 +518,7 @@ void DexedAudioProcessor::restoreAVLayersState(const juce::ValueTree& layers) {
         settings.unison.store(read.unison, std::memory_order_relaxed);
         settings.randomPitch.store(read.randomPitch, std::memory_order_relaxed);
         settings.mono.store(read.mono, std::memory_order_relaxed);
+        settings.phase.store(plan.phase, std::memory_order_relaxed);
         setAVLayerMicroTuning(index, plan.microTable, plan.microKey);
         avLayers[size_t(index)].setProgram(read.voice);
     }
@@ -547,6 +582,7 @@ void DexedAudioProcessor::applyAVLayerSetup(const std::array<AVDexedPerformance:
             settings.detune.store(plan.used ? juce::jlimit(-AVLayerMaxDetune, AVLayerMaxDetune, plan.detune) : 0.0f, std::memory_order_relaxed);
             settings.volume.store(plan.used ? juce::jlimit(0.0f, 1.0f, plan.volume) : 1.0f, std::memory_order_relaxed);
             settings.pan.store(plan.used ? juce::jlimit(0.0f, 1.0f, plan.pan) : 0.5f, std::memory_order_relaxed);
+            settings.phase.store(plan.used ? plan.phase : -1.0f, std::memory_order_relaxed);
             avLayers[size_t(index)].setProgram(plan.used ? layer.voice : Program::initialProgram());
             setAVLayerMicroTuning(index, plan.used ? plan.microTable : -1, plan.microKey);
         }

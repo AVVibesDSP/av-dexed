@@ -44,6 +44,7 @@ struct LayerPlan {
     int alternateGroup = -1;    // TX802 alternate assign: the layers of one group take turns (-1: none)
     int microTable = -1;        // DX7II preset micro tuning 1-10 (-1: none)
     int microKey = 0;
+    float phase = -1.0f;        // AV Dexed free phase, 0-1 turns (a stack's modules); -1: off
 };
 
 struct Performance {

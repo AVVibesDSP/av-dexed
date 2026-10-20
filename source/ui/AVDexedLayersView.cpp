@@ -338,6 +338,7 @@ private:
         mono.addItem(31, language.text("layerPoly"), true, settings.mono.load() == 0);
         mono.addItem(32, language.text("layerMonoChoice"), true, settings.mono.load() == 1);
         menu.addSeparator();
+        menu.addItem(3, language.text("layerFreePhase"), true, settings.phase.load() >= 0.0f);
         menu.addSubMenu(language.text("layerUnisonMenu"), unison);
         menu.addSubMenu(language.text("layerRandomMenu"), random);
         menu.addSubMenu(language.text("layerMonoMenu"), mono);
@@ -358,6 +359,7 @@ private:
             else if (result >= 20 && result < 25) chosen.randomPitch.store(randomValues[result - 20]);
             else if (result >= 30 && result <= 32) chosen.mono.store(result - 31);
             else if (result >= 40 && result <= 50) p.setAVLayerMicroTuning(safeThis->layer, result == 40 ? -1 : result - 40, 0);
+            else if (result == 3) p.setAVLayerFreePhase(safeThis->layer, chosen.phase.load() < 0.0f);
             if (result == 1) {
                 p.setAVLayerProgram(safeThis->layer, p.getAVLayerProgram(selected));
                 p.setAVLayerEnabled(safeThis->layer, true);
@@ -374,6 +376,7 @@ private:
                 settings.unison.store(0.0f);
                 settings.randomPitch.store(0.0f);
                 settings.mono.store(-1);
+                settings.phase.store(-1.0f);
             }
             safeThis->refresh();
             safeThis->repaint();

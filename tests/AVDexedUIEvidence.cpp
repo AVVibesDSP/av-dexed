@@ -144,7 +144,7 @@ bool AVRenderUIEvidence(const juce::File& directory) {
                     passed &= output != nullptr && PNGImageFormat().writeImageToStream(image, *output);
                     std::cout << "UI evidence: " << name << " " << editor->getWidth() << "x" << editor->getHeight() << '\n';
                 }
-                // Layers: off, then a TX816 stack with a split and a layer off.
+                // Layers: off, then an X816 stack with a split and a layer off.
                 // The instrument comes back as it was (the checks below compare
                 // the whole state with the one at the start).
                 MemoryBlock beforeLayers;

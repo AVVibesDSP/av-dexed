@@ -11,9 +11,10 @@
 #include "../core/Program.h"
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <memory>
 
-/** One DX7 of the layer mode, as one TF1 module of a TX816: its own 16
+/** One DX7 of the layer mode, as one module of an eight-module rack (X816 mode): its own 16
     voices, LFO and controller state, playing one voice. Nothing of the engine
     changes: the voices are the engine's Dx7Note, and the note logic (voice
     stealing, mono, portamento, sustain) is DexedAudioProcessor::keydown and
@@ -28,7 +29,7 @@ public:
     AVDexedLayer();
     ~AVDexedLayer();
 
-    void prepare(std::shared_ptr<TuningState> tuning, MTSClient* mts);
+    void prepare(std::shared_ptr<TuningState> tuning, MTSClient* mts, double sampleRate);
     void release();
     /** A new tuning (Scala files), as DexedAudioProcessor::resetTuning gives its voices. */
     void setTuning(std::shared_ptr<TuningState> tuning);
@@ -49,6 +50,20 @@ public:
     void setVoiceExtras(float unisonCents, float randomCents) noexcept { unison = unisonCents; randomPitch = randomCents; }
     /** Each layer its own random sequence (as separate modules would be), always the same one. */
     void setRandomSeed(uint32_t seed) noexcept { randomState = seed == 0 ? 1 : seed; }
+    /** Free phase: the layer behaves as a separate module of a rack, whose
+        oscillators never run in step with the other modules'. Its notes
+        start their operators where they would be had the note begun
+        `cycles` turns of its fundamental before (0-1): the same sound, only
+        not in step. A voice without oscillator key sync also moves on each
+        note, as free-running oscillators do (every layer by the same, so
+        they stay apart). The LFO starts from its own point too. Negative:
+        off, the instrument's behaviour exactly.
+        Without it, stacked copies of one voice start in step: the attack adds
+        up (+9 dB with 8) and the detuned copies then cancel out (a "pluck"). */
+    void setFreePhase(float cycles) noexcept {
+        freePhase = cycles >= 0.0f;
+        phaseCycles = freePhase ? cycles - std::floor(cycles) : 0.0f;
+    }
 
     void keydown(int channel, int pitch, int velocity);
     void keyup(int channel, int pitch);
@@ -87,6 +102,14 @@ private:
     void releaseVoice(int note);
     float unison = 0.0f, randomPitch = 0.0f;
     uint32_t randomState = 1;
+    bool freePhase = false;
+    float phaseCycles = 0.0f;
+    uint32_t phaseNotes = 0;
+    bool lfoOffset = false;
+    double rate = 44100.0;
+    // A note that never sounds: it gives the phases a free-phase note starts at.
+    Dx7Note* phaseDonor = nullptr;
+    void startFreePhase(Dx7Note& note, int channel, int pitch);
     std::array<Voice, voiceCount> voices {};
     Controllers controllers {};
     Lfo lfo {};

@@ -1,10 +1,10 @@
 // Copyright (C) 2026 AV Vibes. Part of AV Dexed, a modified version of Dexed.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// The layer mode (TX816 style). One layer in the centre at full volume plays
+// The layer mode (X816 mode). One layer in the centre at full volume plays
 // the very samples of the single path; channels, key ranges, transposition,
 // tuning, volume and pan do what they say; edits stay with their layer; the
-// layers come back with the session.
+// layers come back with the session; a stack is not a "pluck".
 
 #include "../source/PluginProcessor.h"
 #include "../source/parameter/Model.h"
@@ -287,7 +287,7 @@ bool testStackAndSession() {
         const auto& b = restored->getAVLayerSettings(layer);
         same &= a.enabled.load() == b.enabled.load() && a.channel.load() == b.channel.load() && a.transpose.load() == b.transpose.load()
              && std::abs(a.detune.load() - b.detune.load()) < 1.0e-4f && std::abs(a.pan.load() - b.pan.load()) < 1.0e-4f
-             && std::abs(a.volume.load() - b.volume.load()) < 1.0e-4f
+             && std::abs(a.volume.load() - b.volume.load()) < 1.0e-4f && std::abs(a.phase.load() - b.phase.load()) < 1.0e-4f
              && std::memcmp(p.getAVLayerProgram(layer).getRawData(), restored->getAVLayerProgram(layer).getRawData(), 155) == 0;
     }
     passed &= expect(same, "a session restores every layer");
@@ -339,7 +339,7 @@ bool testLayersFile() {
         const auto& b = opened->getAVLayerSettings(layer);
         same &= a.enabled.load() == b.enabled.load() && a.channel.load() == b.channel.load()
              && std::abs(a.detune.load() - b.detune.load()) < 1.0e-4f && std::abs(a.pan.load() - b.pan.load()) < 1.0e-4f
-             && std::abs(a.unison.load() - b.unison.load()) < 1.0e-4f
+             && std::abs(a.unison.load() - b.unison.load()) < 1.0e-4f && std::abs(a.phase.load() - b.phase.load()) < 1.0e-4f
              && std::memcmp(p.getAVLayerProgram(layer).getRawData(), opened->getAVLayerProgram(layer).getRawData(), 155) == 0;
     }
     passed &= expect(same, "every layer, its voice and the selected layer come back");
@@ -629,6 +629,80 @@ bool testMicroTuning() {
     return passed;
 }
 
+/** 25 ms levels (both sides) of one held note, the layer volumes settled first. */
+std::vector<double> heldLevels(DexedAudioProcessor& processor, double seconds) {
+    render(processor, {}, 0.1);
+    const auto sound = render(processor, { { 0.0, 1, 60, 100 } }, seconds);
+    const size_t window = size_t(rate * 0.025);
+    std::vector<double> levels;
+    for (size_t start = 0; start + window <= sound.left.size(); start += window) {
+        double sum = 0.0;
+        for (size_t i = start; i < start + window; ++i)
+            sum += double(sound.left[i]) * sound.left[i] + double(sound.right[i]) * sound.right[i];
+        levels.push_back(std::sqrt(sum / double(2 * window)));
+    }
+    return levels;
+}
+
+bool testStackIsNotAPluck() {
+    // Eight copies of one voice in step add up at the attack (+9 dB) and,
+    // evenly detuned, then cancel out (-13 dB) over and over: a "pluck". With
+    // free phase and uneven tunings a stack stays near one layer's level
+    // (spread: how far, in dB, the 25 ms levels stray from it).
+    bool passed = true;
+    for (int slot : { 1, 3, 9, 17 }) {   // sustained voices
+        auto bank = varietyBank();
+        auto one = makeProcessor(bank, slot), stack = makeProcessor(bank, slot), inStep = makeProcessor(bank, slot);
+        oneLayer(*one);
+        stack->stackAVLayers(8, 7.0f);
+        inStep->stackAVLayers(8, 7.0f);
+        for (int layer = 0; layer < 8; ++layer) {
+            inStep->getAVLayerSettings(layer).phase = -1.0f;
+            inStep->getAVLayerSettings(layer).detune = 7.0f * (2.0f * float(layer) / 7.0f - 1.0f);
+        }
+        const auto reference = heldLevels(*one, 1.5), free = heldLevels(*stack, 1.5), old = heldLevels(*inStep, 1.5);
+        const auto against = [&](const std::vector<double>& levels, size_t w) {
+            return juce::Decibels::gainToDecibels(levels[w] / juce::jmax(1.0e-9, reference[w]));
+        };
+        double attack = 0.0, oldAttack = 0.0, lowest = 0.0, squares = 0.0, oldSquares = 0.0;
+        for (size_t w = 1; w <= 4; ++w) {
+            attack = juce::jmax(attack, double(against(free, w)));
+            oldAttack = juce::jmax(oldAttack, double(against(old, w)));
+        }
+        for (size_t w = 1; w < reference.size(); ++w) {
+            lowest = juce::jmin(lowest, double(against(free, w)));
+            squares += double(against(free, w)) * against(free, w);
+            oldSquares += double(against(old, w)) * against(old, w);
+        }
+        const double spread = std::sqrt(squares / double(reference.size() - 1)), oldSpread = std::sqrt(oldSquares / double(reference.size() - 1));
+        passed &= expect(oldAttack > 5.0 && oldSpread > 7.0, "eight layers in step add up at the attack and then cancel (how the stack was)");
+        passed &= expect(attack < 4.0, "a free-phase stack attacks about as loud as one layer");
+        // A chorus still dips for an instant now and then, as any ensemble does.
+        passed &= expect(spread < 5.0 && lowest > -14.0, "and stays near that level afterwards");
+    }
+
+    // Free phase keeps the layer's sound: alone it is as loud as without it.
+    auto bank = varietyBank();
+    auto plain = makeProcessor(bank, 3), moved = makeProcessor(bank, 3);
+    oneLayer(*plain);
+    oneLayer(*moved);
+    moved->getAVLayerSettings(0).phase = 0.4f;
+    const auto a = heldLevels(*plain, 0.4), b = heldLevels(*moved, 0.4);
+    bool sameLevel = true;
+    for (size_t w = 2; w < a.size(); ++w)
+        sameLevel &= std::abs(juce::Decibels::gainToDecibels(b[w] / juce::jmax(1.0e-9, a[w]))) < 0.5f;
+    passed &= expect(sameLevel, "free phase moves a layer's start, not its sound");
+
+    auto stacked = makeProcessor(bank, 3);
+    stacked->stackAVLayers(4, 5.0f);
+    passed &= expect(stacked->getAVLayerSettings(0).phase.load() == 0.0f && stacked->getAVLayerSettings(1).phase.load() > 0.0f
+                         && stacked->getAVLayerSettings(4).phase.load() < 0.0f,
+                     "a stack frees the phase of its layers only");
+    stacked->resetAVLayers();
+    passed &= expect(stacked->getAVLayerSettings(1).phase.load() < 0.0f, "and Reset puts every layer back in step");
+    return passed;
+}
+
 bool testUnisonAndRandomPitch() {
     bool passed = true;
     auto bank = varietyBank();
@@ -661,6 +735,7 @@ bool runAVDexedLayerTests() {
     passed &= testEditsStayWithTheirLayer();
     passed &= testStackAndSession();
     passed &= testUnisonAndRandomPitch();
+    passed &= testStackIsNotAPluck();
     passed &= testLayersFile();
     passed &= testReviewCases();
     passed &= testBankVoiceExtras();

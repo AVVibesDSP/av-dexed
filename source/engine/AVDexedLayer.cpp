@@ -33,14 +33,19 @@ AVDexedLayer::~AVDexedLayer() {
     release();
 }
 
-void AVDexedLayer::prepare(std::shared_ptr<TuningState> tuning, MTSClient* mts) {
+void AVDexedLayer::prepare(std::shared_ptr<TuningState> tuning, MTSClient* mts, double sampleRate) {
     tuningState = tuning;
+    rate = sampleRate > 0.0 ? sampleRate : 44100.0;
     mtsClient = mts;
     for (auto& voice : voices) {
         delete voice.dx7_note;
         voice = Voice {};
         voice.dx7_note = new Dx7Note(tuning, mts);
     }
+    delete phaseDonor;
+    phaseDonor = new Dx7Note(tuning, mts);
+    phaseNotes = 0;
+    lfoOffset = false;
     currentNote = 0;
     nextKeydownSeq = 0;
     lastActiveVoice = 0;
@@ -57,6 +62,8 @@ void AVDexedLayer::prepare(std::shared_ptr<TuningState> tuning, MTSClient* mts) 
 
 void AVDexedLayer::setTuning(std::shared_ptr<TuningState> tuning) {
     tuningState = tuning;
+    if (phaseDonor != nullptr)
+        phaseDonor->tuning_state_ = tuning;
     for (auto& voice : voices)
         if (voice.dx7_note != nullptr)
             voice.dx7_note->tuning_state_ = tuning;
@@ -67,6 +74,8 @@ void AVDexedLayer::release() {
         delete voice.dx7_note;
         voice = Voice {};
     }
+    delete phaseDonor;
+    phaseDonor = nullptr;
     prepared = false;
 }
 
@@ -154,6 +163,12 @@ int AVDexedLayer::startVoice(int channel, int pitch, int velo, int32_t pitchOffs
         note = (note + 1) % voiceCount;
     }
 
+    // Free phase: this layer's LFO runs from its own point (a sync LFO
+    // restarts at each first key anyway, as on any module).
+    if (freePhase && ! lfoOffset) {
+        for (int i = 0; i < int(phaseCycles * 911.0f); ++i) lfo.getsample();
+        lfoOffset = true;
+    }
     if (triggerLfo)
         lfo.keydown();
 
@@ -172,6 +187,8 @@ int AVDexedLayer::startVoice(int channel, int pitch, int velo, int32_t pitchOffs
     voice.dx7_note->init(program.getRawData(), pitch, velo, channel, &controllers);
     if (program.getRawData()[IDs::oscKeySync.pos] && ! voiceSteal)
         voice.dx7_note->oscSync();
+    if (freePhase && ! voiceSteal)
+        startFreePhase(*voice.dx7_note, channel, pitch);
     if ((voices[size_t(lastActiveVoice)].midi_note != -1 && controllers.portamento_enable_cc) && controllers.portamento_cc > 0)
         voice.dx7_note->initPortamento(*voices[size_t(lastActiveVoice)].dx7_note);
 
@@ -282,6 +299,53 @@ void AVDexedLayer::pitchBend(int value) {
 void AVDexedLayer::aftertouch(int value) {
     controllers.aftertouch_cc = value;
     controllers.refresh();
+}
+
+void AVDexedLayer::startFreePhase(Dx7Note& note, int channel, int pitch) {
+    const bool keySync = program.getRawData()[IDs::oscKeySync.pos] != 0;
+    float cycles = phaseCycles;
+    if (! keySync) {   // free-running: somewhere new each note, by the golden ratio
+        const float moved = float(phaseNotes) * 0.618034f;
+        cycles += moved - std::floor(moved);
+        cycles -= std::floor(cycles);
+    }
+    ++phaseNotes;
+    // Below 0.02 turns: the instrument's own start (and the engine's
+    // frequency table stays in range below).
+    if (cycles < 0.02f) cycles = 0.0f;
+    if (keySync && cycles == 0.0f) return;
+    if (phaseDonor == nullptr || tuningState == nullptr) return;
+
+    // The donor is this note begun a few engine blocks before, tuned so that
+    // its fundamental turns `cycles` times in them: every operator, fixed
+    // frequency ones too, turns as its frequency, so it is a moment of the same
+    // note. No bend, modulation or portamento on the way. As many blocks as
+    // keep that tuning near the note (at most 16, for the lowest keys), so no
+    // operator goes past what the engine's frequency table holds.
+    Controllers still = controllers;
+    still.pitch_cc = 0x2000;
+    still.modwheel_cc = 0;
+    still.foot_cc = 0;
+    still.breath_cc = 0;
+    still.aftertouch_cc = 0;
+    still.portamento_enable_cc = false;
+    still.refresh();
+    phaseDonor->init(program.getRawData(), pitch, 100, channel, &still);
+    phaseDonor->oscSync();
+    if (cycles > 0.0f) {
+        // logfreq is log2(Hz) << 24.
+        const int32_t noteLogfreq = tuningState->midinote_to_logfreq(pitch);
+        const double noteHz = std::exp2(double(noteLogfreq) / double(1 << 24));
+        const int blocks = std::clamp(int(std::lround(double(cycles) * rate / (double(N) * noteHz))), 1, 16);
+        const double hz = double(cycles) * rate / (double(N) * double(blocks));
+        still.masterTune = int32_t(std::lround(std::log2(hz) * double(1 << 24))) - noteLogfreq;
+        AlignedBuf<int32_t, N> scratch;
+        for (int block = 0; block < blocks; ++block) {
+            for (int j = 0; j < N; ++j) scratch.get()[j] = 0;
+            phaseDonor->compute(scratch.get(), 0, 0, &still);
+        }
+    }
+    note.transferPhase(*phaseDonor);
 }
 
 void AVDexedLayer::releaseControllers() {

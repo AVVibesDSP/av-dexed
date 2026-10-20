@@ -10,7 +10,7 @@
 #include <memory>
 
 /** The "Capas" page: the layer mode switch and eight strips, one per layer,
-    as the eight modules of a TX816. Each strip turns its layer on or off,
+    as the eight modules of a rack (X816 mode). Each strip turns its layer on or off,
     shows its sound (a click selects it: Play, Advanced and the browser then
     work on that layer) and sets its volume, pan, tuning, transposition, MIDI
     channel and keys. Same vocabulary as Advanced and Settings: the 12% boxes,

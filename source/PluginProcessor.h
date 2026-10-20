@@ -184,7 +184,7 @@ class DexedAudioProcessor  : public AudioProcessor, public MidiInputCallback, pu
 public :
     static constexpr float AVMasterMaximumGain = 15.848932f; // +24 dB; 0 remains exact mute.
 
-    // LAYERS (TX816 style) ==============================================
+    // LAYERS (X816 mode) ==============================================
     // With the layer mode off the instrument plays as always (the same code,
     // the same samples). With it on, up to eight layers play, each a whole
     // DX7 (AVDexedLayer) with its own voice, MIDI channel, key range,
@@ -208,6 +208,9 @@ public :
         // A DX7II preset micro tuning for this layer (-1: the instrument's tuning).
         std::atomic<int> microTable { -1 };
         std::atomic<int> microKey { 0 };
+        // Free phase (separate modules of a rack): where this layer's notes start,
+        // in turns of their fundamental, not in step with the other layers'. -1: off.
+        std::atomic<float> phase { -1.0f };
     };
     static constexpr float AVLayerMaxDetune = 50.0f;
     bool isAVLayerModeOn() const noexcept { return avLayerMode.load(std::memory_order_acquire); }
@@ -231,6 +234,10 @@ public :
     /** Message thread: `layer` plays DX7II preset micro tuning `table` (1-10)
         on `key` (0 = C); -1 or 0: the instrument's own tuning. */
     void setAVLayerMicroTuning(int layer, int table, int key);
+    /** Free phase on: `layer` plays as a separate module of a rack, its notes
+        not in step with the other layers' (at the start an eight-layer stack
+        gives it); off: in step, as one instrument. */
+    void setAVLayerFreePhase(int layer, bool on);
     /** Message thread. Turning a layer off fades it out and stops its notes. */
     void setAVLayerEnabled(int layer, bool enabled);
     /** Message thread: the layer listens to `channel` (0: every channel). Its
@@ -238,7 +245,7 @@ public :
         pedal-up would never reach it. */
     void setAVLayerChannel(int layer, int channel);
     /** Message thread: the selected voice in `count` layers spread like a
-        TX816 ensemble (alternating pan, symmetric detune of `cents`). */
+        X816 ensemble (alternating pan, symmetric detune of `cents`). */
     void stackAVLayers(int count, float cents);
     /** Message thread: a whole set of layers at once (a DX7II or TX802
         performance). The first layer that sounds becomes the selected one. */

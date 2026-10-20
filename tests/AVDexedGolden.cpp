@@ -255,6 +255,74 @@ int AVRunLayersCpu(const juce::File& bankFile, int slot) {
     return 0;
 }
 
+/** --stack-envelope <bank.syx> <slot>: the level of one held note, every
+    25 ms for 1.5 s, with 1, 2, 4 and 8 stacked layers, relative to one layer
+    (0 dB = as loud as one layer). A stack whose start is far louder than its
+    sustain sounds "plucked". */
+int AVRunStackEnvelope(const juce::File& bankFile, int slot, bool inStep) {
+    Cartridge bank;
+    if (bank.load(bankFile) < 0) return 2;
+    std::vector<double> reference;
+    for (int layers : { 1, 2, 4, 8 }) {
+        auto processor = makeProcessor(bank, juce::jlimit(0, 31, slot - 1), 1);
+        if (layers > 1) processor->stackAVLayers(layers, 7.0f);
+        else { processor->setAVLayerMode(true); }
+        if (inStep)   // what the stack did before 0.3.0's free phase: in step, evenly tuned
+            for (int layer = 0; layer < layers && layers > 1; ++layer) {
+                auto& settings = processor->getAVLayerSettings(layer);
+                settings.phase.store(-1.0f);
+                settings.detune.store(7.0f * (2.0f * float(layer) / float(layers - 1) - 1.0f));
+            }
+        const int window = int(goldenRate * 0.025);
+        juce::AudioBuffer<float> buffer(2, window);
+        // As when playing: the layer volumes have reached what the stack set.
+        for (int w = 0; w < 4; ++w) {
+            juce::MidiBuffer none;
+            buffer.clear();
+            processor->processBlock(buffer, none);
+        }
+        std::vector<double> levels;
+        float peak = 0.0f;
+        for (int w = 0; w < 60; ++w) {
+            juce::MidiBuffer midi;
+            if (w == 0) midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8) 100), 0);
+            buffer.clear();
+            processor->processBlock(buffer, midi);
+            double sum = 0;
+            for (int c = 0; c < 2; ++c)
+                for (int i = 0; i < window; ++i) sum += double(buffer.getSample(c, i)) * buffer.getSample(c, i);
+            levels.push_back(std::sqrt(sum / (2.0 * window)));
+            peak = juce::jmax(peak, buffer.getMagnitude(0, 0, window), buffer.getMagnitude(1, 0, window));
+        }
+        // Against one layer's level around that moment (±100 ms): a voice whose
+        // own operators beat nearly vanishes for an instant by itself.
+        if (layers == 1) {
+            reference.assign(levels.size(), 0.0);
+            for (size_t w = 0; w < levels.size(); ++w) {
+                double power = 0.0;
+                int used = 0;
+                for (size_t near = w >= 4 ? w - 4 : 0; near <= w + 4 && near < levels.size(); ++near, ++used)
+                    power += levels[near] * levels[near];
+                reference[w] = std::sqrt(power / double(used));
+            }
+        }
+        juce::String line = juce::String(layers) + " layers, peak " + juce::String(juce::Decibels::gainToDecibels(peak), 1) + " dBFS:";
+        const auto against = [&](int w) { return juce::Decibels::gainToDecibels(levels[size_t(w)] / juce::jmax(1.0e-9, reference[size_t(w)])); };
+        for (int w : { 0, 1, 2, 4, 8, 12, 20, 30, 40, 59 })
+            line << " " << juce::String(against(w), 1);
+        double low = 100.0, high = -100.0, squares = 0.0;
+        for (int w = 0; w < 60; ++w) {
+            low = juce::jmin(low, double(against(w)));
+            high = juce::jmax(high, double(against(w)));
+            squares += double(against(w)) * against(w);
+        }
+        line << "  | " << juce::String(low, 1) << " .. " << juce::String(high, 1) << ", rms " << juce::String(std::sqrt(squares / 60.0), 1);
+        std::cout << line << '\n';
+    }
+    std::cout << "(dB against one layer at 0, 25, 50, 100, 200, 300, 500, 750, 1000, 1475 ms)\n";
+    return 0;
+}
+
 int AVRunGolden(const juce::StringArray& arguments) {
     if (arguments.size() < 3 || (arguments[0] != "write" && arguments[0] != "check")) {
         std::cerr << "--golden write|check <list.txt> <bank.syx>...\n";
