@@ -41,6 +41,7 @@
 #include "parameter/DexedApvts.h"
 #include "core/Program.h"
 #include "core/AVDexedLibrary.h"
+#include "core/AVDexedPerformance.h"
 #include "util/CommandFifo.h"
 
 struct ProcessorVoice {
@@ -199,6 +200,7 @@ public :
         std::atomic<float> detune { 0.0f };    // cents, -50..50
         std::atomic<float> volume { 1.0f };    // gain, 0..1
         std::atomic<float> pan { 0.5f };       // 0 left, 0.5 centre, 1 right
+        std::atomic<int> alternateGroup { -1 }; // TX802 alternate assign: the layers of one group take turns (-1: none)
     };
     static constexpr float AVLayerMaxDetune = 50.0f;
     bool isAVLayerModeOn() const noexcept { return avLayerMode.load(std::memory_order_acquire); }
@@ -221,6 +223,9 @@ public :
     /** Message thread: the selected voice in `count` layers spread like a
         TX816 ensemble (alternating pan, symmetric detune of `cents`). */
     void stackAVLayers(int count, float cents);
+    /** Message thread: a whole set of layers at once (a DX7II or TX802
+        performance). The first layer that sounds becomes the selected one. */
+    void applyAVLayerSetup(const std::array<AVDexedPerformance::ResolvedLayer, AVLayerCount>& layers);
     /** Message thread: every layer back to its defaults (off, every channel,
         whole keyboard, no transposition or detune, full volume, centre). */
     void resetAVLayers();
@@ -522,6 +527,7 @@ private:
     std::atomic<uint32_t> avLayerPanicMask { 0 };
     std::array<std::atomic<int>, AVLayerCount> avLayerVoices {};
     bool avLayerModeRendered = false;          // render: the mode of the last block
+    std::array<unsigned, AVLayerCount> avAlternateTurn {};   // render: whose turn it is in each alternate group
     // Render: the pitch each layer gave to a note still held, by channel and
     // key, so its note-off reaches the same voice after a change of transposition.
     std::array<std::array<int8_t, 16 * 128>, AVLayerCount> avLayerHeld {};

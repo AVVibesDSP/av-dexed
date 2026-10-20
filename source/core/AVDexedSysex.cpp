@@ -99,6 +99,21 @@ bool looksLikeRawCartridge(const uint8_t* data, size_t size) {
     return readable >= 28;
 }
 
+bool looksLikeRawVoices(const uint8_t* data, size_t size) {
+    if (size != size_t(32 * voiceBytes) || data == nullptr || ! allDataBytes(data, size))
+        return false;
+    int readable = 0;
+    for (int voice = 0; voice < 32; ++voice) {
+        bool ok = true;
+        for (int i = 145; i < 155; ++i) {
+            const auto c = data[voice * voiceBytes + i];
+            ok &= c >= 32 && c < 127;
+        }
+        readable += ok ? 1 : 0;
+    }
+    return readable >= 28;
+}
+
 Contents scan(const uint8_t* data, size_t size) {
     Contents found;
     if (data == nullptr || size == 0)
@@ -106,6 +121,16 @@ Contents scan(const uint8_t* data, size_t size) {
     if (looksLikeRawCartridge(data, size)) {
         Bank bank;
         std::copy(data, data + bankBytes, bank.voices.begin());
+        bank.fromRawCartridge = true;
+        found.banks.push_back(bank);
+        return found;
+    }
+    if (looksLikeRawVoices(data, size)) {
+        Bank bank;
+        for (int voice = 0; voice < 32; ++voice) {
+            const auto packed = packVoice(data + voice * voiceBytes);
+            std::copy(packed.begin(), packed.end(), bank.voices.begin() + voice * 128);
+        }
         bank.fromRawCartridge = true;
         found.banks.push_back(bank);
         return found;

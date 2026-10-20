@@ -17,6 +17,7 @@
 
 #include "../source/PluginProcessor.h"
 #include "../source/parameter/Model.h"
+#include "../source/core/AVDexedPerformance.h"
 #include <iostream>
 #include <map>
 
@@ -198,6 +199,32 @@ int AVRunImport(const juce::StringArray& arguments) {
                                  : AVDexedLibrary::importVoices(voices, folder, juce::File(directory).getFileName()),
                juce::File(directory).getFileName() + " (" + juce::String(voices.size()) + " single voices)");
     std::cout << sounds << " sounds added\n";
+    return 0;
+}
+
+/** --performances <file>: the performances in a file, with their voices
+    resolved from it or from the files next to it. */
+int AVRunPerformanceReport(const juce::File& file) {
+    juce::MemoryBlock bytes;
+    if (! file.loadFileAsData(bytes)) return 2;
+    const auto contents = AVDexedSysex::scan(bytes);
+    const auto performances = AVDexedPerformance::readPerformances(contents);
+    const AVDexedPerformance::VoicePool pool(file, contents);
+    std::cout << performances.size() << " performances; voices from: " << pool.sources().joinIntoString(", ") << '\n';
+    for (const auto& performance : performances) {
+        const auto layers = AVDexedPerformance::resolve(performance, pool);
+        std::cout << juce::String(performance.number).paddedLeft('0', 2) << " " << performance.name
+                  << (performance.notes.isEmpty() ? "" : "  [" + performance.notes.joinIntoString(",") + "]") << '\n';
+        for (int i = 0; i < AVDexedPerformance::layerCount; ++i) {
+            const auto& layer = layers[size_t(i)];
+            if (! layer.plan.used) continue;
+            std::cout << "   " << (i + 1) << ": " << layer.plan.voice.label() << " " << layer.voice.getName().trim()
+                      << (layer.voiceFound ? "" : " (missing)") << (layer.plan.enabled ? "" : " off")
+                      << " ch " << layer.plan.channel << " keys " << layer.plan.lowNote << "-" << layer.plan.highNote
+                      << " tr " << layer.plan.transpose << " det " << layer.plan.detune << " vol " << layer.plan.volume
+                      << " pan " << layer.plan.pan << (layer.plan.alternateGroup >= 0 ? " alt" + juce::String(layer.plan.alternateGroup + 1) : juce::String()) << '\n';
+        }
+    }
     return 0;
 }
 

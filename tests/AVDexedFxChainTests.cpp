@@ -17,8 +17,10 @@ bool runAVDexedVoiceTests();
 bool runAVDexedDropTests();
 bool runAVDexedSysexTests();
 bool runAVDexedLayerTests();
+bool runAVDexedPerformanceTests();
 int AVRunGolden(const juce::StringArray& arguments);
 int AVRunImport(const juce::StringArray& arguments);
+int AVRunPerformanceReport(const juce::File& file);
 int AVRunLoaderReport(const juce::File& folder, const juce::File& output);
 
 namespace {
@@ -104,6 +106,8 @@ int main(int argc, char** argv)
         return AVRenderBankVoice(juce::File(argv[2]), juce::String(argv[3]).getIntValue()) ? 0 : 1;
     if (argc == 4 && juce::String(argv[1]) == "--loader-report")
         return AVRunLoaderReport(juce::File(juce::String::fromUTF8(argv[2])), juce::File(juce::String::fromUTF8(argv[3])));
+    if (argc == 3 && juce::String(argv[1]) == "--performances")
+        return AVRunPerformanceReport(juce::File(juce::String::fromUTF8(argv[2])));
     if (argc >= 4 && juce::String(argv[1]) == "--import") {
         juce::StringArray arguments;
         for (int i = 2; i < argc; ++i) arguments.add(juce::String::fromUTF8(argv[i]));
@@ -123,6 +127,7 @@ int main(int argc, char** argv)
     passed &= runAVDexedDropTests();
     passed &= runAVDexedSysexTests();
     passed &= runAVDexedLayerTests();
+    passed &= runAVDexedPerformanceTests();
     std::cout << (passed ? "AV Dexed regression tests passed.\n" : "AV Dexed regression tests FAILED.\n");
     return passed ? 0 : 1;
 }

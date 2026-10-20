@@ -40,7 +40,7 @@ struct Bank {
         before it in a bank dump), when there is one. */
     bool hasAmem = false;
     std::array<uint8_t, amemBytes> amem {};
-    bool fromRawCartridge = false;     // 4096 bytes without a SysEx header
+    bool fromRawCartridge = false;     // 4096 packed or 32 × 155 unpacked bytes without a SysEx header
 };
 
 struct Contents {
@@ -67,6 +67,10 @@ Contents scan(const juce::MemoryBlock& data);
 /** True for 4096 bytes that read as a DX7 cartridge saved without its SysEx
     header: every byte a MIDI data byte and the 32 names readable. */
 bool looksLikeRawCartridge(const uint8_t* data, size_t size);
+
+/** True for 4960 bytes that read as 32 unpacked voices (32 × VCED) saved
+    without any SysEx header, as some librarians store DX7s and TX802 banks. */
+bool looksLikeRawVoices(const uint8_t* data, size_t size);
 
 /** The 7-bit two's complement checksum of DX7 bulk data. */
 uint8_t checksum(const uint8_t* data, size_t size);
