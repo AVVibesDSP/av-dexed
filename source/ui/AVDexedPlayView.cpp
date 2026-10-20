@@ -2064,7 +2064,11 @@ void AVDexedPlayView::refreshLabels() {
     sourceName.setTooltip(nativePreset ? activePreset.getFullPathName() : processor.activeFileCartridge.getFullPathName());
     modifiedCurrent = processor.isAVPresetModified();
     modifiedLabel.setText({}, dontSendNotification);
-    presetNavigator.setPreset(soundName, {}, modifiedCurrent,
+    // With layers, the top bar says which layer Play and Advanced are editing.
+    const auto shownName = processor.isAVLayerModeOn()
+        ? language.format("layerTitle", {{"number", String(processor.getAVSelectedLayer() + 1)}}) + String::fromUTF8(" · ") + soundName
+        : soundName;
+    presetNavigator.setPreset(shownName, {}, modifiedCurrent,
                               favoriteKeys.contains(key), processor.hasAVKnownPresetOrigin());
     if (heroAlgorithm != nullptr) {
         const auto* feedback = processor.parameters.getRawParameterValue(IDs::feedback.name);

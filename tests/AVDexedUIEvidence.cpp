@@ -162,6 +162,7 @@ bool AVRenderUIEvidence(const juce::File& directory) {
                     editor->showAVView(DexedAudioProcessorEditor::AVView::layers, false);
                     editor->layersView.setVisible(false);   // visibilityChanged() reads the processor
                     editor->layersView.setVisible(true);
+                    editor->refreshPresetHeader();
                     checkBounds(editor->layersView);
                     for (auto* strip : editor->layersView.getChildren()) checkBounds(*strip);
                     auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true, 1.0f);
@@ -178,6 +179,7 @@ bool AVRenderUIEvidence(const juce::File& directory) {
                     editor->layersView.performanceList.setSelectedId(3, sendNotificationSync);
                     editor->layersView.setVisible(false);
                     editor->layersView.setVisible(true);
+                    editor->refreshPresetHeader();
                     auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true, 1.0f);
                     const auto name = String("Layers-tx802-") + locale + (scale == 1.0f ? "-normal.png" : "-compact.png");
                     auto output = directory.getChildFile(name).createOutputStream();
