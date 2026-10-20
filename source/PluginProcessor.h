@@ -37,6 +37,7 @@
 #include "midi/SysexComm.h"
 #include "engine/EngineMkI.h"
 #include "engine/EngineOpl.h"
+#include "engine/AVDexedLayer.h"
 #include "parameter/DexedApvts.h"
 #include "core/Program.h"
 #include "core/AVDexedLibrary.h"
@@ -144,6 +145,11 @@ class DexedAudioProcessor  : public AudioProcessor, public MidiInputCallback, pu
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> panSmoother;
     
     void processMidiMessage(const MidiMessage *msg);
+    /** Layer mode: a message for the layers that listen to its channel. */
+    void processAVLayerMidi(const MidiMessage& message);
+    /** Layer mode: the engine blocks of every layer, mixed to stereo by each
+        layer's volume and pan. Same block bookkeeping as the single path. */
+    void renderAVLayers(float* left, float* right, int numSamples, MidiBufferIterator& it, MidiBufferIterator& end);
     void keydown(uint8_t chan, uint8_t pitch, uint8_t velo);
     void keyup(uint8_t, uint8_t pitch, uint8_t velo);
 
@@ -176,6 +182,51 @@ class DexedAudioProcessor  : public AudioProcessor, public MidiInputCallback, pu
     void valueTreeChildAdded(ValueTree& parentTree, ValueTree& childWhichHasBeenAdded);
 public :
     static constexpr float AVMasterMaximumGain = 15.848932f; // +24 dB; 0 remains exact mute.
+
+    // LAYERS (TX816 style) ==============================================
+    // With the layer mode off the instrument plays as always (the same code,
+    // the same samples). With it on, up to eight layers play, each a whole
+    // DX7 (AVDexedLayer) with its own voice, MIDI channel, key range,
+    // transposition, tuning, volume and pan. The editor edits the selected
+    // layer's voice: activeProgram is that voice.
+    static constexpr int AVLayerCount = 8;
+    struct AVLayerSettings {
+        std::atomic<bool> enabled { false };
+        std::atomic<int> channel { 0 };        // 0: every channel, else 1-16
+        std::atomic<int> lowNote { 0 };
+        std::atomic<int> highNote { 127 };
+        std::atomic<int> transpose { 0 };      // semitones, -24..24
+        std::atomic<float> detune { 0.0f };    // cents, -50..50
+        std::atomic<float> volume { 1.0f };    // gain, 0..1
+        std::atomic<float> pan { 0.5f };       // 0 left, 0.5 centre, 1 right
+    };
+    static constexpr float AVLayerMaxDetune = 50.0f;
+    bool isAVLayerModeOn() const noexcept { return avLayerMode.load(std::memory_order_acquire); }
+    /** Message thread. Turning it on puts the current sound in the selected
+        layer (enabled when no layer is); turning it off keeps that sound. */
+    void setAVLayerMode(bool on);
+    int getAVSelectedLayer() const noexcept { return avSelectedLayer.load(std::memory_order_acquire); }
+    /** Message thread: the editor now edits `layer`'s voice (its edits so far
+        stay with the layer it leaves). The other layers keep playing. */
+    void selectAVLayer(int layer);
+    AVLayerSettings& getAVLayerSettings(int layer) noexcept { return avLayerSettings[size_t(juce::jlimit(0, AVLayerCount - 1, layer))]; }
+    /** The voice of `layer` (for the selected one, the voice being edited). */
+    Program getAVLayerProgram(int layer) const;
+    /** Message thread: `layer` plays `voice` (the selected one also loads it
+        into the editor). */
+    void setAVLayerProgram(int layer, const Program& voice);
+    int getAVLayerSoundingVoices(int layer) const noexcept { return avLayerVoices[size_t(juce::jlimit(0, AVLayerCount - 1, layer))].load(std::memory_order_relaxed); }
+    /** Message thread. Turning a layer off stops its notes. */
+    void setAVLayerEnabled(int layer, bool enabled);
+    /** Message thread: the selected voice in `count` layers spread like a
+        TX816 ensemble (alternating pan, symmetric detune of `cents`). */
+    void stackAVLayers(int count, float cents);
+    /** Message thread: every layer back to its defaults (off, every channel,
+        whole keyboard, no transposition or detune, full volume, centre). */
+    void resetAVLayers();
+    /** Silences the voices a sound change affects: everything with one layer,
+        only the selected layer in layer mode. */
+    void panicForSoundChange();
 #if defined(AVDEXED_TESTING)
     struct TestMode {};
     explicit DexedAudioProcessor(TestMode);
@@ -460,6 +511,31 @@ private:
     void tickAVRestoreGuard() noexcept;
 
     int32_t nextKeydownSeq;;
+
+    // Layer mode state. The settings are written by the editor and read in
+    // render; the layers themselves only ever change in render or under the
+    // callback lock.
+    std::array<AVDexedLayer, AVLayerCount> avLayers;
+    std::array<AVLayerSettings, AVLayerCount> avLayerSettings;
+    std::atomic<bool> avLayerMode { false };
+    std::atomic<int> avSelectedLayer { 0 };
+    std::atomic<uint32_t> avLayerPanicMask { 0 };
+    std::array<std::atomic<int>, AVLayerCount> avLayerVoices {};
+    bool avLayerModeRendered = false;          // render: the mode of the last block
+    // Render: the pitch each layer gave to a note still held, by channel and
+    // key, so its note-off reaches the same voice after a change of transposition.
+    std::array<std::array<int8_t, 16 * 128>, AVLayerCount> avLayerHeld {};
+    std::array<juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear>, AVLayerCount> avLayerGainLeft, avLayerGainRight;
+    PluginFx fxRight;                           // the filter for the right channel in layer mode
+    juce::AudioBuffer<float> avLayerScratch;    // the right channel for a mono output
+    float avLayerExtraLeft[N] {}, avLayerExtraRight[N] {};
+    int avLayerExtraSize = 0;
+    void loadSelectedLayerIntoEditor(const Program& voice);
+    /** The layers in a host session: mode, selected layer, and each layer's
+        settings and voice. A sound file (.avdexpreset) never carries them. */
+    juce::ValueTree createAVLayersState() const;
+    /** From a session; an older session (no layers) restores one layer. */
+    void restoreAVLayersState(const juce::ValueTree& layers);
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DexedAudioProcessor)
 

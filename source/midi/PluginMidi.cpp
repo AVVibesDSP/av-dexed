@@ -20,6 +20,10 @@ void DexedAudioProcessor::processMidiMessage(const MidiMessage *msg) {
         handleIncomingMidiMessage(NULL, *msg);
         return;
     }
+    if (avLayerModeRendered) {   // the layers, by channel and key range
+        processAVLayerMidi(*msg);
+        return;
+    }
 
     const uint8 *buf  = msg->getRawData();
     uint8_t cmd = buf[0];

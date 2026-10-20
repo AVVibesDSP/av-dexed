@@ -115,6 +115,7 @@ void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
     }
 
     storage.addChild(session, -1, nullptr);
+    storage.addChild(createAVLayersState(), -1, nullptr);
 
     if (auto xml = storage.createXml())
         copyXmlToBinary(*xml, destData);
@@ -423,6 +424,11 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
         captureAVPresetBaseline();
     // A restored sound: no CC has moved anything of it yet.
     if (midiCCMapper != nullptr) midiCCMapper->forgetAVCCWrites();
+    // The layers belong to the session; a sound file loads into the selected layer.
+    if (avLoadingSoundFile)
+        avLayers[size_t(avSelectedLayer.load(std::memory_order_acquire))].setProgram(activeProgram);
+    else
+        restoreAVLayersState(storage.getChildWithName("avLayers"));
     programChanged.set(true);
     return true;
 }
@@ -453,6 +459,7 @@ juce::MemoryBlock DexedAudioProcessor::createAVNativePresetState(const juce::Str
     auto mappings = tree.getChildWithName(IDs::profile).getChildWithName(IDs::midiCCMappings);
     mappings.removeProperty(IDs::avPresetPreviousCC, nullptr);
     mappings.removeProperty(IDs::avPresetNextCC, nullptr);
+    tree.removeChild(tree.getChildWithName("avLayers"), nullptr);   // a sound, not a set of layers
     auto session = tree.getChildWithName(sessionNode);
     session.setProperty("avPresetName", name, nullptr);
     session.setProperty("avPresetId", id, nullptr);

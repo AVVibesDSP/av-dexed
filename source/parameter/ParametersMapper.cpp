@@ -460,7 +460,7 @@ void DexedAudioProcessor::setDxValue(int offset, int v) {
 
     // MIDDLE C (transpose)
     if (offset == 144)
-        panic();
+        panicForSoundChange();
 
     if (!sendSysexChange)
         return;

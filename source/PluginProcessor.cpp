@@ -215,11 +215,32 @@ void DexedAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) 
     
     lfo.reset(activeProgram.getParameters(137));
 
+    // Layer mode: every layer ready (allocated here, never in render), the
+    // filter of the right channel, the mix starting where the settings are.
+    fxRight.init(sampleRate);
+    avLayerScratch.setSize(1, juce::jmax(1, samplesPerBlock), false, true, true);
+    avLayerExtraSize = 0;
+    for (int layer = 0; layer < AVLayerCount; ++layer) {
+        avLayers[size_t(layer)].prepare(synthTuningState, mtsClient);
+        if (layer == avSelectedLayer.load(std::memory_order_relaxed) && avLayerMode.load(std::memory_order_relaxed))
+            avLayers[size_t(layer)].setProgram(activeProgram);
+        avLayerHeld[size_t(layer)].fill(-1);
+        const auto& settings = avLayerSettings[size_t(layer)];
+        const float pan = settings.pan.load(std::memory_order_relaxed), volume = settings.volume.load(std::memory_order_relaxed);
+        avLayerGainLeft[size_t(layer)].reset(sampleRate, 0.02);
+        avLayerGainRight[size_t(layer)].reset(sampleRate, 0.02);
+        avLayerGainLeft[size_t(layer)].setCurrentAndTargetValue(volume * (pan <= 0.5f ? 1.0f : 2.0f * (1.0f - pan)));
+        avLayerGainRight[size_t(layer)].setCurrentAndTargetValue(volume * (pan >= 0.5f ? 1.0f : 2.0f * pan));
+    }
+    avLayerModeRendered = avLayerMode.load(std::memory_order_acquire);
+
     command.reset();
 }
 
 void DexedAudioProcessor::releaseResources() {
     currentNote = -1;
+    for (auto& layer : avLayers)
+        layer.release();
 
     for (int note = 0; note < MAX_ACTIVE_NOTES; ++note) {
         if ( voices[note].dx7_note != NULL ) {
@@ -252,6 +273,24 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
         return;
     }
 
+    // Layer mode switched: both ways start from silence, once (before the
+    // effects reset below, which the switch asks for too).
+    const bool layerMode = avLayerMode.load(std::memory_order_acquire);
+    if (layerMode != avLayerModeRendered) {
+        panic();
+        for (auto& layer : avLayers) layer.panic();
+        for (auto& held : avLayerHeld) held.fill(-1);
+        extra_buf_size = 0;
+        avLayerExtraSize = 0;
+        avLayerModeRendered = layerMode;
+    }
+    if (const auto mask = avLayerPanicMask.exchange(0, std::memory_order_acq_rel); mask != 0)
+        for (int layer = 0; layer < AVLayerCount; ++layer)
+            if (mask & (1u << layer)) {
+                avLayers[size_t(layer)].panic();
+                avLayerHeld[size_t(layer)].fill(-1);
+            }
+
     if (fxResetRequested.exchange(false, std::memory_order_relaxed))
         effects.reset();
 
@@ -272,12 +311,22 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
                 voices[i].dx7_note->update(activeProgram.getRawData(), voices[i].midi_note, voices[i].velocity, voices[i].channel);
         }
         lfo.reset(activeProgram.getParameters(137));
+        // The voice being edited is the selected layer's.
+        if (layerMode)
+            avLayers[size_t(avSelectedLayer.load(std::memory_order_acquire))].setProgram(activeProgram);
     }
 
     keyboardState.processNextMidiBuffer(midiMessages, 0, numSamples, true);
 
     juce::MidiBufferIterator it = midiMessages.begin(), end = midiMessages.end();
     float *channelData = buffer.getWritePointer(0);
+    float* layerRight = nullptr;
+    if (layerMode) {
+        layerRight = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : avLayerScratch.getWritePointer(0);
+        if (buffer.getNumChannels() <= 1 && avLayerScratch.getNumSamples() < numSamples)
+            layerRight = nullptr;   // a host block larger than announced: the left channel only
+        renderAVLayers(channelData, layerRight, numSamples, it, end);
+    } else {
   
     // flush first events
     for (i=0; i < numSamples && i < extra_buf_size; i++) {
@@ -343,9 +392,18 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
         }
         extra_buf_size = i - numSamples;
     }
+    }
 
     processMidiMessages(it, end, numSamples);
     fx.process(channelData, numSamples);
+    if (layerRight != nullptr) {
+        // The same filter on the right channel: with both channels equal (one
+        // layer in the centre) both come out as the single path's.
+        fxRight.uiCutoff = fx.uiCutoff;
+        fxRight.uiReso = fx.uiReso;
+        fxRight.uiGain = fx.uiGain;
+        fxRight.process(layerRight, numSamples);
+    }
 
     // The original synth/filter remain mono. Build a preallocated stereo bus
     // for the optional post-filter effects, then return to the host's layout.
@@ -372,7 +430,7 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
         for (int sample = 0; sample < chunk; ++sample) {
             const float mono = channelData[processed + sample];
             fxLeft[sample] = mono;
-            fxRight[sample] = mono;
+            fxRight[sample] = layerRight != nullptr ? layerRight[processed + sample] : mono;
         }
         effects.process(stereoFxBuffer, chunk, hostBpm);
 
@@ -425,6 +483,12 @@ void DexedAudioProcessor::finishAVAudioMeter(juce::int64 startTicks, int samples
     int playing = 0;
     for (const auto& voice : voices)
         if (voice.dx7_note != nullptr && voice.live && voice.dx7_note->isPlaying()) ++playing;
+    if (avLayerModeRendered)
+        for (int layer = 0; layer < AVLayerCount; ++layer) {
+            const int sounding = avLayers[size_t(layer)].soundingVoices();
+            avLayerVoices[size_t(layer)].store(sounding, std::memory_order_relaxed);
+            playing += sounding;
+        }
     avActiveVoices.store(playing, std::memory_order_relaxed);
     if (samples <= 0 || getSampleRate() <= 0.0) return;
     const auto elapsed = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - startTicks);
@@ -606,6 +670,7 @@ void DexedAudioProcessor::keyup(uint8_t chan, uint8_t pitch, uint8_t velo) {
 }
 
 void DexedAudioProcessor::panic() {
+    avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
     fxResetRequested.store(true, std::memory_order_relaxed);
     extra_buf_size = 0;
     sustain = false;
@@ -650,6 +715,8 @@ void DexedAudioProcessor::resetMonoMode() {
 bool DexedAudioProcessor::peekVoiceStatus() {
     if ( currentNote == -1 )
         return false;
+    if (avLayerModeRendered)
+        return avLayers[size_t(avSelectedLayer.load(std::memory_order_acquire))].peekVoiceStatus(voiceStatus);
 
     // Report what is actually sounding: each operator's loudest level across
     // every voice whose carriers can still be heard, and envelope steps from
@@ -723,7 +790,7 @@ void DexedAudioProcessor::applyProgram(const Program &program) {
     // Init, a received voice...: setCurrentProgram marks a bank slot's sound again.
     avSoundFromBankSlot.store(false, std::memory_order_relaxed);
     if (midiCCMapper != nullptr) midiCCMapper->forgetAVCCWrites();   // a new sound: the wheel moved nothing of it
-    panic();
+    panicForSoundChange();
     activeProgram = program;
     activeProgram.pushToParameters(parameters);
     lfo.reset(activeProgram.getParameters(IDs::lfoRate.pos));

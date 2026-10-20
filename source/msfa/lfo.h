@@ -16,6 +16,8 @@
 
 // Low frequency oscillator, compatible with DX7
 
+#pragma once   // AV Dexed: included by the processor and by the layers
+
 class Lfo {
 public:
     static void init(double sample_rate);

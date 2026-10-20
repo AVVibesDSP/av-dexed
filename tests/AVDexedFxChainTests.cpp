@@ -16,6 +16,7 @@ bool AVAuditVoices(const juce::File& folder, const juce::File& output);
 bool runAVDexedVoiceTests();
 bool runAVDexedDropTests();
 bool runAVDexedSysexTests();
+bool runAVDexedLayerTests();
 int AVRunGolden(const juce::StringArray& arguments);
 int AVRunImport(const juce::StringArray& arguments);
 int AVRunLoaderReport(const juce::File& folder, const juce::File& output);
@@ -121,6 +122,7 @@ int main(int argc, char** argv)
     passed &= runAVDexedVoiceTests();
     passed &= runAVDexedDropTests();
     passed &= runAVDexedSysexTests();
+    passed &= runAVDexedLayerTests();
     std::cout << (passed ? "AV Dexed regression tests passed.\n" : "AV Dexed regression tests FAILED.\n");
     return passed ? 0 : 1;
 }

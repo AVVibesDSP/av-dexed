@@ -26,6 +26,8 @@ void DexedAudioProcessor::resetTuning(std::shared_ptr<TuningState> t) {
     for( int i=0; i<MAX_ACTIVE_NOTES; ++i )
         if( voices[i].dx7_note != nullptr )
             voices[i].dx7_note->tuning_state_ = synthTuningState;
+    for (auto& layer : avLayers)
+        layer.setTuning(synthTuningState);
 }
 
 void DexedAudioProcessor::retuneToStandard() {
