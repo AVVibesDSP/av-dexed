@@ -42,6 +42,8 @@ struct LayerPlan {
     float volume = 1.0f;        // 0..1
     float pan = 0.5f;
     int alternateGroup = -1;    // TX802 alternate assign: the layers of one group take turns (-1: none)
+    int microTable = -1;        // DX7II preset micro tuning 1-10 (-1: none)
+    int microKey = 0;
 };
 
 struct Performance {

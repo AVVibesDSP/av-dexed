@@ -222,7 +222,8 @@ int AVRunPerformanceReport(const juce::File& file) {
                       << (layer.voiceFound ? "" : " (missing)") << (layer.plan.enabled ? "" : " off")
                       << " ch " << layer.plan.channel << " keys " << layer.plan.lowNote << "-" << layer.plan.highNote
                       << " tr " << layer.plan.transpose << " det " << layer.plan.detune << " vol " << layer.plan.volume
-                      << " pan " << layer.plan.pan << (layer.plan.alternateGroup >= 0 ? " alt" + juce::String(layer.plan.alternateGroup + 1) : juce::String()) << '\n';
+                      << " pan " << layer.plan.pan << (layer.plan.alternateGroup >= 0 ? " alt" + juce::String(layer.plan.alternateGroup + 1) : juce::String())
+                      << (layer.plan.microTable > 0 ? " tuning" + juce::String(layer.plan.microTable) + "/" + juce::String(layer.plan.microKey) : juce::String()) << '\n';
         }
     }
     return 0;

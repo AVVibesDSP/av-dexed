@@ -9,6 +9,7 @@
 #include "../source/PluginProcessor.h"
 #include "../source/parameter/Model.h"
 #include "../source/core/AVDexedSysex.h"
+#include "../source/core/AVDexedMicroTuning.h"
 #include "../source/core/AVDexedLibrary.h"
 #include <iostream>
 
@@ -587,6 +588,47 @@ bool testSecondReviewCases() {
     return passed;
 }
 
+bool testMicroTuning() {
+    bool passed = true;
+    const auto werck = AVDexedMicroTuning::presetCents(5, 0);
+    passed &= expect(std::abs(werck[69] + 11.73f) < 0.01f && werck[60] == 0.0f, "Werckmeister: A is 11.7 cents low, C as it is");
+    const auto mean = AVDexedMicroTuning::presetCents(3, 2);
+    passed &= expect(mean[62] == 0.0f && std::abs(mean[64] + 6.84f) < 0.01f, "mean tone follows its key (D)");
+    passed &= expect(AVDexedMicroTuning::makePresetTuning(0, 0) == nullptr, "equal temperament keeps the instrument's tuning");
+    auto table = AVDexedMicroTuning::makePresetTuning(5, 0);
+    auto standard = createStandardTuning();
+    passed &= expect(table != nullptr && std::abs((table->midinote_to_logfreq(69) - standard->midinote_to_logfreq(69)) + int(11.73 * 13981.0)) < 200,
+                     "a preset tuning moves each note by its cents");
+
+    auto bank = varietyBank();
+    auto tuned = makeProcessor(bank, 2), plain = makeProcessor(bank, 2);
+    oneLayer(*tuned);
+    oneLayer(*plain);
+    tuned->setAVLayerMicroTuning(0, 5, 0);
+    const std::vector<Note> notes { { 0.0, 1, 69, 100 }, { 0.3, 1, 69, 0 } };
+    passed &= expect(! (render(*tuned, notes, 0.5) == render(*plain, notes, 0.5)), "a layer in Werckmeister sounds different");
+    // Turned on and off again before playing: exactly the instrument's own tuning.
+    auto toggled = makeProcessor(bank, 2), untouched = makeProcessor(bank, 2);
+    oneLayer(*toggled);
+    oneLayer(*untouched);
+    toggled->setAVLayerMicroTuning(0, 5, 0);
+    toggled->setAVLayerMicroTuning(0, -1, 0);
+    passed &= expect(render(*toggled, notes, 0.5) == render(*untouched, notes, 0.5), "with it off again it plays as before");
+
+    tuned->setAVLayerMicroTuning(0, 6, 4);
+    const auto text = tuned->createAVLayersFile("Kirnberger");
+    auto opened = makeProcessor(bank, 0);
+    opened->loadAVLayersFile(text);
+    passed &= expect(opened->getAVLayerSettings(0).microTable.load() == 6 && opened->getAVLayerSettings(0).microKey.load() == 4,
+                     "a layers file keeps the layer's tuning");
+    juce::MemoryBlock state;
+    tuned->getStateInformation(state);
+    auto restored = makeProcessor(bank, 0);
+    restored->setStateInformation(state.getData(), int(state.getSize()));
+    passed &= expect(restored->getAVLayerSettings(0).microTable.load() == 6, "and so does a session");
+    return passed;
+}
+
 bool testUnisonAndRandomPitch() {
     bool passed = true;
     auto bank = varietyBank();
@@ -623,6 +665,7 @@ bool runAVDexedLayerTests() {
     passed &= testReviewCases();
     passed &= testBankVoiceExtras();
     passed &= testSecondReviewCases();
+    passed &= testMicroTuning();
     std::cout << (passed ? "Layer checks passed.\n" : "Layer checks FAILED.\n");
     return passed;
 }

@@ -221,7 +221,7 @@ void DexedAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) 
     avLayerScratch.setSize(1, juce::jmax(1, samplesPerBlock), false, true, true);
     avLayerExtraSize = 0;
     for (int layer = 0; layer < AVLayerCount; ++layer) {
-        avLayers[size_t(layer)].prepare(synthTuningState, mtsClient);
+        avLayers[size_t(layer)].prepare(tuningForAVLayer(layer), mtsClient);
         avLayers[size_t(layer)].setRandomSeed(uint32_t(layer) * 2654435761u + 1u);
         if (layer == avSelectedLayer.load(std::memory_order_relaxed) && avLayerMode.load(std::memory_order_relaxed))
             avLayers[size_t(layer)].setProgram(activeProgram);

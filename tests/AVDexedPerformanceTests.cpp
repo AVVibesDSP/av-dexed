@@ -52,6 +52,16 @@ bool testDx7ii() {
     passed &= expect(split.layers[1].transpose == -12 && split.layers[1].voice.source == AVDexedPerformance::VoiceRef::Source::cartridge
                          && split.layers[1].voice.number == 6,
                      "split: B has its own note shift; 64-127 are cartridge voices");
+    auto tunedBytes = dx7iiPerformance(1, 5, 40, "Tuned               ");
+    tunedBytes[3] = 5;   // Werckmeister
+    tunedBytes[4] = 2;
+    tunedBytes[5] = 1;   // on voice A only
+    const auto tuned = AVDexedPerformance::fromDx7ii(tunedBytes.data(), 4);
+    passed &= expect(tuned.layers[0].microTable == 5 && tuned.layers[0].microKey == 2 && tuned.layers[1].microTable == -1
+                         && tuned.notes.isEmpty(),
+                     "a preset micro tuning goes to the voice it is switched on for");
+    tunedBytes[3] = 12;  // a user table: not played, said
+    passed &= expect(AVDexedPerformance::fromDx7ii(tunedBytes.data(), 5).notes.contains("microTuning"), "a user table is noted");
     const auto singleBytes = dx7iiPerformance(0, 9, 0, "Single              ");
     passed &= expect(! AVDexedPerformance::fromDx7ii(singleBytes.data(), 3).layers[1].used, "a single performance is one layer");
     return passed;
@@ -149,6 +159,33 @@ bool testVoicesNextToThePerformance() {
     passed &= expect(resolved[0].voiceFound && resolved[0].voice.getName().trim() == "LOW5"
                          && resolved[1].voiceFound && resolved[1].voice.getName().trim() == "HIGH5",
                      "internal 1-32 and 33-64 are the two files, in name order");
+
+    // The second set of a factory pair: "FactoryPerfB" plays the internal
+    // memory of "FactoryVoice32/64" and the cartridge of "FactoryVoice32B/64B".
+    {
+        juce::MemoryBlock dumpB;
+        dumpB.append(header, sizeof(header));
+        std::vector<uint8_t> bodyB;
+        for (const char* c = "LM  8973PM"; *c; ++c) bodyB.push_back(uint8_t(*c));
+        for (int i = 0; i < 32; ++i) {
+            const auto perf = dx7iiPerformance(1, 1, 64 + 36, "Pair                ");
+            bodyB.insert(bodyB.end(), perf.begin(), perf.end());
+        }
+        dumpB.append(bodyB.data(), bodyB.size());
+        const uint8_t tailB[] = { AVDexedSysex::checksum(bodyB.data(), bodyB.size()), 0xF7 };
+        dumpB.append(tailB, 2);
+        const auto fileB = scratch.root.getChildFile("FactoryPerfB.syx");
+        fileB.replaceWithData(dumpB.getData(), dumpB.getSize());
+        writeBank(scratch.root.getChildFile("FactoryVoice32B.syx"), "CA");
+        writeBank(scratch.root.getChildFile("FactoryVoice64B.syx"), "CB");
+        juce::MemoryBlock bytesB;
+        fileB.loadFileAsData(bytesB);
+        const auto contentsB = AVDexedSysex::scan(bytesB);
+        const AVDexedPerformance::VoicePool poolB(fileB, contentsB);
+        const auto pair = AVDexedPerformance::resolve(AVDexedPerformance::readPerformances(contentsB)[0], poolB);
+        passed &= expect(pair[0].voice.getName().trim() == "LOW2" && pair[1].voice.getName().trim() == "CB5",
+                         "a \"B\" performance set: internal from the first set, cartridge from its own files");
+    }
 
     // A voice that is nowhere: the layer stays silent and says which it was.
     AVDexedPerformance::Performance missing = performances[0];

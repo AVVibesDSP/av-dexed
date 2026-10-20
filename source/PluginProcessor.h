@@ -205,6 +205,9 @@ public :
         std::atomic<float> unison { 0.0f };    // two voices per key, ± these cents
         std::atomic<float> randomPitch { 0.0f };   // each note tuned at random within ± these cents
         std::atomic<int> mono { -1 };          // -1: as the instrument, 0: poly, 1: mono
+        // A DX7II preset micro tuning for this layer (-1: the instrument's tuning).
+        std::atomic<int> microTable { -1 };
+        std::atomic<int> microKey { 0 };
     };
     static constexpr float AVLayerMaxDetune = 50.0f;
     bool isAVLayerModeOn() const noexcept { return avLayerMode.load(std::memory_order_acquire); }
@@ -225,6 +228,9 @@ public :
     /** Unison, random pitch and mono of `layer` from a voice's AMEM (35 bytes);
         nullptr: none (the DX7's behaviour). */
     void setAVLayerVoiceExtras(int layer, const uint8_t* amem35);
+    /** Message thread: `layer` plays DX7II preset micro tuning `table` (1-10)
+        on `key` (0 = C); -1 or 0: the instrument's own tuning. */
+    void setAVLayerMicroTuning(int layer, int table, int key);
     /** Message thread. Turning a layer off fades it out and stops its notes. */
     void setAVLayerEnabled(int layer, bool enabled);
     /** Message thread: the layer listens to `channel` (0: every channel). Its
@@ -568,6 +574,8 @@ private:
         a program change in the middle of one). */
     void syncAVLayer(int layer);
     std::array<juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear>, AVLayerCount> avLayerGainLeft, avLayerGainRight;
+    std::array<std::shared_ptr<TuningState>, AVLayerCount> avLayerTuning {};   // a layer's own micro tuning, or none
+    std::shared_ptr<TuningState> tuningForAVLayer(int layer) const { return avLayerTuning[size_t(layer)] ? avLayerTuning[size_t(layer)] : synthTuningState; }
     PluginFx fxRight;                           // the filter for the right channel in layer mode
     juce::AudioBuffer<float> avLayerScratch;    // the right channel for a mono output
     float avLayerExtraLeft[N] {}, avLayerExtraRight[N] {};

@@ -184,6 +184,8 @@ public:
         if (settings.unison.load() > 0.0f) voices << String::fromUTF8(" · ") << language.text("layerUnison");
         if (settings.randomPitch.load() > 0.0f) voices << String::fromUTF8(" · ") << language.text("layerRandom");
         if (settings.mono.load() == 1) voices << String::fromUTF8(" · ") << language.text("layerMono");
+        if (const int table = settings.microTable.load(); table > 0)
+            voices << String::fromUTF8(" · ") << language.text("microTuning" + String(table));
         if (name != voice.name || voices != voice.voices || selected != voice.selected || (sounding > 0) != voice.sounding) {
             voice.name = name.isNotEmpty() ? name : String("—");
             voice.voices = voices;
@@ -338,6 +340,11 @@ private:
         menu.addSubMenu(language.text("layerUnisonMenu"), unison);
         menu.addSubMenu(language.text("layerRandomMenu"), random);
         menu.addSubMenu(language.text("layerMonoMenu"), mono);
+        PopupMenu tuning;
+        tuning.addItem(40, language.text("optionOff"), true, settings.microTable.load() <= 0);
+        for (int table = 1; table <= 10; ++table)
+            tuning.addItem(40 + table, language.text("microTuning" + String(table)), true, settings.microTable.load() == table);
+        menu.addSubMenu(language.text("layerTuningMenu"), tuning);
         menu.setLookAndFeel(&getLookAndFeel());
         Component::SafePointer<Strip> safeThis(this);
         menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&voice), [safeThis, selected](int result) {
@@ -349,6 +356,7 @@ private:
             if (result >= 10 && result < 15) chosen.unison.store(unisonValues[result - 10]);
             else if (result >= 20 && result < 25) chosen.randomPitch.store(randomValues[result - 20]);
             else if (result >= 30 && result <= 32) chosen.mono.store(result - 31);
+            else if (result >= 40 && result <= 50) p.setAVLayerMicroTuning(safeThis->layer, result == 40 ? -1 : result - 40, 0);
             if (result == 1) {
                 p.setAVLayerProgram(safeThis->layer, p.getAVLayerProgram(selected));
                 p.setAVLayerEnabled(safeThis->layer, true);
@@ -620,7 +628,9 @@ void AVDexedLayersView::installPerformance(int index) {
     auto notice = language.format("layerPerformanceLoaded", {{"name", performance.name}, {"count", String(used)},
                                                              {"sources", voicePool->sources().joinIntoString(", ")}});
     if (missing > 0) notice << language.format("layerVoicesMissing", {{"count", String(missing)}});
-    if (! performance.notes.isEmpty()) notice << language.text("layerPerformanceNotes");
+    // What the original does that does not play here.
+    if (performance.notes.contains("pan")) notice << language.text("layerNotePan");
+    if (performance.notes.contains("microTuning")) notice << language.text("layerNoteMicro");
     refresh();
     if (onNotice) onNotice(notice);
 }

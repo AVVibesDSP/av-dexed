@@ -109,7 +109,15 @@ Performance fromDx7ii(const uint8_t* p, int number) {
         if (mode == 2) b.lowNote = splitPoint;                       // B from the split point up
     }
     if ((p[20] & 3) != 0) performance.notes.add("pan");              // pan by LFO, velocity or key
-    if ((p[5] & 3) != 0) performance.notes.add("microTuning");
+    // Micro tuning: the preset tables play; user and cartridge tables (11-74) do not.
+    const int table = p[3], key = p[4] % 12;
+    for (int side = 0; side < 2; ++side)
+        if ((p[5] >> side) & 1) {
+            auto& layer = performance.layers[size_t(side)];
+            if (! layer.used) continue;
+            if (table >= 1 && table <= 10) { layer.microTable = table; layer.microKey = key; }
+            else if (table > 10) performance.notes.addIfNotAlreadyThere("microTuning");
+        }
     return performance;
 }
 
@@ -147,7 +155,10 @@ Performance fromTx802(const uint8_t* p, int number) {
             layer.alternateGroup = left.alternateGroup;
         }
         previousLeader = tg;
-        microTuning |= p[16 + tg] != 0;
+        // Micro tuning: 1-10 are the presets; the rest (user, cartridge) do not play.
+        const int table = p[16 + tg];
+        if (table >= 1 && table <= 10) layer.microTable = table;
+        else microTuning |= table != 0;
     }
     if (microTuning) performance.notes.add("microTuning");
     return performance;
@@ -226,30 +237,53 @@ VoicePool::VoicePool(const juce::File& performanceFile, const AVDexedSysex::Cont
         takePresets(readSiblings(folder.getParentDirectory(), performanceFile, true));
 
     if (! contents.banks.empty()) return;
-    // The internal memory: the voice files named as the performance file
-    // ("DX7IIFDPerf" → "DX7IIFDVoice32", "DX7IIFDVoice64"), else those sharing
-    // the longest start of the name ("TenNoMakiPerfA" → "TenNoMakiVoice").
+    // The voice files of the set, never the TX802 presets (taken above).
+    std::vector<const Sibling*> voiceFiles;
+    for (const auto& sibling : siblings) {
+        const auto& n = sibling.name;
+        if (! (n.endsWith("a1") || n.endsWith("a2") || n.endsWith("b1") || n.endsWith("b2"))) voiceFiles.push_back(&sibling);
+    }
+    const auto named = [&voiceFiles](const juce::String& name) {
+        std::vector<const Sibling*> found;
+        for (const auto* sibling : voiceFiles)
+            if (sibling->name == name) found.push_back(sibling);
+        return found;
+    };
+    // The files named as the performance file ("DX7IIFDPerf" → "DX7IIFDVoice32",
+    // "DX7IIFDVoice64"), else those sharing the longest start of the name
+    // ("TenNoMakiPerfA" → "TenNoMakiVoice").
     const auto wanted = normalisedName(performanceFile, false);
-    std::vector<const Sibling*> chosen;
-    for (const auto& sibling : siblings)
-        if (sibling.name == wanted) chosen.push_back(&sibling);
+    auto chosen = named(wanted);
     if (chosen.empty()) {
         int best = 3;
-        for (const auto& sibling : siblings) best = std::max(best, commonPrefix(sibling.name, wanted));
+        for (const auto* sibling : voiceFiles) best = std::max(best, commonPrefix(sibling->name, wanted));
         if (best > 3)
-            for (const auto& sibling : siblings)
-                if (commonPrefix(sibling.name, wanted) == best) chosen.push_back(&sibling);
+            for (const auto* sibling : voiceFiles)
+                if (commonPrefix(sibling->name, wanted) == best) chosen.push_back(sibling);
     }
-    // Sets sold on cartridge (the DX7II's 64-127, "C01"...) came as these same
-    // voice files: they stand for the cartridge too.
-    int half = 0;
-    for (const auto* sibling : chosen)
-        for (const auto& bank : sibling->banks)
-            if (half < 2) {
-                setBank(VoiceRef::Source::internal, half, bank, sibling->file.getFileName());
-                setBank(VoiceRef::Source::cartridge, half, bank, sibling->file.getFileName());
-                ++half;
-            }
+    // A second set of a factory pair ("DX7IIFDPerfB" next to "DX7IIFDPerf"):
+    // its own voice files ("…Voice32B", "…Voice64B") are the cartridge, the
+    // first set's the internal memory. Otherwise a set sold on cartridge came
+    // as these same voice files: they stand for both.
+    std::vector<const Sibling*> internal = chosen, cartridge = chosen;
+    if (wanted.length() > 1 && juce::CharacterFunctions::isLetter(wanted.getLastCharacter()) && named(wanted) == chosen && ! chosen.empty()) {
+        const auto base = named(wanted.dropLastCharacters(1));
+        if (! base.empty()) internal = base;
+    }
+    // Files with "32" and "64" in their names are the two halves, in that order.
+    const auto install = [this](VoiceRef::Source source, std::vector<const Sibling*> files) {
+        const auto rank = [](const Sibling* sibling) {   // "…32" first, then "…64", then the rest in name order
+            const auto name = sibling->file.getFileNameWithoutExtension();
+            return name.contains("32") ? 0 : name.contains("64") ? 1 : 2;
+        };
+        std::stable_sort(files.begin(), files.end(), [&rank](const Sibling* a, const Sibling* b) { return rank(a) < rank(b); });
+        int half = 0;
+        for (const auto* sibling : files)
+            for (const auto& bank : sibling->banks)
+                if (half < 2) setBank(source, half++, bank, sibling->file.getFileName());
+    };
+    install(VoiceRef::Source::internal, internal);
+    install(VoiceRef::Source::cartridge, cartridge);
 }
 
 void VoicePool::setBank(VoiceRef::Source source, int half, const AVDexedSysex::Bank& bank, const juce::String& from) {

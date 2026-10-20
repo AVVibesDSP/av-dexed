@@ -164,6 +164,7 @@ target_sources(${BaseTargetName} PRIVATE
 	core/Cartridge.cpp
 	core/AVDexedSysex.cpp
 	core/AVDexedPerformance.cpp
+	core/AVDexedMicroTuning.cpp
 	engine/AVDexedLayer.cpp
 	AVDexedLayers.cpp
 	core/AVDexedLibrary.cpp

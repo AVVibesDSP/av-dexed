@@ -7,6 +7,7 @@
 #include "PluginProcessor.h"
 #include "midi/MidiCCHandler.h"
 #include "parameter/Model.h"
+#include "core/AVDexedMicroTuning.h"
 
 namespace {
 float leftBalance(float pan) { return pan <= 0.5f ? 1.0f : 2.0f * (1.0f - pan); }
@@ -316,6 +317,21 @@ void DexedAudioProcessor::setAVLayerVoiceExtras(int layer, const uint8_t* amem35
     settings.mono.store(extras.mono, std::memory_order_relaxed);
 }
 
+void DexedAudioProcessor::setAVLayerMicroTuning(int layer, int table, int key) {
+    layer = juce::jlimit(0, AVLayerCount - 1, layer);
+    table = table >= 1 && table < AVDexedMicroTuning::presetCount ? table : -1;
+    key = ((key % 12) + 12) % 12;
+    auto& settings = avLayerSettings[size_t(layer)];
+    if (settings.microTable.load() == table && settings.microKey.load() == key && (table < 0) == (avLayerTuning[size_t(layer)] == nullptr))
+        return;
+    auto tuning = table > 0 ? AVDexedMicroTuning::makePresetTuning(table, key) : nullptr;   // allocated here, never in render
+    const juce::ScopedLock lock(getCallbackLock());
+    avLayerTuning[size_t(layer)] = tuning;
+    avLayers[size_t(layer)].setTuning(tuningForAVLayer(layer));
+    settings.microTable.store(table, std::memory_order_relaxed);
+    settings.microKey.store(key, std::memory_order_relaxed);
+}
+
 void DexedAudioProcessor::setAVLayerChannel(int layer, int channel) {
     layer = juce::jlimit(0, AVLayerCount - 1, layer);
     channel = juce::jlimit(0, 16, channel);
@@ -351,6 +367,7 @@ void DexedAudioProcessor::stackAVLayers(int count, float cents) {
             settings.pan.store(used ? 0.5f + 0.4f * position : 0.5f, std::memory_order_relaxed);
             settings.volume.store(used ? 1.0f / std::sqrt(float(count)) : 1.0f, std::memory_order_relaxed);
         }
+        for (int layer = 0; layer < AVLayerCount; ++layer) setAVLayerMicroTuning(layer, -1, 0);
         avSelectedLayer.store(0, std::memory_order_release);
         activeProgram = voice;
         avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
@@ -380,6 +397,7 @@ void DexedAudioProcessor::resetAVLayers() {
     }
     avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
     avLayerReleaseMask.store((1u << AVLayerCount) - 1, std::memory_order_release);   // channels changed: controllers at rest
+    for (int layer = 0; layer < AVLayerCount; ++layer) setAVLayerMicroTuning(layer, -1, 0);
 }
 
 juce::ValueTree DexedAudioProcessor::createAVLayersState() const {
@@ -401,6 +419,8 @@ juce::ValueTree DexedAudioProcessor::createAVLayersState() const {
         layer.setProperty("unison", settings.unison.load(std::memory_order_relaxed), nullptr);
         layer.setProperty("randomPitch", settings.randomPitch.load(std::memory_order_relaxed), nullptr);
         layer.setProperty("mono", settings.mono.load(std::memory_order_relaxed), nullptr);
+        layer.setProperty("microTable", settings.microTable.load(std::memory_order_relaxed), nullptr);
+        layer.setProperty("microKey", settings.microKey.load(std::memory_order_relaxed), nullptr);
         const auto voice = getAVLayerProgram(index);
         layer.setProperty("voice", juce::MemoryBlock(voice.getRawData(), Program::PROGRAM_SIZE + 1).toBase64Encoding(), nullptr);
         layers.addChild(layer, -1, nullptr);
@@ -431,6 +451,8 @@ AVDexedPerformance::ResolvedLayer readLayerTree(const juce::ValueTree& layer, in
     read.unison = juce::jlimit(0.0f, DexedAudioProcessor::AVLayerMaxDetune, float(layer.getProperty("unison", 0.0f)));
     read.randomPitch = juce::jlimit(0.0f, 100.0f, float(layer.getProperty("randomPitch", 0.0f)));
     read.mono = juce::jlimit(-1, 1, int(layer.getProperty("mono", -1)));
+    plan.microTable = juce::jlimit(-1, 10, int(layer.getProperty("microTable", -1)));
+    plan.microKey = juce::jlimit(0, 11, int(layer.getProperty("microKey", 0)));
     juce::MemoryBlock data;
     if (data.fromBase64Encoding(layer.getProperty("voice").toString()) && data.getSize() >= size_t(Program::PROGRAM_SIZE)) {
         read.voice = Program(static_cast<const uint8_t*>(data.getData()));
@@ -461,6 +483,7 @@ void DexedAudioProcessor::restoreAVLayersState(const juce::ValueTree& layers) {
         settings.unison.store(read.unison, std::memory_order_relaxed);
         settings.randomPitch.store(read.randomPitch, std::memory_order_relaxed);
         settings.mono.store(read.mono, std::memory_order_relaxed);
+        setAVLayerMicroTuning(index, plan.microTable, plan.microKey);
         avLayers[size_t(index)].setProgram(read.voice);
     }
     const int selected = juce::jlimit(0, AVLayerCount - 1, layers.isValid() ? int(layers.getProperty("selected", 0)) : 0);
@@ -524,6 +547,7 @@ void DexedAudioProcessor::applyAVLayerSetup(const std::array<AVDexedPerformance:
             settings.volume.store(plan.used ? juce::jlimit(0.0f, 1.0f, plan.volume) : 1.0f, std::memory_order_relaxed);
             settings.pan.store(plan.used ? juce::jlimit(0.0f, 1.0f, plan.pan) : 0.5f, std::memory_order_relaxed);
             avLayers[size_t(index)].setProgram(plan.used ? layer.voice : Program::initialProgram());
+            setAVLayerMicroTuning(index, plan.used ? plan.microTable : -1, plan.microKey);
         }
         avSelectedLayer.store(first, std::memory_order_release);
         refreshVoice.set(false);
