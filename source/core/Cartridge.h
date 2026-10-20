@@ -13,6 +13,12 @@ class Cartridge {
     uint8_t voiceData[SYSEX_SIZE];
     uint8_t perfData[SYSEX_SIZE];
     bool hasData = false;
+    // AV Dexed: the DX7II/TX802 additional data (AMEM) sent with this bank,
+    // when the file had it. Only read (the layers take unison, random pitch
+    // and mono from it); never written back.
+    bool hasAmem = false;
+    uint8_t amemData[1120] {};
+    void attachAmem(const uint8_t* stream, int size);
 
     void setHeader() {
         uint8_t voiceHeader[] = SYSEX_HEADER;
@@ -31,6 +37,8 @@ public:
         memcpy(voiceData, cpy.voiceData, SYSEX_SIZE);
         memcpy(perfData, cpy.perfData, SYSEX_SIZE);
         hasData = cpy.hasData;
+        hasAmem = cpy.hasAmem;
+        memcpy(amemData, cpy.amemData, sizeof(amemData));
     }
 
     int load(juce::File f) {
@@ -109,7 +117,14 @@ public:
         memcpy(voiceData, other.voiceData, SYSEX_SIZE);
         memcpy(perfData, other.perfData, SYSEX_SIZE);
         hasData = other.hasData;
+        hasAmem = other.hasAmem;
+        memcpy(amemData, other.amemData, sizeof(amemData));
         return *this;
+    }
+
+    /** The AMEM bytes (35) of `slot`, or nullptr when the bank came without them. */
+    const uint8_t* getAmemVoice(int slot) const {
+        return hasAmem && slot >= 0 && slot < 32 ? amemData + slot * 35 : nullptr;
     }
 
     void setPackedProgram(int idx, char *src) {
@@ -117,6 +132,7 @@ public:
             return;
         memcpy(getRawVoice() + (idx * 128), src, 128);
         hasData = true;
+        hasAmem = false;   // the additional data was the old voices'
     }
 
     bool packProgram(const uint8_t *src, int idx, const juce::String& name);

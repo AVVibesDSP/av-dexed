@@ -42,8 +42,20 @@ uint8_t avLfoTime(uint8_t value) { return value <= 99 ? value : 99; }
 }
 
 
+void Cartridge::attachAmem(const uint8_t* stream, int size) {
+    hasAmem = false;
+    const auto contents = AVDexedSysex::scan(stream, size_t(juce::jmin(size, 65535)));
+    for (const auto& bank : contents.banks)
+        if (bank.hasAmem && std::memcmp(bank.voices.data(), voiceData + 6, AVDexedSysex::bankBytes) == 0) {
+            std::memcpy(amemData, bank.amem.data(), sizeof(amemData));
+            hasAmem = true;
+            return;
+        }
+}
+
 int Cartridge::load(const uint8_t *stream, int size) {
     hasData = false;
+    hasAmem = false;
     memset(voiceData, 0, sizeof(voiceData));
     memset(perfData, 0, sizeof(perfData));
 
@@ -63,6 +75,10 @@ int Cartridge::load(const uint8_t *stream, int size) {
         const auto& bank = contents.banks.front();
         memcpy(voiceData + 6, bank.voices.data(), AVDexedSysex::bankBytes);
         hasData = true;
+        if (bank.hasAmem) {
+            memcpy(amemData, bank.amem.data(), sizeof(amemData));
+            hasAmem = true;
+        }
         return bank.checksumOk ? 0 : 1;
     };
 
@@ -99,6 +115,7 @@ int Cartridge::load(const uint8_t *stream, int size) {
             && message[4] == 0x20 && message[5] == 0) {
             memcpy(voiceData, message, SYSEX_SIZE);
             hasData = true;
+            attachAmem(stream, size);
             return sysexChecksum(voiceData + 6, 4096) == message[4102] ? 0 : 1;
         }
         offset = end + 1;

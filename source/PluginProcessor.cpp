@@ -795,6 +795,10 @@ void DexedAudioProcessor::applyProgram(const Program &program) {
     avSoundFromBankSlot.store(false, std::memory_order_relaxed);
     if (midiCCMapper != nullptr) midiCCMapper->forgetAVCCWrites();   // a new sound: the wheel moved nothing of it
     panicForSoundChange();
+    // A new sound in a layer starts without the DX7II voice functions of the
+    // one it replaces (setCurrentProgram gives a bank voice its own).
+    if (isAVLayerModeOn())
+        setAVLayerVoiceExtras(avSelectedLayer.load(std::memory_order_acquire), nullptr);
     activeProgram = program;
     activeProgram.pushToParameters(parameters);
     lfo.reset(activeProgram.getParameters(IDs::lfoRate.pos));

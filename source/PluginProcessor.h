@@ -222,6 +222,9 @@ public :
         into the editor). */
     void setAVLayerProgram(int layer, const Program& voice);
     int getAVLayerSoundingVoices(int layer) const noexcept { return avLayerVoices[size_t(juce::jlimit(0, AVLayerCount - 1, layer))].load(std::memory_order_relaxed); }
+    /** Unison, random pitch and mono of `layer` from a voice's AMEM (35 bytes);
+        nullptr: none (the DX7's behaviour). */
+    void setAVLayerVoiceExtras(int layer, const uint8_t* amem35);
     /** Message thread. Turning a layer off fades it out and stops its notes. */
     void setAVLayerEnabled(int layer, bool enabled);
     /** Message thread: the layer listens to `channel` (0: every channel). Its

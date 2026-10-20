@@ -395,6 +395,10 @@ void DexedAudioProcessor::setCurrentProgram(int index) {
     Program program = currentCart.unpackProgram(index);
     applyProgram(program);
     currentProgram = index;
+    // Layer mode: a DX7II voice brings its unison, random pitch and mono
+    // (from the bank's AMEM) to the selected layer; applyProgram cleared them.
+    if (const auto* amem = currentCart.getAmemVoice(index); amem != nullptr && isAVLayerModeOn())
+        setAVLayerVoiceExtras(avSelectedLayer.load(std::memory_order_acquire), amem);
     avKnownPresetOrigin.store(true, std::memory_order_relaxed);
     avSoundFromBankSlot.store(true, std::memory_order_relaxed);
 

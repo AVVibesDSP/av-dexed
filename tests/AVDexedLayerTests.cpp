@@ -8,6 +8,7 @@
 
 #include "../source/PluginProcessor.h"
 #include "../source/parameter/Model.h"
+#include "../source/core/AVDexedSysex.h"
 #include <iostream>
 
 namespace {
@@ -441,6 +442,35 @@ bool testReviewCases() {
     return passed;
 }
 
+bool testBankVoiceExtras() {
+    // A DX7II bank with its AMEM: in layer mode a voice brings its unison and
+    // random pitch to the selected layer; another voice without them clears them.
+    auto bank = varietyBank();
+    std::array<uint8_t, 1120> amem {};
+    amem[3 * 35 + 5] = 2;          // slot 4: unison
+    amem[3 * 35 + 34] = 3;         // its detune
+    amem[3 * 35 + 4] = 2 << 4;     // random pitch
+    juce::MemoryBlock file;
+    const auto amemMessage = AVDexedSysex::amemMessage(amem.data());
+    file.append(amemMessage.data(), amemMessage.size());
+    const auto voices = AVDexedSysex::bankMessage(reinterpret_cast<const uint8_t*>(bank.getRawVoice()));
+    file.append(voices.data(), voices.size());
+    Cartridge withExtras;
+    bool passed = expect(withExtras.load(static_cast<const uint8_t*>(file.getData()), int(file.getSize())) == 0
+                             && withExtras.getAmemVoice(3) != nullptr,
+                         "a bank keeps the AMEM sent with it");
+    auto processor = makeProcessor(withExtras, 0);
+    auto& settings = processor->getAVLayerSettings(0);
+    processor->setCurrentProgram(3);
+    passed &= expect(settings.unison.load() == 0.0f, "with one layer a voice's extras are not used");
+    processor->setAVLayerMode(true);
+    processor->setCurrentProgram(3);
+    passed &= expect(settings.unison.load() > 0.0f && settings.randomPitch.load() > 0.0f, "in layer mode the voice brings them");
+    processor->setCurrentProgram(4);
+    passed &= expect(settings.unison.load() == 0.0f && settings.randomPitch.load() == 0.0f, "and the next voice without them clears them");
+    return passed;
+}
+
 bool testUnisonAndRandomPitch() {
     bool passed = true;
     auto bank = varietyBank();
@@ -475,6 +505,7 @@ bool runAVDexedLayerTests() {
     passed &= testUnisonAndRandomPitch();
     passed &= testLayersFile();
     passed &= testReviewCases();
+    passed &= testBankVoiceExtras();
     std::cout << (passed ? "Layer checks passed.\n" : "Layer checks FAILED.\n");
     return passed;
 }

@@ -429,8 +429,10 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
     // A restored sound: no CC has moved anything of it yet.
     if (midiCCMapper != nullptr) midiCCMapper->forgetAVCCWrites();
     // The layers belong to the session; a sound file loads into the selected layer.
-    if (avLoadingSoundFile)
+    if (avLoadingSoundFile) {
         avLayers[size_t(avSelectedLayer.load(std::memory_order_acquire))].setProgram(activeProgram);
+        setAVLayerVoiceExtras(avSelectedLayer.load(std::memory_order_acquire), nullptr);
+    }
     else
         restoreAVLayersState(storage.getChildWithName("avLayers"));
     programChanged.set(true);

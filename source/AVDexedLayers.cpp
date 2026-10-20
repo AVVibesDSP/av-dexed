@@ -297,6 +297,16 @@ void DexedAudioProcessor::setAVLayerEnabled(int layer, bool enabled) {
     avLayerSettings[size_t(layer)].enabled.store(enabled, std::memory_order_release);
 }
 
+void DexedAudioProcessor::setAVLayerVoiceExtras(int layer, const uint8_t* amem35) {
+    layer = juce::jlimit(0, AVLayerCount - 1, layer);
+    AVDexedPerformance::ResolvedLayer extras;
+    if (amem35 != nullptr) AVDexedPerformance::applyVoiceExtras(extras, amem35);
+    auto& settings = avLayerSettings[size_t(layer)];
+    settings.unison.store(extras.unison, std::memory_order_relaxed);
+    settings.randomPitch.store(extras.randomPitch, std::memory_order_relaxed);
+    settings.mono.store(extras.mono, std::memory_order_relaxed);
+}
+
 void DexedAudioProcessor::setAVLayerChannel(int layer, int channel) {
     layer = juce::jlimit(0, AVLayerCount - 1, layer);
     channel = juce::jlimit(0, 16, channel);
