@@ -389,6 +389,71 @@ bool runAVDexedDropTests()
             if (prompt != nullptr) answerPrompt(*prompt, false);
             passed &= expect(processor.getAVPresetName() != "Durante" && editor->playView.isModified(), "Cancel keeps the sound being edited");
             passed &= expect(openPrompt() == nullptr, "no dialog is left open");
+
+            // A TX802 performance file (no banks in it) opens in the Layers
+            // page, its voices from the bank next to it; nothing is copied.
+            // The edited sound is asked about first.
+            {
+                std::vector<uint8_t> pmem(84, 0);
+                for (int tg = 0; tg < 8; ++tg) {
+                    pmem[size_t(tg)] = uint8_t((tg << 5) | 16);       // every TG its own instrument, omni
+                    pmem[size_t(8 + tg)] = uint8_t(tg);               // internal voices 1-8
+                    pmem[size_t(24 + tg)] = 99;
+                    pmem[size_t(32 + tg)] = uint8_t((7 << 3) | 3);    // centre detune, outputs I+II
+                    pmem[size_t(48 + tg)] = 127;
+                    pmem[size_t(56 + tg)] = 24;
+                }
+                const char* name = "Drop Performance    ";
+                for (int i = 0; i < 20; ++i) pmem[size_t(64 + i)] = uint8_t(name[i]);
+                std::vector<uint8_t> body;
+                for (const char* c = "LM  8952PM"; *c; ++c) body.push_back(uint8_t(*c));
+                for (const auto byte : pmem) {
+                    body.push_back(uint8_t("0123456789ABCDEF"[byte >> 4]));
+                    body.push_back(uint8_t("0123456789ABCDEF"[byte & 15]));
+                }
+                MemoryBlock dump;
+                const uint8_t head[] = { 0xF0, 0x43, 0x00, 0x7E, 0x01, 0x28 };
+                dump.append(head, sizeof(head));
+                dump.append(body.data(), body.size());
+                const uint8_t tail[] = { AVDexedSysex::checksum(body.data(), body.size()), 0xF7 };
+                dump.append(tail, 2);
+                const auto setFolder = outside.getChildFile("TX Set");
+                setFolder.createDirectory();
+                const auto performanceFile = setFolder.getChildFile("SetPerf.syx");
+                performanceFile.replaceWithData(dump.getData(), dump.getSize());
+                Cartridge voices;
+                const auto init = Program::initialProgram();
+                for (int slot = 0; slot < 32; ++slot) voices.packProgram(init.getRawData(), slot, "TXV " + String(slot + 1));
+                setFolder.getChildFile("SetVoice32.syx").replaceWithData(voices.getVoiceSysex(), SYSEX_SIZE);
+                const auto libraryFiles = AVDexedLibrary::findSoundFiles(root).size();
+
+                passed &= expect(editor->isInterestedInFileDrag({ path(performanceFile) }), "a performance file is accepted");
+                editor->filesDropped({ path(performanceFile) }, 10, 10);
+                prompt = openPrompt();
+                passed &= expect(prompt != nullptr, "the edited sound is asked about before the performance replaces it");
+                if (prompt != nullptr) answerPrompt(*prompt, false);
+                passed &= expect(! processor.isAVLayerModeOn(), "Cancel keeps the sound and leaves the layers alone");
+                processor.captureAVPresetBaseline();   // nothing to save now
+                editor->playView.refreshLabels();
+                editor->filesDropped({ path(performanceFile) }, 10, 10);
+                pump(100);
+                passed &= expect(openPrompt() == nullptr && editor->layersView.isVisible() && processor.isAVLayerModeOn()
+                                     && processor.getAVLayerProgram(7).getName().trim() == "TXV 8",
+                                 "a dropped performance plays in the Layers page with the voices next to it");
+                passed &= expect(AVDexedLibrary::findSoundFiles(root).size() == libraryFiles, "nothing is copied into the library");
+
+                const auto layersFile = outside.getChildFile("Mis capas.avdexlayers");
+                processor.getAVLayerSettings(2).transpose = 5;
+                layersFile.replaceWithText(processor.createAVLayersFile("Mis capas"));
+                processor.getAVLayerSettings(2).transpose = 0;
+                passed &= expect(editor->isInterestedInFileDrag({ path(layersFile) }), "a layers file is accepted");
+                editor->filesDropped({ path(layersFile) }, 10, 10);
+                pump(100);
+                passed &= expect(processor.getAVLayerSettings(2).transpose.load() == 5 && editor->AVNoticeText.contains("Mis capas"),
+                                 "a dropped layers file plays its layers");
+                passed &= expect(openPrompt() == nullptr, "no dialog is left open after the layers");
+                processor.setAVLayerMode(false);
+            }
         }
         editor.reset();
         pump(300);

@@ -461,6 +461,7 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     frameComponent.addAndMakeVisible(classicView);
     classicView.setBounds(24, 70, WINDOW_SIZE_X - 48, 750);
     layersView.onNotice = [this](const String& text) { showAVFooterNotice(text); };
+    layersView.onReplaceSound = [this](std::function<void()> replacement) { requestPresetReplacement(std::move(replacement)); };
     frameComponent.addChildComponent(layersView);
 
     // OPERATORS

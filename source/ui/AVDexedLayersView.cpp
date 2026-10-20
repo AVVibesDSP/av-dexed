@@ -491,7 +491,22 @@ void AVDexedLayersView::openPerformanceFile() {
 
 void AVDexedLayersView::loadLayersFile(const File& file) {
     auto& language = AVDexedLanguageService::getInstance();
-    if (file.getSize() > 4 * 1024 * 1024 || ! processor.loadAVLayersFile(file.loadFileAsString())) {
+    const auto text = file.getSize() <= 4 * 1024 * 1024 ? file.loadFileAsString() : String();
+    if (! text.contains("avDexedLayers")) {
+        if (onNotice) onNotice(language.format("layerOpenFailed", {{"file", file.getFileName()}}));
+        return;
+    }
+    Component::SafePointer<AVDexedLayersView> safeThis(this);
+    const auto open = [safeThis, file, text] {
+        if (safeThis != nullptr) safeThis->installLayersFile(file, text);
+    };
+    if (onReplaceSound) onReplaceSound(open);
+    else open();
+}
+
+void AVDexedLayersView::installLayersFile(const File& file, const String& text) {
+    auto& language = AVDexedLanguageService::getInstance();
+    if (! processor.loadAVLayersFile(text)) {
         if (onNotice) onNotice(language.format("layerOpenFailed", {{"file", file.getFileName()}}));
         return;
     }
@@ -560,6 +575,16 @@ void AVDexedLayersView::loadPerformanceFile(const File& file) {
 }
 
 void AVDexedLayersView::applyPerformance(int index) {
+    if (voicePool == nullptr || ! isPositiveAndBelow(index, int(performances.size()))) return;
+    Component::SafePointer<AVDexedLayersView> safeThis(this);
+    const auto install = [safeThis, index] {
+        if (safeThis != nullptr) safeThis->installPerformance(index);
+    };
+    if (onReplaceSound) onReplaceSound(install);
+    else install();
+}
+
+void AVDexedLayersView::installPerformance(int index) {
     if (voicePool == nullptr || ! isPositiveAndBelow(index, int(performances.size()))) return;
     auto& language = AVDexedLanguageService::getInstance();
     const auto& performance = performances[size_t(index)];

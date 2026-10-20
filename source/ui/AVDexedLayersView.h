@@ -36,6 +36,9 @@ public:
 
     /** A short line for the footer (what a button did). */
     std::function<void(const juce::String&)> onNotice;
+    /** Runs what replaces the sound being edited (a performance, a layers
+        file) once the editor has asked about unsaved changes. */
+    std::function<void(std::function<void()>)> onReplaceSound;
 
     class Strip;
 
@@ -55,6 +58,8 @@ private:
     std::unique_ptr<AVDexedPerformance::VoicePool> voicePool;
     void openPerformanceFile();
     void applyPerformance(int index);
+    void installPerformance(int index);
+    void installLayersFile(const juce::File& file, const juce::String& text);
     std::array<std::unique_ptr<Strip>, DexedAudioProcessor::AVLayerCount> strips;
     juce::Rectangle<float> modeLabelArea, hintArea;
     bool shownMode = false;
