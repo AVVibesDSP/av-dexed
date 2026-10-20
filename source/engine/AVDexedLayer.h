@@ -47,6 +47,8 @@ public:
         voices per key, tuned `unisonCents` up and down) and a random tuning
         of each note within ±`randomCents`. Zero leaves the layer as it was. */
     void setVoiceExtras(float unisonCents, float randomCents) noexcept { unison = unisonCents; randomPitch = randomCents; }
+    /** Each layer its own random sequence (as separate modules would be), always the same one. */
+    void setRandomSeed(uint32_t seed) noexcept { randomState = seed == 0 ? 1 : seed; }
 
     void keydown(int channel, int pitch, int velocity);
     void keyup(int channel, int pitch);
@@ -80,7 +82,8 @@ private:
         int32_t pitchOffset = 0;      // unison / random tuning of this voice (engine pitch units)
         bool unisonPair = false;      // one of the two voices of a unison key
     };
-    void startVoice(int channel, int pitch, int velo, int32_t pitchOffset, bool unisonPair);
+    /** Starts one voice; never takes `avoid` (the other half of a unison key). Returns its index. */
+    int startVoice(int channel, int pitch, int velo, int32_t pitchOffset, bool unisonPair, int avoid = -1);
     void releaseVoice(int note);
     float unison = 0.0f, randomPitch = 0.0f;
     uint32_t randomState = 1;

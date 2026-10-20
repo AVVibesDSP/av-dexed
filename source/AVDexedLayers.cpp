@@ -20,11 +20,7 @@ void DexedAudioProcessor::renderAVLayers(float* left, float* right, int numSampl
     // layer's own tuning, and where its volume and pan are heading.
     for (int layer = 0; layer < AVLayerCount; ++layer) {
         const auto& settings = avLayerSettings[size_t(layer)];
-        const float cents = juce::jlimit(-AVLayerMaxDetune, AVLayerMaxDetune, settings.detune.load(std::memory_order_relaxed));
-        const int mono = settings.mono.load(std::memory_order_relaxed);
-        avLayers[size_t(layer)].followFunction(controllers, centsToPitch(cents), mono < 0 ? monoMode : mono == 1, normalizeDxVelocity);
-        avLayers[size_t(layer)].setVoiceExtras(juce::jlimit(0.0f, AVLayerMaxDetune, settings.unison.load(std::memory_order_relaxed)),
-                                               juce::jlimit(0.0f, 100.0f, settings.randomPitch.load(std::memory_order_relaxed)));
+        syncAVLayer(layer);
         const float pan = juce::jlimit(0.0f, 1.0f, settings.pan.load(std::memory_order_relaxed));
         const float volume = settings.enabled.load(std::memory_order_relaxed)
             ? juce::jlimit(0.0f, 1.0f, settings.volume.load(std::memory_order_relaxed)) : 0.0f;
@@ -60,7 +56,7 @@ void DexedAudioProcessor::renderAVLayers(float* left, float* right, int numSampl
                 const auto bit = 1u << layer;
                 if (avLayerFadeStopMask.fetch_and(~bit, std::memory_order_acq_rel) & bit) {
                     avLayers[size_t(layer)].panic();
-                    avLayerHeld[size_t(layer)].fill(-1);
+                    clearAVLayerHeld(layer);
                 }
                 continue;
             }
@@ -82,6 +78,15 @@ void DexedAudioProcessor::renderAVLayers(float* left, float* right, int numSampl
         }
     }
     avLayerExtraSize = i - numSamples;
+}
+
+void DexedAudioProcessor::syncAVLayer(int layer) {
+    const auto& settings = avLayerSettings[size_t(layer)];
+    const float cents = juce::jlimit(-AVLayerMaxDetune, AVLayerMaxDetune, settings.detune.load(std::memory_order_relaxed));
+    const int mono = settings.mono.load(std::memory_order_relaxed);
+    avLayers[size_t(layer)].followFunction(controllers, centsToPitch(cents), mono < 0 ? monoMode : mono == 1, normalizeDxVelocity);
+    avLayers[size_t(layer)].setVoiceExtras(juce::jlimit(0.0f, AVLayerMaxDetune, settings.unison.load(std::memory_order_relaxed)),
+                                           juce::jlimit(0.0f, 100.0f, settings.randomPitch.load(std::memory_order_relaxed)));
 }
 
 void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
@@ -114,7 +119,10 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
                     return;
                 const auto play = [&](int layer) {
                     const int pitch = pitchFor(layer, key);
-                    avLayerHeld[size_t(layer)][size_t((channel - 1) * 128 + key)] = int8_t(pitch);
+                    const auto slot = size_t((channel - 1) * 128 + key);
+                    avLayerHeld[size_t(layer)][slot] = int8_t(pitch);
+                    auto& count = avLayerHeldCount[size_t(layer)][slot];
+                    if (count < 255) ++count;
                     avLayers[size_t(layer)].keydown(channel, pitch, buf[2] & 0x7F);
                 };
                 // The layers of an alternate group take turns (one of them
@@ -135,16 +143,16 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
             [[fallthrough]];
         case 0x80:
             for (int layer = 0; layer < AVLayerCount; ++layer) {
-                auto& held = avLayerHeld[size_t(layer)][size_t((channel - 1) * 128 + key)];
-                // The pitch it was played at; a note-on repeated without its
-                // note-off is released as the single path releases it (not
-                // in an alternate group: its members always record the key,
-                // and must not release a note another member played).
-                if (held >= 0)
-                    avLayers[size_t(layer)].keyup(channel, held);
-                else if (listens(layer) && inRange(layer, key) && avLayerSettings[size_t(layer)].alternateGroup.load(std::memory_order_relaxed) < 0)
-                    avLayers[size_t(layer)].keyup(channel, pitchFor(layer, key));
-                held = -1;
+                // The pitch it was played at, one note-on at a time: a key
+                // played twice before its note-off is released as the single
+                // path releases it, one voice per note-off. A layer that never
+                // got the note (another channel, range or alternate member)
+                // has nothing to release.
+                const auto slot = size_t((channel - 1) * 128 + key);
+                auto& count = avLayerHeldCount[size_t(layer)][slot];
+                if (count == 0) continue;
+                avLayers[size_t(layer)].keyup(channel, avLayerHeld[size_t(layer)][slot]);
+                if (--count == 0) avLayerHeld[size_t(layer)][slot] = -1;
             }
             return;
 
@@ -171,7 +179,7 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
                 if (! listens(layer)) continue;
                 avLayers[size_t(layer)].controlChange(ctrl, value);
                 if (ctrl == 120 || ctrl == 123)
-                    avLayerHeld[size_t(layer)].fill(-1);
+                    clearAVLayerHeld(layer);
             }
             return;
         }
@@ -209,9 +217,10 @@ void DexedAudioProcessor::applySoundChangeNow() {
     const auto bit = 1u << selected;
     if (avLayerPanicMask.fetch_and(~bit, std::memory_order_acq_rel) & bit) {
         avLayers[size_t(selected)].panic();
-        avLayerHeld[size_t(selected)].fill(-1);
+        clearAVLayerHeld(selected);
     }
     avLayers[size_t(selected)].setProgram(activeProgram);
+    syncAVLayer(selected);   // the new voice's mono, unison and random pitch too
 }
 
 void DexedAudioProcessor::panicForSoundChange() {
@@ -345,6 +354,7 @@ void DexedAudioProcessor::stackAVLayers(int count, float cents) {
         avSelectedLayer.store(0, std::memory_order_release);
         activeProgram = voice;
         avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
+        avLayerReleaseMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
     }
     if (! avLayerMode.load(std::memory_order_acquire))
         setAVLayerMode(true);
@@ -369,6 +379,7 @@ void DexedAudioProcessor::resetAVLayers() {
         settings.pan.store(0.5f, std::memory_order_relaxed);
     }
     avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
+    avLayerReleaseMask.store((1u << AVLayerCount) - 1, std::memory_order_release);   // channels changed: controllers at rest
 }
 
 juce::ValueTree DexedAudioProcessor::createAVLayersState() const {
@@ -458,6 +469,7 @@ void DexedAudioProcessor::restoreAVLayersState(const juce::ValueTree& layers) {
     avLayers[size_t(selected)].setProgram(activeProgram);
     avLayerMode.store(layers.isValid() && bool(layers.getProperty("mode", false)), std::memory_order_release);
     avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
+    avLayerReleaseMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
 }
 
 juce::String DexedAudioProcessor::createAVLayersFile(const juce::String& name) const {
@@ -517,6 +529,7 @@ void DexedAudioProcessor::applyAVLayerSetup(const std::array<AVDexedPerformance:
         refreshVoice.set(false);
         activeProgram = selectedVoice;
         avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
+        avLayerReleaseMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
     }
     if (! avLayerMode.load(std::memory_order_acquire)) {
         const juce::ScopedLock lock(getCallbackLock());

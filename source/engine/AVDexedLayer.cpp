@@ -121,22 +121,26 @@ void AVDexedLayer::keydown(int channel, int pitch, int velo) {
         randomOffset = cents(unit * randomPitch);
     }
     if (unison > 0.0f && ! monoMode) {
-        startVoice(channel, pitch, velo, randomOffset + cents(unison), true);
-        startVoice(channel, pitch, velo, randomOffset - cents(unison), true);
+        const int first = startVoice(channel, pitch, velo, randomOffset + cents(unison), true);
+        startVoice(channel, pitch, velo, randomOffset - cents(unison), true, first);
     } else {
         startVoice(channel, pitch, velo, randomOffset, false);
     }
 }
 
-void AVDexedLayer::startVoice(int channel, int pitch, int velo, int32_t pitchOffset, bool unisonPair) {
+int AVDexedLayer::startVoice(int channel, int pitch, int velo, int32_t pitchOffset, bool unisonPair, int avoid) {
     bool triggerLfo = true;
-    int bestNote = currentNote;
+    int bestNote = currentNote == avoid ? (currentNote + 1) % voiceCount : currentNote;
     int bestScore = -1;
     int note = currentNote;
     for (int i = 0; i < voiceCount; i++) {
         const Voice& v = voices[size_t(note)];
         if (v.keydown)
             triggerLfo = false;
+        if (note == avoid) {   // the first half of this unison key
+            note = (note + 1) % voiceCount;
+            continue;
+        }
         int score = 0;
         if (! v.dx7_note->isPlaying()) score += 4;
         if (! v.keydown) score += 2;
@@ -183,7 +187,7 @@ void AVDexedLayer::startVoice(int channel, int pitch, int velo, int32_t pitchOff
                     voice.dx7_note->transferState(*other.dx7_note);
                     break;
                 }
-                return;
+                return note;
             }
         }
     } else if (! program.getRawData()[IDs::oscKeySync.pos]) {
@@ -197,6 +201,7 @@ void AVDexedLayer::startVoice(int channel, int pitch, int velo, int32_t pitchOff
 
     voice.live = true;
     lastActiveVoice = note;
+    return note;
 }
 
 // DexedAudioProcessor::keyup, for one layer.

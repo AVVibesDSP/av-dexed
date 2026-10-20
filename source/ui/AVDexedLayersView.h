@@ -49,6 +49,7 @@ private:
     AVDexedSettingsStyle::OnOffPills modePills { modeToggle };
     juce::TextButton openButton, saveButton, stackButton, resetButton;
     juce::String lastSetName;   // the performance or layers file last opened: the name a save suggests
+    int installedPerformanceId = 0;   // the list item that plays (the list goes back to it on a Cancel)
     void saveLayersFile();
     // The performance file last opened: its performances fill the list.
     juce::ComboBox performanceList;

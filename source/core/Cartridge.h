@@ -126,13 +126,20 @@ public:
     const uint8_t* getAmemVoice(int slot) const {
         return hasAmem && slot >= 0 && slot < 32 ? amemData + slot * 35 : nullptr;
     }
+    /** The whole AMEM (1120 bytes), or nullptr. */
+    const uint8_t* getAmem() const { return hasAmem ? amemData : nullptr; }
+    void setAmem(const uint8_t* amem) {
+        hasAmem = amem != nullptr;
+        if (amem != nullptr) memcpy(amemData, amem, sizeof(amemData));
+    }
 
     void setPackedProgram(int idx, char *src) {
         if (idx < 0 || idx >= 32 || src == nullptr)
             return;
+        if (hasAmem && memcmp(getRawVoice() + (idx * 128), src, 128) != 0)
+            memset(amemData + idx * 35, 0, 35);   // the additional data was the old voice's
         memcpy(getRawVoice() + (idx * 128), src, 128);
         hasData = true;
-        hasAmem = false;   // the additional data was the old voices'
     }
 
     bool packProgram(const uint8_t *src, int idx, const juce::String& name);

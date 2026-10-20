@@ -70,7 +70,9 @@ bool setStateInformation10(DexedAudioProcessor* proc, XmlElement* root) {
     if (legacyProgram < 0 || legacyProgram >= proc->getNumPrograms())
         return false;
 
-    proc->panic();
+    // A sound file is one sound: in layer mode only the selected layer stops.
+    if (proc->isAVLoadingSoundFile()) proc->panicForSoundChange();
+    else proc->panic();
     bool newParameters = false;
     for (auto* parameter : proc->getParameters()) {
         auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(parameter);

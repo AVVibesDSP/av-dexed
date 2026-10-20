@@ -392,16 +392,6 @@ void DexedAudioProcessor::setCurrentProgramSelection(int index) {
 
 void DexedAudioProcessor::setCurrentProgram(int index) {
     index = juce::jlimit(0, 31, index);
-    Program program = currentCart.unpackProgram(index);
-    applyProgram(program);
-    currentProgram = index;
-    // Layer mode: a DX7II voice brings its unison, random pitch and mono
-    // (from the bank's AMEM) to the selected layer; applyProgram cleared them.
-    if (const auto* amem = currentCart.getAmemVoice(index); amem != nullptr && isAVLayerModeOn())
-        setAVLayerVoiceExtras(avSelectedLayer.load(std::memory_order_acquire), amem);
-    avKnownPresetOrigin.store(true, std::memory_order_relaxed);
-    avSoundFromBankSlot.store(true, std::memory_order_relaxed);
-
     // The first program change after a host restore consumes the guard; when
     // it re-selects the restored program of the restored bank, the session's
     // values win. The same slot of a bank installed since (another bank chosen
@@ -410,6 +400,30 @@ void DexedAudioProcessor::setCurrentProgram(int index) {
     const int restoredProgram = avRestoreGuardProgram.exchange(-1, std::memory_order_acq_rel);
     const bool restoredSound = restoredProgram == index
         && avRestoreGuardBank.load(std::memory_order_relaxed) == avBankVoicesHash(currentCart);
+    const int selectedLayer = avSelectedLayer.load(std::memory_order_acquire);
+    const auto& layerSettings = avLayerSettings[size_t(selectedLayer)];
+    const float keptUnison = layerSettings.unison.load(), keptRandom = layerSettings.randomPitch.load();
+    const int keptMono = layerSettings.mono.load();
+
+    Program program = currentCart.unpackProgram(index);
+    applyProgram(program);
+    currentProgram = index;
+    // Layer mode: a DX7II voice brings its unison, random pitch and mono
+    // (from the bank's AMEM) to the selected layer; applyProgram cleared them.
+    // A host re-selecting the restored sound keeps the session's.
+    if (isAVLayerModeOn()) {
+        if (restoredSound) {
+            auto& settings = avLayerSettings[size_t(selectedLayer)];
+            settings.unison.store(keptUnison);
+            settings.randomPitch.store(keptRandom);
+            settings.mono.store(keptMono);
+        } else if (const auto* amem = currentCart.getAmemVoice(index)) {
+            setAVLayerVoiceExtras(selectedLayer, amem);
+        }
+    }
+    avKnownPresetOrigin.store(true, std::memory_order_relaxed);
+    avSoundFromBankSlot.store(true, std::memory_order_relaxed);
+
     if (! restoredSound)
         applyAVSoundSettings(index);
     // The settings are part of the sound just loaded: it is not "Modified".

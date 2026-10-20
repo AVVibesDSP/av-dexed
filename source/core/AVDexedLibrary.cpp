@@ -460,7 +460,11 @@ MemoryBlock composeBankFile(const MemoryBlock& originalBytes, Cartridge bank, co
                             && bytes[i + 3] == 9 && bytes[i + 4] == 0x20 && bytes[i + 5] == 0;
         const bool isSettings = length > sizeof(settingsHeader)
                                 && std::memcmp(bytes + i, settingsHeader, sizeof(settingsHeader)) == 0;
+        // The bank's AMEM as the bank holds it now (a slot given another voice lost its own).
+        const bool isAmem = bank.getAmem() != nullptr && length == size_t(AVDexedSysex::amemBytes + 8) && bytes[i + 1] == 0x43
+                            && (bytes[i + 2] & 0xf0) == 0 && bytes[i + 3] == 6 && bytes[i + 4] == 0x08 && bytes[i + 5] == 0x60;
         if (isBank) { result.append(voice, SYSEX_SIZE); bankWritten = true; }
+        else if (isAmem) { const auto amem = AVDexedSysex::amemMessage(bank.getAmem()); result.append(amem.data(), amem.size()); }
         else if (! isSettings) result.append(bytes + i, length);
         i = end + 1;
     }

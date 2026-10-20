@@ -578,6 +578,7 @@ void AVDexedLayersView::loadPerformanceFile(const File& file) {
     performances = std::move(found);
     voicePool = std::make_unique<AVDexedPerformance::VoicePool>(file, contents);
     performanceList.clear(dontSendNotification);
+    installedPerformanceId = 0;
     for (size_t i = 0; i < performances.size(); ++i) {
         const auto& performance = performances[i];
         const auto name = performance.name.isNotEmpty() ? performance.name : String::fromUTF8("—");
@@ -591,6 +592,9 @@ void AVDexedLayersView::loadPerformanceFile(const File& file) {
 
 void AVDexedLayersView::applyPerformance(int index) {
     if (voicePool == nullptr || ! isPositiveAndBelow(index, int(performances.size()))) return;
+    // Until it plays, the list shows what plays: a Cancel in the save-changes
+    // question leaves it right, and choosing the same item again works.
+    performanceList.setSelectedId(installedPerformanceId, dontSendNotification);
     Component::SafePointer<AVDexedLayersView> safeThis(this);
     const auto install = [safeThis, index] {
         if (safeThis != nullptr) safeThis->installPerformance(index);
@@ -605,6 +609,8 @@ void AVDexedLayersView::installPerformance(int index) {
     const auto& performance = performances[size_t(index)];
     const auto layers = AVDexedPerformance::resolve(performance, *voicePool);
     processor.applyAVLayerSetup(layers);
+    installedPerformanceId = index + 1;
+    performanceList.setSelectedId(installedPerformanceId, dontSendNotification);
     if (performance.name.isNotEmpty()) lastSetName = performance.name;
     int used = 0, missing = 0;
     for (const auto& layer : layers) {

@@ -112,6 +112,8 @@ void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
         const auto* sysex = currentCart.getVoiceSysex();
         juce::MemoryBlock cartridgeData(sysex, SYSEX_SIZE);
         session.setProperty(cartridgeProperty, cartridgeData.toBase64Encoding(), nullptr);
+        if (const auto* amem = currentCart.getAmem())   // the DX7II additional data of its voices
+            session.setProperty("cartridgeAmem", juce::MemoryBlock(amem, 1120).toBase64Encoding(), nullptr);
     }
 
     storage.addChild(session, -1, nullptr);
@@ -292,6 +294,9 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
     if (hasCartridgeSnapshot) {
         const auto result = restoredCart.load(static_cast<const uint8_t*>(decodedCartridge.getData()),
                                               static_cast<int>(decodedCartridge.getSize()));
+        juce::MemoryBlock amem;
+        if (amem.fromBase64Encoding(session.getProperty("cartridgeAmem").toString()) && amem.getSize() == 1120)
+            restoredCart.setAmem(static_cast<const uint8_t*>(amem.getData()));
         if (result != 0 || !restoredCart.containsData()) {
             TRACE("State cartridge could not be restored");
             return false;

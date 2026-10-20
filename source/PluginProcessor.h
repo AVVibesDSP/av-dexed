@@ -248,6 +248,8 @@ public :
     /** Silences the voices a sound change affects: everything with one layer,
         only the selected layer in layer mode. */
     void panicForSoundChange();
+    /** True while a sound file (not a session) is being restored. */
+    bool isAVLoadingSoundFile() const noexcept { return avLoadingSoundFile; }
     /** Render: the selected layer takes a sound change at once (a program
         change in the middle of a block). */
     void applySoundChangeNow();
@@ -554,6 +556,17 @@ private:
     // Render: the pitch each layer gave to a note still held, by channel and
     // key, so its note-off reaches the same voice after a change of transposition.
     std::array<std::array<int8_t, 16 * 128>, AVLayerCount> avLayerHeld {};
+    // How many note-ons of that channel and key the layer still holds (a key
+    // played again before its note-off): each note-off releases one.
+    std::array<std::array<uint8_t, 16 * 128>, AVLayerCount> avLayerHeldCount {};
+    void clearAVLayerHeld(int layer) noexcept {
+        avLayerHeld[size_t(layer)].fill(-1);
+        avLayerHeldCount[size_t(layer)].fill(0);
+    }
+    /** Render: the instrument's function settings, this layer's tuning, mono
+        and voice functions into the layer (once per block, and at once after
+        a program change in the middle of one). */
+    void syncAVLayer(int layer);
     std::array<juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear>, AVLayerCount> avLayerGainLeft, avLayerGainRight;
     PluginFx fxRight;                           // the filter for the right channel in layer mode
     juce::AudioBuffer<float> avLayerScratch;    // the right channel for a mono output

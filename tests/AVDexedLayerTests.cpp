@@ -9,6 +9,7 @@
 #include "../source/PluginProcessor.h"
 #include "../source/parameter/Model.h"
 #include "../source/core/AVDexedSysex.h"
+#include "../source/core/AVDexedLibrary.h"
 #include <iostream>
 
 namespace {
@@ -471,6 +472,121 @@ bool testBankVoiceExtras() {
     return passed;
 }
 
+/** A copy of `bank` with an AMEM: slot 4 unison (detune 3) and random pitch, slot 6 mono. */
+Cartridge bankWithAmem(Cartridge& bank) {
+    std::array<uint8_t, 1120> amem {};
+    amem[3 * 35 + 5] = 2;
+    amem[3 * 35 + 34] = 3;
+    amem[3 * 35 + 4] = 2 << 4;
+    amem[5 * 35 + 5] = 1;
+    juce::MemoryBlock file;
+    const auto amemMessage = AVDexedSysex::amemMessage(amem.data());
+    file.append(amemMessage.data(), amemMessage.size());
+    const auto voices = AVDexedSysex::bankMessage(reinterpret_cast<const uint8_t*>(bank.getRawVoice()));
+    file.append(voices.data(), voices.size());
+    Cartridge withAmem;
+    withAmem.load(static_cast<const uint8_t*>(file.getData()), int(file.getSize()));
+    return withAmem;
+}
+
+/** The second review's cases. */
+bool testSecondReviewCases() {
+    bool passed = true;
+    auto bank = varietyBank();
+    // 1. The same key three times in an alternate group: three note-offs release all.
+    {
+        auto processor = makeProcessor(bank, 2);
+        oneLayer(*processor);
+        processor->setAVLayerProgram(1, bank.unpackProgram(2));
+        processor->setAVLayerEnabled(1, true);
+        processor->getAVLayerSettings(0).alternateGroup = 0;
+        processor->getAVLayerSettings(1).alternateGroup = 0;
+        render(*processor, { { 0.0, 1, 60, 100 }, { 0.01, 1, 60, 100 }, { 0.02, 1, 60, 100 },
+                             { 0.1, 1, 60, 0 }, { 0.11, 1, 60, 0 }, { 0.12, 1, 60, 0 } }, 3.0);
+        passed &= expect(processor->getAVLayerSoundingVoices(0) + processor->getAVLayerSoundingVoices(1) == 0,
+                         "a key played three times in an alternate group is released by its three note-offs");
+    }
+    // 2. A program change to a mono voice and a note in the same block: the note plays mono and keeps sounding.
+    {
+        auto withAmem = bankWithAmem(bank);
+        auto processor = makeProcessor(withAmem, 0);
+        oneLayer(*processor);
+        render(*processor, {}, 0.05);
+        juce::AudioBuffer<float> buffer(2, 512);
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::programChange(1, 5), 0);
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, (juce::uint8) 100), 10);
+        buffer.clear();
+        processor->processBlock(buffer, midi);
+        render(*processor, {}, 0.2);
+        passed &= expect(processor->getAVLayerSettings(0).mono.load() == 1 && processor->getAVLayerSoundingVoices(0) == 1,
+                         "a program change to a mono voice in the middle of a block keeps the note after it");
+    }
+    // 3. A session keeps the bank's AMEM and the selected layer's unison when the host re-selects the program.
+    {
+        auto withAmem = bankWithAmem(bank);
+        auto processor = makeProcessor(withAmem, 0);
+        processor->setAVLayerMode(true);
+        processor->setCurrentProgram(3);
+        juce::MemoryBlock state;
+        processor->getStateInformation(state);
+        auto restored = makeProcessor(bank, 0);
+        restored->setStateInformation(state.getData(), int(state.getSize()));
+        restored->setCurrentProgram(3);   // as hosts do right after a restore
+        passed &= expect(restored->getAVLayerSettings(0).unison.load() > 0.0f && restored->currentCart.getAmemVoice(3) != nullptr,
+                         "a session keeps the AMEM and the restored layer's unison");
+        restored->setCurrentProgram(5);
+        passed &= expect(restored->getAVLayerSettings(0).mono.load() == 1, "and later program changes still find it");
+    }
+    // 4. Unison at full polyphony: a new key takes two voices.
+    {
+        auto processor = makeProcessor(bank, 2);
+        oneLayer(*processor);
+        processor->getAVLayerSettings(0).unison = 5.0f;
+        std::vector<Note> keys;
+        for (int k = 0; k < 9; ++k) keys.push_back({ 0.01 * k, 1, 48 + 2 * k, 100 });
+        render(*processor, keys, 0.2);
+        render(*processor, { { 0.0, 1, 64, 0 } }, 3.0);
+        passed &= expect(processor->getAVLayerSoundingVoices(0) == 14,
+                         "with every voice busy a unison key takes two voices (the oldest key's pair)");
+    }
+    // 8. Another voice stored in a slot drops that slot's AMEM, in the bank and in its file.
+    {
+        auto withAmem = bankWithAmem(bank);
+        auto other = bank.unpackProgram(20);
+        withAmem.packProgram(other.getRawData(), 3, "OTHER");
+        const auto* slot = withAmem.getAmemVoice(3);
+        bool cleared = slot != nullptr;
+        for (int i = 0; slot != nullptr && i < 35; ++i) cleared &= slot[i] == 0;
+        passed &= expect(cleared && withAmem.getAmemVoice(5)[5] == 1, "storing another voice clears only its slot's AMEM");
+        juce::MemoryBlock original;
+        const auto amemMessage = AVDexedSysex::amemMessage(bankWithAmem(bank).getAmem());
+        original.append(amemMessage.data(), amemMessage.size());
+        const auto voices = AVDexedSysex::bankMessage(reinterpret_cast<const uint8_t*>(bank.getRawVoice()));
+        original.append(voices.data(), voices.size());
+        const auto written = AVDexedLibrary::composeBankFile(original, withAmem, {});
+        Cartridge reread;
+        reread.load(static_cast<const uint8_t*>(written.getData()), int(written.getSize()));
+        passed &= expect(reread.getAmemVoice(3) != nullptr && reread.getAmemVoice(3)[5] == 0 && reread.getAmemVoice(5)[5] == 1,
+                         "and the file written keeps it so");
+    }
+    // 9. Random pitch differs from layer to layer (separate modules).
+    {
+        auto processor = makeProcessor(bank, 2);
+        oneLayer(*processor);
+        processor->setAVLayerProgram(1, bank.unpackProgram(2));
+        processor->setAVLayerEnabled(1, true);
+        for (int layer = 0; layer < 2; ++layer) {
+            processor->getAVLayerSettings(layer).randomPitch = 20.0f;
+            processor->getAVLayerSettings(layer).pan = layer == 0 ? 0.0f : 1.0f;
+        }
+        render(*processor, {}, 0.1);
+        const auto sound = render(*processor, { { 0.0, 1, 60, 100 } }, 0.3);
+        passed &= expect(! (sound.left == sound.right), "two layers with random pitch get different tunings");
+    }
+    return passed;
+}
+
 bool testUnisonAndRandomPitch() {
     bool passed = true;
     auto bank = varietyBank();
@@ -506,6 +622,7 @@ bool runAVDexedLayerTests() {
     passed &= testLayersFile();
     passed &= testReviewCases();
     passed &= testBankVoiceExtras();
+    passed &= testSecondReviewCases();
     std::cout << (passed ? "Layer checks passed.\n" : "Layer checks FAILED.\n");
     return passed;
 }

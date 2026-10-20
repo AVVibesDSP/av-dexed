@@ -294,6 +294,8 @@ bool Cartridge::packProgram(const uint8_t *src, int idx, const juce::String& nam
         return false;
 
     uint8_t *bulk = voiceData + 6 + (idx * 128);
+    uint8_t before[128];
+    memcpy(before, bulk, 128);
 
     for(int op = 0; op < 6; op++) {
         // eg rate and level, brk pt, depth, scaling
@@ -337,6 +339,10 @@ bool Cartridge::packProgram(const uint8_t *src, int idx, const juce::String& nam
         c = c > 127 ? ' ' : c;
         bulk[118+i] = c;
     }
+    // AV Dexed: another voice in the slot drops the DX7II additional data
+    // (unison, mono, random pitch...) that belonged to the one before.
+    if (hasAmem && memcmp(before, bulk, 128) != 0)
+        memset(amemData + idx * 35, 0, 35);
     hasData = true;
     return true;
 }

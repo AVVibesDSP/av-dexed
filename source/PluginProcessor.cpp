@@ -222,9 +222,10 @@ void DexedAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) 
     avLayerExtraSize = 0;
     for (int layer = 0; layer < AVLayerCount; ++layer) {
         avLayers[size_t(layer)].prepare(synthTuningState, mtsClient);
+        avLayers[size_t(layer)].setRandomSeed(uint32_t(layer) * 2654435761u + 1u);
         if (layer == avSelectedLayer.load(std::memory_order_relaxed) && avLayerMode.load(std::memory_order_relaxed))
             avLayers[size_t(layer)].setProgram(activeProgram);
-        avLayerHeld[size_t(layer)].fill(-1);
+        clearAVLayerHeld(layer);
         const auto& settings = avLayerSettings[size_t(layer)];
         const float pan = settings.pan.load(std::memory_order_relaxed), volume = settings.volume.load(std::memory_order_relaxed);
         avLayerGainLeft[size_t(layer)].reset(sampleRate, 0.02);
@@ -279,7 +280,7 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
     if (layerMode != avLayerModeRendered) {
         panic();
         for (auto& layer : avLayers) layer.panic();
-        for (auto& held : avLayerHeld) held.fill(-1);
+        for (int layer = 0; layer < AVLayerCount; ++layer) clearAVLayerHeld(layer);
         extra_buf_size = 0;
         avLayerExtraSize = 0;
         avLayerModeRendered = layerMode;
@@ -288,7 +289,7 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
         for (int layer = 0; layer < AVLayerCount; ++layer)
             if (mask & (1u << layer)) {
                 avLayers[size_t(layer)].panic();
-                avLayerHeld[size_t(layer)].fill(-1);
+                clearAVLayerHeld(layer);
             }
     if (const auto mask = avLayerReleaseMask.exchange(0, std::memory_order_acq_rel); mask != 0)
         for (int layer = 0; layer < AVLayerCount; ++layer)
