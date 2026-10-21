@@ -777,7 +777,8 @@ void ParamDialog::setIsStandardTuning( bool b ) {
 // the only way I have found (including on the JUCE forum).
 void ParamDialog::timerCallback() {
     stopTimer();
-    grabKeyboardFocus();
+    // Settings may be on another page, or closed, by now.
+    if (isShowing()) grabKeyboardFocus();
 }
 
 static juce::StringArray dialogParamIds() {
