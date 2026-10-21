@@ -642,10 +642,14 @@ public:
             box->setWantsKeyboardFocus(true);
             addAndMakeVisible(box);
         }
+        // The ports in use only, until a list is opened (AVListPorts): asking
+        // for the device list the first time in a process waits ~850 ms on the
+        // system's MIDI server, and froze every first Settings in a plugin.
         AVInput.addItem("None", 1);
         AVOutput.addItem("None", 1);
-        for (const auto& device : MidiInput::getAvailableDevices()) AVInput.addItem(device.name, AVInput.getNumItems() + 1);
-        for (const auto& device : MidiOutput::getAvailableDevices()) AVOutput.addItem(device.name, AVOutput.getNumItems() + 1);
+        if (const auto port = AVProcessor.sysexComm.getInput(); port.isNotEmpty()) AVInput.addItem(port, 2);
+        if (const auto port = AVProcessor.sysexComm.getOutput(); port.isNotEmpty()) AVOutput.addItem(port, 2);
+        AVInput.beforePopup = AVOutput.beforePopup = [this] { if (! AVListed) AVListPorts(); };
         AVInput.onChange = [this] { AVChangePort(true); };
         AVOutput.onChange = [this] { AVChangePort(false); };
         AVChannel.setRange(1, 16, 1);
@@ -689,10 +693,30 @@ public:
         S::hintParagraph(g, language.text("sysexHelp"), { 0.0f, S::rowGap * 4.0f + 24.0f, float(getWidth()), 60.0f });
     }
 private:
+    /** A port list that is filled in when it opens. */
+    struct AVPortBox final : public ComboBox {
+        std::function<void()> beforePopup;
+        void showPopup() override {
+            if (beforePopup) beforePopup();
+            ComboBox::showPopup();
+        }
+    };
     DexedAudioProcessor& AVProcessor;
-    ComboBox AVInput, AVOutput;
+    AVPortBox AVInput, AVOutput;
     Slider AVChannel;
     TextButton AVSend;
+    bool AVListed = false;
+    void AVListPorts() {
+        AVListed = true;
+        for (auto* box : { &AVInput, &AVOutput }) {
+            const auto none = box->getItemText(0);
+            box->clear(dontSendNotification);
+            box->addItem(none, 1);
+        }
+        for (const auto& device : MidiInput::getAvailableDevices()) AVInput.addItem(device.name, AVInput.getNumItems() + 1);
+        for (const auto& device : MidiOutput::getAvailableDevices()) AVOutput.addItem(device.name, AVOutput.getNumItems() + 1);
+        AVRefreshRuntime();
+    }
     static void AVSelectPort(ComboBox& box, const String& name) {
         int id = 1;
         for (int index = 1; index < box.getNumItems(); ++index)

@@ -311,9 +311,11 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     pitchRangeUp->setEnabled(pitchStep->getValue() == 0);
     pitchRangeDn->setEnabled(pitchStep->getValue() == 0);
 
+    // Only "None" and the current port (setDialogValues): the device list is
+    // not asked for here. The first time in a process, asking for it creates
+    // JUCE's CoreMIDI client, which waited ~850 ms on the system's MIDI server
+    // (each first Settings opened in a plugin froze for that long).
     sysexIn->addItem(AVDexedLanguageService::getInstance().text("none"), 1);
-    for (const auto& device : MidiInput::getAvailableDevices())
-        sysexIn->addItem(device.name, sysexIn->getNumItems() + 1);
     sysexIn->setSelectedId(1, dontSendNotification);
 
     // SysEx port and channel are edited in Settings > SysEx; these stay hidden
@@ -709,6 +711,10 @@ void ParamDialog::setDialogValues(Controllers &c, SysexComm &mgr, bool showKey, 
     int inputIndex = 0;
     for (int i = 1; i < sysexIn->getNumItems(); ++i)
         if (sysexIn->getItemText(i) == mgr.getInput()) inputIndex = i;
+    if (inputIndex == 0 && mgr.getInput().isNotEmpty()) {
+        sysexIn->addItem(mgr.getInput(), sysexIn->getNumItems() + 1);
+        inputIndex = sysexIn->getNumItems() - 1;
+    }
     sysexIn->setSelectedItemIndex(inputIndex, dontSendNotification);
 
     showKeyboard->setToggleState(showKey, NotificationType::dontSendNotification);
