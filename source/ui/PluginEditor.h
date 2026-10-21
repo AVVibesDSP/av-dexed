@@ -334,6 +334,7 @@ public:
     friend int AVRunUICpu(const juce::File& bankFile, int slot);
     friend int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& outputDirectory);
     friend int AVRunAdvancedNotice(const juce::File& outputDirectory);
+    friend int AVRunUIFades(const juce::File& bankFile, int slot);
 #endif
 
 private:

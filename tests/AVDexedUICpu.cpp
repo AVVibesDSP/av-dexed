@@ -20,6 +20,10 @@
 // (or drawn black) after the resize would differ. Then the same window is
 // painted with no cached images or text (AVDexedPixelCache and
 // AVDexedTheme::TextCache off): it must look the same. The captures go to <folder>.
+//
+// --ui-fades <bank.syx> <slot>: the tab change, Settings and a dialog fade in
+// and out many times in a real window; how smoothly and at what cost (see
+// AVRunUIFades below).
 
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
@@ -34,6 +38,7 @@
 #include <chrono>
 #include <ctime>
 #include <iostream>
+#include <map>
 #include <thread>
 #include <sys/resource.h>
 
@@ -526,4 +531,178 @@ int AVRunAdvancedNotice(const juce::File& outputDirectory) {
     language.sendSynchronousChangeMessage();
     std::cout << (passed ? "Advanced notice checks passed.\n" : "Advanced notice checks FAILED.\n");
     return passed ? 0 : 1;
+}
+
+/** --ui-fades <bank.syx> <slot>: how the editor's fades run in a real window:
+    the tab change, Settings and an in-editor dialog, each opened and closed
+    several times, silent and with eight layers, effects and 16 keys sounding,
+    at zoom 1.0 and 0.83. For each kind: how long the click itself takes on the
+    message thread, how long until the first frame is painted, how many of the
+    screen's frames get painted during the fade, the longest stretch without a
+    painted frame (in screen frames: 1 is every frame), what painting a frame
+    costs and the message thread's CPU for the whole fade. */
+int AVRunUIFades(const juce::File& bankFile, int slot) {
+    using namespace juce;
+    using Ms = std::chrono::duration<double, std::milli>;
+    IsolatedLibrary library;
+    int result = 1;
+    {
+        DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
+        if (!loadSound(processor, bankFile, slot)) return 2;
+        processor.advancedNoticeHidden = true;
+        RealTimeAudio audio(processor);
+        DocumentWindow window("AV Dexed UI fades", Colours::black, DocumentWindow::closeButton);
+        auto* editor = new DexedAudioProcessorEditor(&processor);
+        window.setUsingNativeTitleBar(true);
+        window.setContentOwned(editor, true);
+        window.setTopLeftPosition(80, 80);
+        window.setVisible(true);
+        editor->showAVView(DexedAudioProcessorEditor::AVView::play, false);
+
+        // Every paint pass of the window (one per dirty area), and the screen's frames.
+        struct PaintLog : ComponentListener {
+            std::vector<std::pair<double, double>> paints;   // end, duration (ms)
+            void componentPainted(Component&, const ComponentPaintDiagnostics& d) override {
+                paints.emplace_back(Time::getMillisecondCounterHiRes(), d.totalPaintDuration.get<Ms>());
+            }
+        } log;
+        log.paints.reserve(200000);
+        window.addComponentListener(&log);
+        std::vector<double> vblanks;
+        vblanks.reserve(200000);
+        VBlankAttachment vblank(&window, [&](double) { vblanks.push_back(Time::getMillisecondCounterHiRes()); });
+
+        struct Event { String kind; std::function<void()> action; double fadeMs; };
+        struct Record { String kind; double start, clickMs, cpuMs, fadeMs; };
+        std::vector<Event> events;
+        AVDexedPromptOverlay* prompt = nullptr;
+        using View = DexedAudioProcessorEditor::AVView;
+        for (int round = 0; round < 3; ++round)
+            for (auto view : { View::advanced, View::layers, View::play, View::layers, View::advanced, View::play })
+                events.push_back({ "tab change", [editor, view] { editor->showAVView(view, true); }, 220.0 });
+        for (int round = 0; round < 4; ++round) {
+            events.push_back({ "Settings open", [editor] { editor->showAVSettingsPage(AVDexedSettingsPanel::AVPage::instrument); }, 100.0 });
+            events.push_back({ "Settings close", [editor] { editor->AVCloseSettings(false); }, 133.0 });
+        }
+        for (int round = 0; round < 4; ++round) {
+            events.push_back({ "dialog open", [editor, &prompt] {
+                AVDexedPromptOverlay::Options options;
+                options.title = "Fade test";
+                options.message = "A dialog over a blurred copy of the editor.";
+                options.confirmText = "OK";
+                prompt = editor->showAVPrompt(std::move(options), {});
+            }, 83.0 });
+            events.push_back({ "dialog close", [&prompt] { if (prompt != nullptr) prompt->dismiss(); prompt = nullptr; }, 117.0 });
+        }
+
+        struct Pass { float zoom; bool busy; };
+        const Pass passes[] { { 1.0f, false }, { 1.0f, true }, { 0.83f, false }, { 0.83f, true } };
+        std::vector<std::pair<String, std::vector<Record>>> results;
+        size_t passIndex = 0, eventIndex = 0;
+        std::vector<Record> records;
+        std::function<void()> runEvent, startPass;
+        const auto effects = [&](bool on) {
+            for (auto [id, value] : { std::pair { IDs::reverbAmount.parameter(), 0.3f }, { IDs::chorusAmount.parameter(), 0.5f },
+                                      { IDs::delayAmount.parameter(), 0.2f } })
+                if (auto* parameter = processor.parameters.getParameter(id.getParamID()))
+                    parameter->setValueNotifyingHost(on ? value : 0.0f);
+        };
+        runEvent = [&] {
+            if (eventIndex == events.size()) {
+                const auto& pass = passes[passIndex];
+                results.emplace_back("zoom " + String(pass.zoom, 2) + (pass.busy ? ", 8 layers, effects, 16 keys" : ", silent"), records);
+                records.clear();
+                ++passIndex;
+                if (passIndex == std::size(passes)) { MessageManager::getInstance()->stopDispatchLoop(); return; }
+                startPass();
+                return;
+            }
+            const auto& event = events[eventIndex++];
+            const double cpu0 = threadSeconds(), t0 = Time::getMillisecondCounterHiRes();
+            event.action();
+            const double clickMs = Time::getMillisecondCounterHiRes() - t0;
+            const double fadeMs = event.fadeMs;
+            const String kind = event.kind;
+            Timer::callAfterDelay(int(fadeMs) + 120, [&, cpu0, t0, clickMs, fadeMs, kind] {
+                records.push_back({ kind, t0, clickMs, (threadSeconds() - cpu0) * 1000.0, fadeMs });
+                Timer::callAfterDelay(500, runEvent);
+            });
+        };
+        startPass = [&] {
+            const auto& pass = passes[passIndex];
+            playSixteenKeys(processor, false);
+            processor.setZoomFactor(pass.zoom);
+            editor->resetSize();
+            if (pass.busy) {
+                processor.stackAVLayers(8, 7.0f);
+                effects(true);
+            } else {
+                processor.resetAVLayers();
+                effects(false);
+            }
+            Timer::callAfterDelay(400, [&] {
+                if (passes[passIndex].busy) playSixteenKeys(processor, true);
+                eventIndex = 0;
+                Timer::callAfterDelay(1500, runEvent);
+            });
+        };
+        Timer::callAfterDelay(800, startPass);
+        MessageManager::getInstance()->runDispatchLoop();
+        playSixteenKeys(processor, false);
+        window.removeComponentListener(&log);
+
+        // The screen's frame period, from its own frames.
+        std::vector<double> periods;
+        for (size_t i = 1; i < vblanks.size(); ++i) periods.push_back(vblanks[i] - vblanks[i - 1]);
+        std::sort(periods.begin(), periods.end());
+        const double period = periods.empty() ? 16.7 : periods[periods.size() / 2];
+        std::cout << "Screen frame: " << String(period, 2) << " ms (" << String(1000.0 / period, 1) << " Hz)\n";
+        const auto frameOf = [&](double t) { return int(std::upper_bound(vblanks.begin(), vblanks.end(), t) - vblanks.begin()); };
+        const auto median = [](std::vector<double> v) { if (v.empty()) return 0.0; std::sort(v.begin(), v.end()); return v[v.size() / 2]; };
+        const auto largest = [](const std::vector<double>& v) { return v.empty() ? 0.0 : *std::max_element(v.begin(), v.end()); };
+        for (const auto& [passName, passRecords] : results) {
+            std::cout << passName << "\n";
+            for (const String kind : { "tab change", "Settings open", "Settings close", "dialog open", "dialog close" }) {
+                std::vector<double> click, first, painted, gap, cost, worstCost, cpu;
+                for (const auto& r : passRecords) {
+                    if (r.kind != kind) continue;
+                    const double end = r.start + r.clickMs + r.fadeMs + 50.0;
+                    std::map<int, double> frames;   // screen frame -> paint time in it
+                    double firstPaint = -1.0;
+                    for (const auto& [at, duration] : log.paints)
+                        if (at >= r.start && at <= end) {
+                            frames[frameOf(at)] += duration;
+                            if (firstPaint < 0.0) firstPaint = at - r.start;
+                        }
+                    int worst = 0, previous = -1;
+                    double sum = 0.0, most = 0.0;
+                    for (const auto& [frame, ms] : frames) {
+                        if (previous >= 0) worst = jmax(worst, frame - previous);
+                        previous = frame;
+                        sum += ms;
+                        most = jmax(most, ms);
+                    }
+                    click.push_back(r.clickMs);
+                    first.push_back(firstPaint);
+                    painted.push_back(double(frames.size()));
+                    gap.push_back(double(worst));
+                    cost.push_back(frames.empty() ? 0.0 : sum / double(frames.size()));
+                    worstCost.push_back(most);
+                    cpu.push_back(r.cpuMs);
+                }
+                if (click.empty()) continue;
+                const double fadeFrames = (kind == "tab change" ? 220.0 : kind == "Settings open" ? 100.0 : kind == "Settings close" ? 133.0
+                                           : kind == "dialog open" ? 83.0 : 117.0) / period;
+                std::cout << "  " << kind.paddedRight(' ', 15) << " click " << String(median(click), 1) << " ms (max " << String(largest(click), 1)
+                          << "), first frame " << String(median(first), 1) << " ms, painted " << String(median(painted), 0) << " of ~"
+                          << String(fadeFrames, 0) << " frames, longest gap " << String(median(gap), 0) << " (max " << String(largest(gap), 0)
+                          << ") frames, frame paint " << String(median(cost), 2) << " ms (worst " << String(largest(worstCost), 1)
+                          << "), message thread " << String(median(cpu), 1) << " ms per fade\n";
+            }
+        }
+        result = 0;
+        window.setVisible(false);
+        window.clearContentComponent();
+    }
+    return result;
 }

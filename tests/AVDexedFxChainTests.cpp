@@ -24,6 +24,7 @@ int AVRunImport(const juce::StringArray& arguments);
 int AVRunPerformanceReport(const juce::File& file);
 int AVRunLayersCpu(const juce::File& bankFile, int slot);
 int AVRunSessionCpu(const juce::File& stateFile);
+int AVRunUIFades(const juce::File& bankFile, int slot);
 int AVRunUICpu(const juce::File& bankFile, int slot);
 int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& outputDirectory);
 int AVRunAdvancedNotice(const juce::File& outputDirectory);
@@ -125,6 +126,8 @@ int main(int argc, char** argv)
                              juce::File(juce::String::fromUTF8(argv[4])));
     if (argc == 4 && juce::String(argv[1]) == "--layers-cpu")
         return AVRunLayersCpu(juce::File(juce::String::fromUTF8(argv[2])), juce::String(argv[3]).getIntValue());
+    if (argc == 4 && juce::String(argv[1]) == "--ui-fades")
+        return AVRunUIFades(juce::File(juce::String::fromUTF8(argv[2])), juce::String(argv[3]).getIntValue());
     if (argc == 3 && juce::String(argv[1]) == "--session-cpu")
         return AVRunSessionCpu(juce::File(juce::String::fromUTF8(argv[2])));
     if (argc == 3 && juce::String(argv[1]) == "--performances")
