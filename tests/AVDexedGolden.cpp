@@ -282,6 +282,64 @@ int AVRunLayersCpu(const juce::File& bankFile, int slot) {
     return 0;
 }
 
+/** --session-cpu <state.xml>: the share of one core a saved session takes
+    (a plugin state as XML, e.g. the standalone's), for 10 s of a held chord
+    and of 16 held keys: as saved, without its effects, with one layer, and
+    with neither. Nothing is read from or written to the user's library. */
+int AVRunSessionCpu(const juce::File& stateFile) {
+    auto xml = juce::XmlDocument::parse(stateFile);
+    if (xml == nullptr) return 2;
+    juce::MemoryBlock state;
+    juce::AudioProcessor::copyXmlToBinary(*xml, state);
+
+    const auto oldAppDirectory = DexedAudioProcessor::dexedAppDir;
+    const auto oldCartDirectory = DexedAudioProcessor::dexedCartDir;
+    const auto root = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                          .getChildFile("avdexed-session-" + juce::Uuid().toString());
+    root.createDirectory();
+    DexedAudioProcessor::dexedAppDir = root;
+    DexedAudioProcessor::dexedCartDir = root.getChildFile("Library");
+
+    struct Variant { const char* name; bool effects; bool layers; };
+    const Variant variants[] { { "as saved", true, true }, { "no effects", false, true },
+                               { "one layer", true, false }, { "one layer, no effects", false, false } };
+    const std::vector<int> chord { 48, 52, 55, 59 };
+    std::vector<int> sixteen;
+    for (int n = 0; n < 16; ++n) sixteen.push_back(36 + n * 3);
+    for (const auto& keys : { chord, sixteen })
+        for (const auto& variant : variants) {
+            auto processor = std::make_unique<DexedAudioProcessor>(DexedAudioProcessor::TestMode{});
+            processor->setRateAndBufferSizeDetails(goldenRate, 256);
+            processor->prepareToPlay(goldenRate, 256);
+            processor->setStateInformation(state.getData(), int(state.getSize()));
+            if (! variant.effects)
+                for (const char* id : { "reverbAmount", "chorusAmount", "delayAmount" }) setParameter(*processor, id, 0.0f);
+            if (! variant.layers) processor->setAVLayerMode(false);
+            juce::AudioBuffer<float> buffer(2, 256);
+            juce::MidiBuffer start;
+            for (int note : keys) start.addEvent(juce::MidiMessage::noteOn(1, note, (juce::uint8) 100), 0);
+            const int blocks = int(10.0 * goldenRate / 256);
+            // Settle (parameter smoothing, the first block's allocations), then measure.
+            for (int b = 0; b < 8; ++b) { juce::MidiBuffer none; buffer.clear(); processor->processBlock(buffer, none); }
+            const auto t0 = juce::Time::getHighResolutionTicks();
+            for (int b = 0; b < blocks; ++b) {
+                juce::MidiBuffer midi;
+                if (b == 0) midi = start;
+                buffer.clear();
+                processor->processBlock(buffer, midi);
+            }
+            const double seconds = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
+            std::cout << keys.size() << " keys, " << variant.name << " (engine " << processor->getEngineType()
+                      << ", layers " << (processor->isAVLayerModeOn() ? "on" : "off") << "), "
+                      << processor->getAVActiveVoices() << " voices: "
+                      << juce::String(100.0 * seconds / 10.0, 2) << " % of one core\n";
+        }
+    DexedAudioProcessor::dexedAppDir = oldAppDirectory;
+    DexedAudioProcessor::dexedCartDir = oldCartDirectory;
+    root.deleteRecursively();
+    return 0;
+}
+
 /** --stack-envelope <bank.syx> <slot>: the level of one held note, every
     25 ms for 1.5 s, with 1, 2, 4 and 8 stacked layers, relative to one layer
     (0 dB = as loud as one layer). A stack whose start is far louder than its
