@@ -621,6 +621,16 @@ DexedAudioProcessorEditor::~DexedAudioProcessorEditor() {
 
 //==============================================================================
 void DexedAudioProcessorEditor::paint (Graphics& g) {
+    // Wholly under the page shown, when that page is opaque (Play), none of
+    // the background shows: every glow frame used to paint it for nothing.
+    auto& page = AVViewComponent(AVVisibleView);
+    if (page.isOpaque() && page.isVisible() && page.getAlpha() >= 1.0f) {
+        const auto area = getLocalArea(&page, page.getLocalBounds().toFloat());
+        const int left = int(std::ceil(area.getX())), top = int(std::ceil(area.getY()));
+        const Rectangle<int> inside(left, top, int(std::floor(area.getRight())) - left, int(std::floor(area.getBottom())) - top);
+        if (inside.contains(g.getClipBounds()))
+            return;
+    }
     const std::array<int, 4> signature { processor->showKeyboard ? 1 : 0, frameComponent.getHeight(),
                                          playTabButton.getRight(), advancedTabButton.getRight() };
     if (signature != AVBackgroundSignature) {

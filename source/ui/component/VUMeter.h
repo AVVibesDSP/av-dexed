@@ -11,6 +11,8 @@
 #pragma once
 
 #include "JuceHeader.h"
+#include "../AVDexedPixelCache.h"
+#include <array>
 
 class VuMeterBase : public juce::Component {
 public:
@@ -19,6 +21,7 @@ public:
 
     explicit VuMeterBase(int maximumDb, bool useTricolor = false);
     void paint(juce::Graphics& g) override;
+    void resized() override;
     /** Shows `level`; repaints only when the number of lit blocks changes
         (the meter moves in 1 dB steps, so most updates change nothing). */
     void setLevel(float level);
@@ -27,6 +30,10 @@ public:
 
 private:
     int activeBlocksFor(float level) const;
+    void paintBlocks(juce::Graphics& g, int activeBlocks) const;
+    // One picture per number of lit blocks (46 segments, each with its own
+    // gradient), at the screen's pixels: a step of the meter is a copy.
+    std::array<AVDexedPixelCache, totalBlocks + 1> stateLayers;
     int maximumDb;
     int minimumDb;
     bool tricolor;

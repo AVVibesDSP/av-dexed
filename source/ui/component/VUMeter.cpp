@@ -31,7 +31,17 @@ void VuMeterBase::setLevel(float level) {
     if (changed) repaint();
 }
 
+void VuMeterBase::resized() {
+    for (auto& layer : stateLayers) layer.invalidate();
+}
+
 void VuMeterBase::paint(juce::Graphics& g) {
+    const int activeBlocks = activeBlocksFor(v);
+    stateLayers[size_t(activeBlocks)].draw(g, *this, getLocalBounds().toFloat(),
+                                           [this, activeBlocks](juce::Graphics& lg) { paintBlocks(lg, activeBlocks); });
+}
+
+void VuMeterBase::paintBlocks(juce::Graphics& g, int activeBlocks) const {
     auto bounds = getLocalBounds().toFloat();
     g.setColour(AVDexedTheme::controlBottom);
     g.fillRoundedRectangle(bounds, 2.0f);
@@ -39,8 +49,6 @@ void VuMeterBase::paint(juce::Graphics& g) {
     const float availableWidth = juce::jmax(0.0f, bounds.getWidth() - 2.0f);
     const float gap = juce::jmin(static_cast<float>(blockGap), availableWidth / static_cast<float>(totalBlocks));
     const float segmentWidth = (availableWidth - gap * static_cast<float>(totalBlocks - 1)) / static_cast<float>(totalBlocks);
-    const int activeBlocks = activeBlocksFor(v);
-
     for (int i = 0; i < totalBlocks; ++i) {
         const float x = bounds.getX() + 1.0f + static_cast<float>(i) * (segmentWidth + gap);
         auto segment = juce::Rectangle<float>(x, bounds.getY() + 1.0f, segmentWidth,
