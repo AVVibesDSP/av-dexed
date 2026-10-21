@@ -465,6 +465,7 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     layersView.onNotice = [this](const String& text) { showAVFooterNotice(text); };
     layersView.onReplaceSound = [this](std::function<void()> replacement) { requestPresetReplacement(std::move(replacement)); };
     frameComponent.addChildComponent(layersView);
+    frameComponent.addChildComponent(AVPageFade);   // above the pages, under every overlay
 
     // OPERATORS
     for (int i=0;i<6;i++) {
@@ -630,16 +631,24 @@ void DexedAudioProcessorEditor::AVApplyLowPower() {
 }
 
 void DexedAudioProcessorEditor::paint (Graphics& g) {
-    // Wholly under the page shown, when that page is opaque (Play), none of
-    // the background shows: every glow frame used to paint it for nothing.
-    auto& page = AVViewComponent(AVVisibleView);
-    if (page.isOpaque() && page.isVisible() && page.getAlpha() >= 1.0f) {
-        const auto area = getLocalArea(&page, page.getLocalBounds().toFloat());
+    // Wholly under the page shown, when that page is opaque (Play), or under
+    // the tab change's cross-fade, none of the background shows: every glow
+    // frame used to paint it for nothing.
+    const auto covers = [this, &g](const Component& cover) {
+        const auto area = getLocalArea(&cover, cover.getLocalBounds().toFloat());
         const int left = int(std::ceil(area.getX())), top = int(std::ceil(area.getY()));
         const Rectangle<int> inside(left, top, int(std::floor(area.getRight())) - left, int(std::floor(area.getBottom())) - top);
-        if (inside.contains(g.getClipBounds()))
-            return;
-    }
+        return inside.contains(g.getClipBounds());
+    };
+    auto& page = AVViewComponent(AVVisibleView);
+    if (page.isOpaque() && page.isVisible() && page.getAlpha() >= 1.0f && covers(page))
+        return;
+    if (AVPageFade.isVisible() && covers(AVPageFade))
+        return;
+    AVDrawBackground(g);
+}
+
+void DexedAudioProcessorEditor::AVDrawBackground(Graphics& g) {
     const std::array<int, 4> signature { processor->showKeyboard ? 1 : 0, frameComponent.getHeight(),
                                          playTabButton.getRight(), advancedTabButton.getRight() };
     if (signature != AVBackgroundSignature) {
@@ -647,6 +656,16 @@ void DexedAudioProcessorEditor::paint (Graphics& g) {
         AVBackgroundLayer.invalidate();
     }
     AVBackgroundLayer.draw(g, *this, getLocalBounds().toFloat(), [this](Graphics& bg) { AVPaintBackground(bg); });
+}
+
+Rectangle<int> DexedAudioProcessorEditor::AVPageArea() const {
+    return playView.getBounds().getUnion(classicView.getBounds()).getUnion(layersView.getBounds());
+}
+
+void DexedAudioProcessorEditor::AVPaintUnderPages(Graphics& g) {
+    Graphics::ScopedSaveState state(g);
+    g.addTransform(frameComponent.getTransform().inverted());
+    AVDrawBackground(g);
 }
 
 void DexedAudioProcessorEditor::AVPaintBackground(Graphics& g) {
@@ -724,49 +743,56 @@ void DexedAudioProcessorEditor::showAVView(AVView view, bool animate) {
     PopupMenu::dismissAllActiveMenus();
     const auto previous = AVVisibleView;
     auto& incoming = AVViewComponent(view);
-    const bool isChangingView = previous != view;
-    const auto generation = ++viewTransitionGeneration;
-    auto& animator = Desktop::getInstance().getAnimator();
-    for (auto other : { AVView::play, AVView::advanced, AVView::layers })
-        animator.cancelAnimation(&AVViewComponent(other), false);
-    incoming.setInterceptsMouseClicks(true, true);
-    AVVisibleView = view;
-    if (animate && isChangingView) {
-        auto& outgoing = AVViewComponent(previous);
-        outgoing.setInterceptsMouseClicks(false, false);
-        incoming.setAlpha(0.0f);
-        incoming.setVisible(true);
-        // GOZO tab change: a 220 ms linear cross-fade.
-        animator.fadeOut(&outgoing, 220);
-        animator.fadeIn(&incoming, 220);
-        Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
-        Timer::callAfterDelay(230, [safeThis, generation, view] {
-            if (safeThis == nullptr || safeThis->viewTransitionGeneration != generation)
-                return;
-            for (auto other : { AVView::play, AVView::advanced, AVView::layers }) {
-                if (other == view) continue;
-                auto& oldView = safeThis->AVViewComponent(other);
-                oldView.setVisible(false);
-                oldView.setAlpha(1.0f);
-                oldView.setInterceptsMouseClicks(true, true);
-            }
-        });
-    } else {
-        for (auto other : { AVView::play, AVView::advanced, AVView::layers }) {
-            if (other == view) continue;
-            auto& oldView = AVViewComponent(other);
-            oldView.setVisible(false);
-            oldView.setAlpha(1.0f);
-            oldView.setInterceptsMouseClicks(true, true);
-        }
-        incoming.setAlpha(1.0f);
-        incoming.setVisible(true);
+    auto& outgoing = AVViewComponent(previous);
+    const bool fade = animate && previous != view;
+    // GOZO tab change: a 220 ms linear cross-fade (ComponentAnimator's fadeOut
+    // of the old page with fadeIn of the new one). It is drawn from pictures
+    // at the window's pixels on the screen's refresh (AVDexedCrossfade): each
+    // frame mixes three pictures instead of painting a live page into a
+    // transparency layer at 50 Hz. A fade still running is where the next starts.
+    const auto area = AVPageArea().toFloat();
+    const auto paintPage = [this](Graphics& g, Component& page) {
+        AVPaintUnderPages(g);
+        Graphics::ScopedSaveState state(g);
+        g.addTransform(AffineTransform::translation(page.getPosition().toFloat()));
+        page.paintEntireComponent(g, false);
+    };
+    bool pictured = false;
+    if (fade)
+        pictured = AVPageFade.takeCurrentFrameAsOutgoing(area)
+                   || AVPageFade.outgoing.make(frameComponent, area, true, [&](Graphics& g) { paintPage(g, outgoing); });
+    AVPageFade.finish();
+    // The pages as they stay: only the new one shown (also under the fade,
+    // so it takes the focus and clicks at once).
+    for (auto other : { AVView::play, AVView::advanced, AVView::layers }) {
+        auto& page = AVViewComponent(other);
+        Desktop::getInstance().getAnimator().cancelAnimation(&page, false);
+        page.setAlpha(1.0f);
+        page.setInterceptsMouseClicks(true, true);
+        if (other != view) page.setVisible(false);
     }
+    incoming.setVisible(true);
+    AVVisibleView = view;
     playTabButton.setToggleState(view == AVView::play, dontSendNotification);
     advancedTabButton.setToggleState(view == AVView::advanced, dontSendNotification);
     layersTabButton.setToggleState(view == AVView::layers, dontSendNotification);
     if (view == AVView::play)
         playView.refreshLabels();
+    if (pictured) {
+        // What lies under the pages changes only with the layout: kept.
+        if (AVPageFadeUnderSignature != AVBackgroundSignature || ! AVPageFade.under.matches(frameComponent, area)) {
+            pictured = AVPageFade.under.make(frameComponent, area, true, [this](Graphics& g) { AVPaintUnderPages(g); });
+            AVPageFadeUnderSignature = AVBackgroundSignature;
+        }
+        pictured = pictured && AVPageFade.incoming.make(frameComponent, area, true, [&](Graphics& g) { paintPage(g, incoming); });
+    }
+    // Without a window nobody sees a fade: the change is then immediate.
+    if (pictured) {
+        const bool outgoingOnTop = frameComponent.getIndexOfChildComponent(&outgoing)
+                                   > frameComponent.getIndexOfChildComponent(&incoming);
+        AVPageFade.setBounds(area.toNearestInt());
+        AVPageFade.start(frameComponent, outgoingOnTop, 220.0, {});
+    }
     if (view == AVView::advanced)
         AVMaybeShowAdvancedNotice();
 }
@@ -2449,7 +2475,7 @@ void DexedAudioProcessorEditor::AVUpdateHelpText() {
                              : elapsed > noticeHoldUntil ? 1.0 - (elapsed - noticeHoldUntil) / noticeFadeOut : 1.0;
             AVHelpLabel.setColour(Label::textColourId, AVDexedTheme::textPrimary);
             AVHelpLabel.setText(AVNoticeText, dontSendNotification);
-            AVHelpLabel.setAlpha(float(jlimit(0.0, 1.0, alpha)));
+            AVDexedDim::setAlpha(AVHelpLabel, float(jlimit(0.0, 1.0, alpha)));
             return;
         }
         AVNoticeText.clear();
@@ -2479,7 +2505,7 @@ void DexedAudioProcessorEditor::AVUpdateHelpText() {
         if (elapsed < helpFadeIn) alpha = float(elapsed / helpFadeIn);
         else AVHelpFadeStart = 0.0;
     }
-    AVHelpLabel.setAlpha(alpha);
+    AVDexedDim::setAlpha(AVHelpLabel, alpha);
 }
 
 void DexedAudioProcessorEditor::AVUpdateKeyboardRange() {
@@ -2494,6 +2520,7 @@ void DexedAudioProcessorEditor::AVUpdateKeyboardRange() {
 }
 
 void DexedAudioProcessorEditor::AVLayoutFrame() {
+    AVPageFade.finish();   // its pictures are of the old layout
     constexpr int topBar = 88;
     const int height = frameComponent.getHeight();
     brandLabel.setVisible(false);

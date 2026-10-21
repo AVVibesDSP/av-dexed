@@ -29,6 +29,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <unistd.h>
+#include <mach/mach.h>
 #endif
 #include "../source/ui/PluginEditor.h"
 #include "../source/ui/AVDexedPixelCache.h"
@@ -52,6 +53,19 @@ double threadSeconds() {
     timespec now {};
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
     return double(now.tv_sec) + double(now.tv_nsec) * 1.0e-9;
+}
+// The calling thread's CPU in the kernel only (macOS), in seconds.
+double threadSystemSeconds() {
+#if defined(__APPLE__)
+    thread_basic_info_data_t info {};
+    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+    const auto self = mach_thread_self();
+    const bool ok = thread_info(self, THREAD_BASIC_INFO, (thread_info_t) &info, &count) == KERN_SUCCESS;
+    mach_port_deallocate(mach_task_self(), self);
+    return ok ? double(info.system_time.seconds) + double(info.system_time.microseconds) * 1.0e-6 : 0.0;
+#else
+    return 0.0;
+#endif
 }
 
 // An isolated library, as --render-ui: the user's folders are never read or written.
@@ -573,7 +587,7 @@ int AVRunUIFades(const juce::File& bankFile, int slot) {
         VBlankAttachment vblank(&window, [&](double) { vblanks.push_back(Time::getMillisecondCounterHiRes()); });
 
         struct Event { String kind; std::function<void()> action; double fadeMs; };
-        struct Record { String kind; double start, clickMs, cpuMs, fadeMs; };
+        struct Record { String kind; double start, clickMs, cpuMs, systemMs, fadeMs; };
         std::vector<Event> events;
         AVDexedPromptOverlay* prompt = nullptr;
         using View = DexedAudioProcessorEditor::AVView;
@@ -618,13 +632,13 @@ int AVRunUIFades(const juce::File& bankFile, int slot) {
                 return;
             }
             const auto& event = events[eventIndex++];
-            const double cpu0 = threadSeconds(), t0 = Time::getMillisecondCounterHiRes();
+            const double cpu0 = threadSeconds(), system0 = threadSystemSeconds(), t0 = Time::getMillisecondCounterHiRes();
             event.action();
             const double clickMs = Time::getMillisecondCounterHiRes() - t0;
             const double fadeMs = event.fadeMs;
             const String kind = event.kind;
-            Timer::callAfterDelay(int(fadeMs) + 120, [&, cpu0, t0, clickMs, fadeMs, kind] {
-                records.push_back({ kind, t0, clickMs, (threadSeconds() - cpu0) * 1000.0, fadeMs });
+            Timer::callAfterDelay(int(fadeMs) + 120, [&, cpu0, system0, t0, clickMs, fadeMs, kind] {
+                records.push_back({ kind, t0, clickMs, (threadSeconds() - cpu0) * 1000.0, (threadSystemSeconds() - system0) * 1000.0, fadeMs });
                 Timer::callAfterDelay(500, runEvent);
             });
         };
@@ -663,7 +677,7 @@ int AVRunUIFades(const juce::File& bankFile, int slot) {
         for (const auto& [passName, passRecords] : results) {
             std::cout << passName << "\n";
             for (const String kind : { "tab change", "Settings open", "Settings close", "dialog open", "dialog close" }) {
-                std::vector<double> click, first, painted, gap, cost, worstCost, cpu;
+                std::vector<double> click, first, painted, gap, cost, worstCost, cpu, system;
                 for (const auto& r : passRecords) {
                     if (r.kind != kind) continue;
                     const double end = r.start + r.clickMs + r.fadeMs + 50.0;
@@ -689,15 +703,16 @@ int AVRunUIFades(const juce::File& bankFile, int slot) {
                     cost.push_back(frames.empty() ? 0.0 : sum / double(frames.size()));
                     worstCost.push_back(most);
                     cpu.push_back(r.cpuMs);
+                    system.push_back(r.systemMs);
                 }
                 if (click.empty()) continue;
                 const double fadeFrames = (kind == "tab change" ? 220.0 : kind == "Settings open" ? 100.0 : kind == "Settings close" ? 133.0
                                            : kind == "dialog open" ? 83.0 : 117.0) / period;
                 std::cout << "  " << kind.paddedRight(' ', 15) << " click " << String(median(click), 1) << " ms (max " << String(largest(click), 1)
-                          << "), first frame " << String(median(first), 1) << " ms, painted " << String(median(painted), 0) << " of ~"
-                          << String(fadeFrames, 0) << " frames, longest gap " << String(median(gap), 0) << " (max " << String(largest(gap), 0)
+                          << "), first frame " << String(median(first), 1) << " ms, painted " << roundToInt(median(painted)) << " of ~"
+                          << roundToInt(fadeFrames) << " frames, longest gap " << roundToInt(median(gap)) << " (max " << roundToInt(largest(gap))
                           << ") frames, frame paint " << String(median(cost), 2) << " ms (worst " << String(largest(worstCost), 1)
-                          << "), message thread " << String(median(cpu), 1) << " ms per fade\n";
+                          << "), message thread " << String(median(cpu), 1) << " ms per fade (kernel " << String(median(system), 1) << ")\n";
             }
         }
         result = 0;
@@ -705,4 +720,143 @@ int AVRunUIFades(const juce::File& bankFile, int slot) {
         window.clearContentComponent();
     }
     return result;
+}
+
+/** --ui-fades-check <bank.syx> <slot> <folder>: the tab change's cross-fade on
+    screen, held still: at its first frame it must look like the page before
+    the click; half way, the window's compositor (Core Animation on a Mac) must
+    show what JUCE paints for the same frame; after it, nothing of it may stay
+    (the window must equal a full repaint). At zoom 1.0 and 0.83. The captures
+    go to <folder>. Captures are compared with captures, so the screen's colour
+    handling is the same on both sides. */
+int AVRunUIFadesCheck(const juce::File& bankFile, int slot, const juce::File& outputDirectory) {
+    using namespace juce;
+    outputDirectory.createDirectory();
+    IsolatedLibrary library;
+    bool passed = true;
+    {
+        DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
+        if (!loadSound(processor, bankFile, slot)) return 2;
+        processor.advancedNoticeHidden = true;
+        DocumentWindow window("AV Dexed UI fades check", Colours::black, DocumentWindow::closeButton);
+        auto* editor = new DexedAudioProcessorEditor(&processor);
+        window.setUsingNativeTitleBar(true);
+        window.setContentOwned(editor, true);
+        window.setTopLeftPosition(80, 80);
+        window.setVisible(true);
+        using View = DexedAudioProcessorEditor::AVView;
+        editor->showAVView(View::play, false);
+
+        // Pixels that differ by more than `tolerance` levels and the largest
+        // difference: over the pages only (the fade's area; the tabs above it
+        // change state at the click), or the whole window but the footer (its
+        // CPU figure changes by itself).
+        const auto compare = [&](const String& what, const Image& a, const Image& b, int tolerance, bool pagesOnly) {
+            if (a.isNull() || b.isNull() || a.getBounds() != b.getBounds()) {
+                std::cout << "UI fades check: " << what << ": no capture (screen recording permission?)\n";
+                passed = false;
+                return;
+            }
+            const float pixelsPerPoint = float(a.getWidth()) / float(editor->getWidth());
+            const int titleBar = a.getHeight() - roundToInt(editor->getHeight() * pixelsPerPoint);
+            const float footerTop = float(editor->getHeight() - 30.0f * processor.getZoomFactor()) * pixelsPerPoint + float(titleBar);
+            auto checked = Rectangle<int>(0, 0, a.getWidth(), roundToInt(footerTop));
+            if (pagesOnly) {
+                const auto pages = editor->getLocalArea(&editor->frameComponent, editor->AVPageArea().toFloat()) * pixelsPerPoint;
+                checked = pages.translated(0.0f, float(titleBar)).getSmallestIntegerContainer().getIntersection(checked);
+            }
+            int over = 0, largest = 0;
+            Rectangle<int> area;
+            for (int y = checked.getY(); y < checked.getBottom(); ++y)
+                for (int x = checked.getX(); x < checked.getRight(); ++x) {
+                    const auto p = a.getPixelAt(x, y), q = b.getPixelAt(x, y);
+                    const int change = jmax(std::abs(p.getRed() - q.getRed()), std::abs(p.getGreen() - q.getGreen()),
+                                            std::abs(p.getBlue() - q.getBlue()));
+                    largest = jmax(largest, change);
+                    if (change > tolerance) {
+                        ++over;
+                        area = area.isEmpty() ? Rectangle<int>(x, y, 1, 1) : area.getUnion({ x, y, 1, 1 });
+                    }
+                }
+            const bool ok = over == 0;
+            passed = passed && ok;
+            std::cout << "UI fades check, zoom " << String(processor.getZoomFactor(), 2) << ": " << what << ": " << over
+                      << " px differ by more than " << tolerance << " levels" << (over > 0 ? " in " + area.toString() : String())
+                      << " (largest " << largest << ")" << (ok ? "" : "  FAILED") << "\n";
+        };
+        const auto file = [&](const String& name) {
+            return outputDirectory.getChildFile("fade-" + String(processor.getZoomFactor(), 2) + "-" + name + ".png");
+        };
+        const auto still = [&](float at, bool native) {
+            editor->AVPageFade.finish();
+            editor->showAVView(View::play, false);
+            AVDexedCrossfade::testFreeze = at;
+            AVDexedNativeFade::enabled = native;
+            editor->showAVView(View::advanced, true);
+        };
+        const auto end = [&] {
+            editor->AVPageFade.finish();
+            AVDexedCrossfade::testFreeze = -1.0f;
+            AVDexedNativeFade::enabled = true;
+        };
+
+        const float zooms[] { 1.0f, 0.83f };
+        size_t zoomIndex = 0;
+        Image before, startNative, startPainted, halfNative, halfPainted, after, repainted;
+        std::function<void()> run;
+        const auto after_ = [&](int ms, std::function<void()> then) { Timer::callAfterDelay(ms, [then] { then(); }); };
+        run = [&] {
+            processor.setZoomFactor(zooms[zoomIndex]);
+            editor->resetSize();
+            editor->showAVView(View::play, false);
+            after_(1200, [&] {
+                before = captureWindow(file("before"));
+                still(0.0f, true);
+                after_(500, [&] {
+                    startNative = captureWindow(file("start-native"));
+                    still(0.0f, false);
+                    after_(500, [&] {
+                        startPainted = captureWindow(file("start-painted"));
+                        still(0.5f, true);
+                        after_(500, [&] {
+                            halfNative = captureWindow(file("half-native"));
+                            still(0.5f, false);
+                            after_(500, [&] {
+                                halfPainted = captureWindow(file("half-painted"));
+                                end();
+                                editor->showAVView(View::play, false);
+                                after_(400, [&] {
+                                    editor->showAVView(View::advanced, true);   // a real fade, to its end
+                                    after_(900, [&] {
+                                        after = captureWindow(file("after"));
+                                        editor->repaint();
+                                        after_(600, [&] {
+                                            repainted = captureWindow(file("after-repaint"));
+                                            // Up to 2 levels: CoreGraphics dithers gradients, so two paints differ.
+                                            compare("first frame (Core Animation) = page before", startNative, before, 2, true);
+                                            compare("first frame (painted) = page before", startPainted, before, 2, true);
+                                            // The compositor mixes the pictures in linear light, CoreGraphics
+                                            // in sRGB values: half way, high-contrast edges come out up to
+                                            // ~13 levels lighter. The ends are exact (above and below).
+                                            compare("half way, Core Animation ~ painted", halfNative, halfPainted, 16, true);
+                                            compare("after the fade = full repaint", after, repainted, 0, false);
+                                            if (++zoomIndex < std::size(zooms)) run();
+                                            else MessageManager::getInstance()->stopDispatchLoop();
+                                        });
+                                    });
+                                });
+                            });
+                        });
+                    });
+                });
+            });
+        };
+        after_(500, run);
+        MessageManager::getInstance()->runDispatchLoop();
+        end();
+        window.setVisible(false);
+        window.clearContentComponent();
+    }
+    std::cout << (passed ? "UI fades check passed.\n" : "UI fades check FAILED.\n");
+    return passed ? 0 : 1;
 }

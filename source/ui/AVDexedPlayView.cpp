@@ -3,6 +3,7 @@
 
 #include "AVDexedPlayView.h"
 #include "AVDexedKnob.h"
+#include "AVDexedFade.h"
 #include "../parameter/Model.h"
 #include "../JuceLibraryCode/BinaryData.h"
 #include "util/ContextMenuAdapter.h"
@@ -410,7 +411,7 @@ private:
                 || row->parameterId == IDs::delayTimeRight.name;
             if (division || time) {
                 const bool enabled = division ? sync : !sync;
-                row->label.setAlpha(enabled ? 1.0f : 0.5f);
+                AVDexedDim::setAlpha(row->label, enabled ? 1.0f : 0.5f);
                 row->slider.setEnabled(enabled);
                 row->choice.setEnabled(enabled);
             }
@@ -2096,8 +2097,8 @@ void AVDexedPlayView::refreshLabels() {
         const bool bypassed = parameter != nullptr && parameter->load() >= 0.5f;
         const auto caption = knobCaptions[i + 3]->getTitle();
         knobCaptions[i + 3]->setButtonText(bypassed ? caption + String::fromUTF8(" · ") + language.text("bypass") : caption);
-        knobCaptions[i + 3]->setAlpha(bypassed ? 0.55f : 1.0f);
-        amounts[i]->setAlpha(bypassed ? 0.4f : 1.0f);
+        AVDexedDim::setAlpha(*knobCaptions[i + 3], bypassed ? 0.55f : 1.0f);
+        AVDexedDim::setAlpha(*amounts[i], bypassed ? 0.4f : 1.0f);
         amounts[i]->setEnabled(!bypassed);
         amounts[i]->setTooltip(bypassed ? language.text("bypass") : caption + String::fromUTF8(" · ") + language.text("amount"));
     }

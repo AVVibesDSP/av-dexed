@@ -209,6 +209,10 @@ target_sources(${BaseTargetName} PRIVATE
     ../libs/MTS-ESP/Client/libMTSClient.cpp
 )
 
+if(APPLE)
+    target_sources(${BaseTargetName} PRIVATE ui/AVDexedNativeFade_mac.mm)
+endif()
+
 if(DEXED_NO_ALSA)
     set(DEXED_ALSA FALSE)
     message(STATUS "Building Dexed without ALSA support")

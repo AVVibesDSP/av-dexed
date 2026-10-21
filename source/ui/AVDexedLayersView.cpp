@@ -4,6 +4,7 @@
 #include "AVDexedLayersView.h"
 #include "AVDexedLanguage.h"
 #include "AVDexedTheme.h"
+#include "AVDexedFade.h"
 #include <cmath>
 #include "../core/AVDexedSysex.h"
 #include "../core/AVDexedLibrary.h"
@@ -196,7 +197,7 @@ public:
         }
         // An off layer stays editable, dimmed.
         for (auto* child : std::initializer_list<Component*>{ &volume, &pan, &detune, &transpose, &channel, &lowKey, &highKey })
-            child->setAlpha(on ? 1.0f : 0.45f);
+            AVDexedDim::setAlpha(*child, on ? 1.0f : 0.45f);
         if (on != shownOn || selected != shownSelected) {
             shownOn = on;
             shownSelected = selected;
@@ -470,7 +471,7 @@ void AVDexedLayersView::refresh() {
     if (modeToggle.getToggleState() != on) modeToggle.setToggleState(on, sendNotificationSync);
     for (auto& strip : strips) {
         strip->setEnabled(on);
-        strip->setAlpha(on ? 1.0f : 0.4f);
+        AVDexedDim::setAlpha(*strip, on ? 1.0f : 0.4f);
         strip->refresh();
     }
     stackButton.setEnabled(true);

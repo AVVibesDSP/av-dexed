@@ -38,6 +38,7 @@
 #include "AVDexedPixelCache.h"
 #include "AVDexedAnimationClock.h"
 #include "AVDexedDropOverlay.h"
+#include "AVDexedFade.h"
 #include "window/AVDexedSettingsPanel.h"
 
 class AVDexedPanicButton final : public juce::TextButton {
@@ -133,6 +134,15 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     enum class AVView { play, advanced, layers };
     AVView AVVisibleView = AVView::play;
     Component& AVViewComponent(AVView view);
+    /** The tab change's cross-fade, over the pages (AVPageArea). */
+    AVDexedCrossfade AVPageFade;
+    std::array<int, 4> AVPageFadeUnderSignature {};
+    /** Where the pages lie in the frame (all of them together). */
+    Rectangle<int> AVPageArea() const;
+    /** What the frame shows under the pages, in the frame's coordinates. */
+    void AVPaintUnderPages(Graphics& g);
+    /** The editor's background (AVBackgroundLayer), in the editor's coordinates. */
+    void AVDrawBackground(Graphics& g);
     DrawableButton saveButton { "Save", DrawableButton::ImageFitted };
     TextButton languageButton { "ES" };
     AVDexedPanicButton panicButton;
@@ -211,7 +221,6 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     int AVStatusTicks = 0;
     bool AVOperatorsSilent = false;
     float AVLastGlobalVu = -1.0f;
-    int viewTransitionGeneration = 0;
     int resizeSaveCountdown = 0;
     float resizeFactorAtStart = 1.0f;
     void resetSize();
@@ -335,6 +344,7 @@ public:
     friend int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& outputDirectory);
     friend int AVRunAdvancedNotice(const juce::File& outputDirectory);
     friend int AVRunUIFades(const juce::File& bankFile, int slot);
+    friend int AVRunUIFadesCheck(const juce::File& bankFile, int slot, const juce::File& outputDirectory);
 #endif
 
 private:
