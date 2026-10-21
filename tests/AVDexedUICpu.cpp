@@ -5,7 +5,8 @@
 // real window, as when playing. A thread renders audio in real time (128
 // samples at 48 kHz) while the editor shows each page; the process CPU minus
 // the audio thread's is what the editor costs (the window server composites
-// on top of that, in its own process).
+// on top of that, in its own process). The message thread's own share (where
+// the editor paints) is printed apart.
 //
 // --ui-resize <bank.syx> <slot> <folder>: the window is resized as the grip
 // does (zoom 1.0 → 0.8 → 1.6 → 1.25) while eight layers sound, then the keys
@@ -204,7 +205,7 @@ int AVRunUICpu(const juce::File& bankFile, int slot) {
         };
         constexpr double settle = 1.5, measure = 5.0;
         size_t index = 0;
-        double phaseStart = 0.0, cpuStart = 0.0, audioStart = 0.0;
+        double phaseStart = 0.0, cpuStart = 0.0, audioStart = 0.0, messageStart = 0.0;
         bool measuring = false, finished = false;
         std::function<void()> tick;
         tick = [&] {
@@ -214,12 +215,15 @@ int AVRunUICpu(const juce::File& bankFile, int slot) {
                 phaseStart = now;
                 cpuStart = processSeconds();
                 audioStart = audio.seconds.load();
+                messageStart = threadSeconds();   // this runs on the message thread
             } else if (measuring && now - phaseStart >= measure) {
                 const double total = (processSeconds() - cpuStart) / measure * 100.0;
                 const double audioPart = (audio.seconds.load() - audioStart) / measure * 100.0;
+                const double messagePart = (threadSeconds() - messageStart) / measure * 100.0;
                 std::cout << String(steps[index].name).paddedRight(' ', 40) << " process " << String(total, 1).paddedLeft(' ', 5)
                           << " %   audio " << String(audioPart, 1).paddedLeft(' ', 5) << " %   rest (editor) "
-                          << String(total - audioPart, 1).paddedLeft(' ', 5) << " %  of one core, "
+                          << String(total - audioPart, 1).paddedLeft(' ', 5) << " % (message thread "
+                          << String(messagePart, 1) << " %)  of one core, "
                           << processor.getAVActiveVoices() << " voices, " << paints.load() << " paints, footer CPU "
                           << String(processor.getAVAudioCpuPercent(), 1) << " %\n";
                 paints.store(0);

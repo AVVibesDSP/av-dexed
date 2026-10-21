@@ -35,6 +35,7 @@
 #include "AVDexedWheel.h"
 #include "AVDexedPeakMeter.h"
 #include "AVDexedPromptOverlay.h"
+#include "AVDexedPixelCache.h"
 #include "AVDexedDropOverlay.h"
 #include "window/AVDexedSettingsPanel.h"
 
@@ -93,6 +94,12 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     double AVLastMeterUpdate = 0.0;
     DrawableButton AVSettingsButton { "AVSettings", DrawableButton::ImageFitted };
     std::unique_ptr<Drawable> AVInfoSymbol;
+    /** The editor's own background (canvas, keyboard zone, footer, brand
+        block, tab separators): an image at the screen's pixels, made again
+        when the keyboard, the frame's height or the tabs' places change. */
+    AVDexedPixelCache AVBackgroundLayer;
+    std::array<int, 4> AVBackgroundSignature {};
+    void AVPaintBackground(Graphics& g);
     void AVUpdateFooter();
     /** The footer help text: the hovered control's help, or a temporary notice. */
     void AVUpdateHelpText();

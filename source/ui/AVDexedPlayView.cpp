@@ -909,6 +909,7 @@ void AVDexedKnobCaption::paintButton(Graphics& g, bool over, bool down) {
 }
 
 AVDexedPlayView::AVDexedPlayView(DexedAudioProcessor& owner) : processor(owner) {
+    setOpaque(true);   // paint fills it all (the canvas)
     AVDexedLanguageService::getInstance().addChangeListener(this);
     avBrowserPreferenceChanges.addChangeListener(this);
     avLibraryChanges.addChangeListener(this);
@@ -1272,17 +1273,21 @@ void AVDexedPlayView::visibilityChanged() {
 }
 
 void AVDexedPlayView::paint(Graphics& g) {
-    g.fillAll(AVDexedTheme::canvas);
-    // A soft ocean light behind the algorithm plays the role GOZO's
-    // instrument photo plays: one focal point, no boxes around it.
-    if (!heroBounds.isEmpty()) {
-        const auto centre = heroBounds.toFloat().getCentre();
-        ColourGradient glow(AVDexedTheme::oceanBottom.withAlpha(0.42f), centre.x, centre.y,
-                            Colours::transparentBlack, centre.x + float(heroBounds.getWidth()) * 0.62f, centre.y, true);
-        g.setGradientFill(glow);
-        g.fillRect(getLocalBounds());
-    }
-    AVDexedTheme::panel(g, browserCard.toFloat(), 22.0f);
+    backgroundLayer.draw(g, *this, getLocalBounds().toFloat(), [this](Graphics& bg) {
+        bg.fillAll(AVDexedTheme::canvas);
+        // A soft ocean light behind the algorithm plays the role GOZO's
+        // instrument photo plays: one focal point, no boxes around it.
+        if (!heroBounds.isEmpty()) {
+            const auto centre = heroBounds.toFloat().getCentre();
+            ColourGradient glow(AVDexedTheme::oceanBottom.withAlpha(0.42f), centre.x, centre.y,
+                                Colours::transparentBlack, centre.x + float(heroBounds.getWidth()) * 0.62f, centre.y, true);
+            bg.setGradientFill(glow);
+            bg.fillRect(getLocalBounds());
+        }
+        AVDexedTheme::panel(bg, browserCard.toFloat(), 22.0f);
+    });
+    // The rest lies on the card: a glow frame (or the knobs) never reaches it.
+    if (!g.clipRegionIntersects(browserCard)) return;
     // Card title as in GOZO (SemiBold 18, grey gradient), the count in the
     // same line and weight: "Sonidos • 1088", centred. "…" until the first
     // index arrives.
@@ -1300,6 +1305,7 @@ void AVDexedPlayView::paint(Graphics& g) {
 }
 
 void AVDexedPlayView::resized() {
+    backgroundLayer.invalidate();
     if (heroAlgorithm == nullptr || knobCaptions.back() == nullptr) return;
     const int height = getHeight();
     // Browser: one GOZO card on the left, from the top bar to the knob row.

@@ -9,6 +9,7 @@
 #include "DXLookNFeel.h"
 #include "component/AlgoDisplay.h"
 #include "AVDexedPromptOverlay.h"
+#include "AVDexedPixelCache.h"
 #include <array>
 #include <atomic>
 #include <map>
@@ -416,6 +417,9 @@ private:
     juce::Rectangle<int> AVHeaderBounds;
     juce::Rectangle<int> searchBounds;
     juce::Rectangle<int> heroBounds;
+    /** The canvas, the ocean light and the browser card: they change only
+        with the size, so they are an image at the screen's pixels. */
+    AVDexedPixelCache backgroundLayer;
     juce::Rectangle<int> centreTitleBounds;
     /** Light poll (2 s) for changes made in Finder or by another AV Dexed. */
     juce::TimedCallback AVLibraryPoll { [this] { pollLibrary(); } };

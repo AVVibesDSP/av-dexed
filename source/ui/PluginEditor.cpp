@@ -334,6 +334,7 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     addAndMakeVisible(&frameComponent);
     setLookAndFeel(&*lookAndFeel);
     background = AVDexedTheme::canvas;
+    setOpaque(true);   // paint fills it all: what lies under it is never painted
 
     brandLabel.setText("AV Dexed", dontSendNotification);
     brandLabel.setFont(Font(FontOptions().withHeight(21.0f).withStyle("Bold")));
@@ -620,6 +621,16 @@ DexedAudioProcessorEditor::~DexedAudioProcessorEditor() {
 
 //==============================================================================
 void DexedAudioProcessorEditor::paint (Graphics& g) {
+    const std::array<int, 4> signature { processor->showKeyboard ? 1 : 0, frameComponent.getHeight(),
+                                         playTabButton.getRight(), advancedTabButton.getRight() };
+    if (signature != AVBackgroundSignature) {
+        AVBackgroundSignature = signature;
+        AVBackgroundLayer.invalidate();
+    }
+    AVBackgroundLayer.draw(g, *this, getLocalBounds().toFloat(), [this](Graphics& bg) { AVPaintBackground(bg); });
+}
+
+void DexedAudioProcessorEditor::AVPaintBackground(Graphics& g) {
     g.fillAll(background);
     Graphics::ScopedSaveState save(g);
     g.addTransform(AffineTransform::scale(float(getWidth()) / WINDOW_SIZE_X));
