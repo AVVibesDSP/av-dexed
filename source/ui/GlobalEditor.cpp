@@ -486,13 +486,14 @@ void GlobalEditor::applyLanguage() {
 }
 
 void GlobalEditor::updatePitchPos(int pos) {
-    pitchEnvDisplay->vPos = pos;
+    // As the operators' envelopes: only a new stage repaints.
+    if (pitchEnvDisplay->vPos == char(pos)) return;
+    pitchEnvDisplay->vPos = char(pos);
     pitchEnvDisplay->repaint();
 }
 
 void GlobalEditor::updateVu(float f) {
-    vuOutput->v = f;
-    vuOutput->repaint();
+    vuOutput->setLevel(f);
 #ifdef IMPLEMENT_MidiMonitor
     midiMonitor->repaint();
 #endif //IMPLEMENT_MidiMonitor

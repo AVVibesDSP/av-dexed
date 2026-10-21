@@ -19,10 +19,14 @@ public:
 
     explicit VuMeterBase(int maximumDb, bool useTricolor = false);
     void paint(juce::Graphics& g) override;
+    /** Shows `level`; repaints only when the number of lit blocks changes
+        (the meter moves in 1 dB steps, so most updates change nothing). */
+    void setLevel(float level);
 
     float v = 0.0f;
 
 private:
+    int activeBlocksFor(float level) const;
     int maximumDb;
     int minimumDb;
     bool tricolor;

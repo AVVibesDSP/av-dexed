@@ -213,8 +213,7 @@ void OperatorEditor::resized() {
 //[MiscUserCode] You can add your own definitions of your custom methods or any other code here...
 
 void OperatorEditor::updateGain(float v) {
-    vu->v = v;
-    vu->repaint();
+    vu->setLevel(v);
 }
 
 void OperatorEditor::updateDisplay() {
@@ -222,6 +221,8 @@ void OperatorEditor::updateDisplay() {
 
 
 void OperatorEditor::updateEnvPos(char pos) {
+    // The stage changes a few times per note; the 50 Hz updates in between change nothing.
+    if (envDisplay->vPos == pos) return;
     envDisplay->vPos = pos;
     envDisplay->repaint();
 }
