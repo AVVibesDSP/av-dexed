@@ -279,46 +279,56 @@ int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& output
 
         size_t step = 0;
         Image settled, repainted, repaintedAgain, direct;
-        std::function<void()> next;
+        double releasedAt = 0.0;
+        std::function<void()> resize, release, waitUntilStill, compare;
         const auto after = [&](int milliseconds, std::function<void()> then) {
             Timer::callAfterDelay(milliseconds, [&, then] { then(); });
         };
         const auto finish = [&] { MessageManager::getInstance()->stopDispatchLoop(); };
-        next = [&] {
+        resize = [&] {
             if (step < zooms.size()) {
                 processor.setZoomFactor(zooms[step++]);
                 editor->resetSize();
-                after(33, next);
+                after(33, resize);
                 return;
             }
             // Still sounding at the new size: the glow and the meter keep drawing.
-            after(1000, [&] {
-                captureWindow(outputDirectory.getChildFile("resize-playing.png"));
-                playSixteenKeys(processor, false);
-                // Every animation ends: the glow fades, the meter falls, the voices end.
-                after(4000, [&] {
-                    settled = captureWindow(outputDirectory.getChildFile("resize-settled.png"));
+            after(1000, release);
+        };
+        release = [&] {
+            captureWindow(outputDirectory.getChildFile("resize-playing.png"));
+            playSixteenKeys(processor, false);
+            releasedAt = Time::getMillisecondCounterHiRes();
+            after(500, waitUntilStill);
+        };
+        // Every animation ends: the glow fades, the voices end and the meter
+        // falls to its floor (eight layers ring on for seconds).
+        waitUntilStill = [&] {
+            const bool still = processor.getAVActiveVoices() == 0 && editor->AVOutputMeter.AVDisplayedGain() <= 0.0f;
+            if (still || Time::getMillisecondCounterHiRes() - releasedAt > 30000.0) after(1000, compare);
+            else after(200, waitUntilStill);
+        };
+        compare = [&] {
+            settled = captureWindow(outputDirectory.getChildFile("resize-settled.png"));
+            editor->repaint();
+            after(600, [&] {
+                repainted = captureWindow(outputDirectory.getChildFile("resize-repainted.png"));
+                editor->repaint();
+                after(600, [&] {
+                    repaintedAgain = captureWindow(outputDirectory.getChildFile("resize-repainted-again.png"));
+                    AVDexedPixelCache::enabled = false;
                     editor->repaint();
                     after(600, [&] {
-                        repainted = captureWindow(outputDirectory.getChildFile("resize-repainted.png"));
-                        editor->repaint();
-                        after(600, [&] {
-                            repaintedAgain = captureWindow(outputDirectory.getChildFile("resize-repainted-again.png"));
-                            AVDexedPixelCache::enabled = false;
-                            editor->repaint();
-                            after(600, [&] {
-                                direct = captureWindow(outputDirectory.getChildFile("resize-direct.png"));
-                                AVDexedPixelCache::enabled = true;
-                                finish();
-                            });
-                        });
+                        direct = captureWindow(outputDirectory.getChildFile("resize-direct.png"));
+                        AVDexedPixelCache::enabled = true;
+                        finish();
                     });
                 });
             });
         };
         after(300, [&] {
             playSixteenKeys(processor, true);
-            after(1200, next);
+            after(1200, resize);
         });
         MessageManager::getInstance()->runDispatchLoop();
 
