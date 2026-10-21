@@ -265,6 +265,7 @@ if(DEXED_BUILD_TESTS)
         ../tests/AVDexedFxChainTests.cpp
         ../tests/AVDexedStateTests.cpp
         ../tests/AVDexedUIEvidence.cpp
+        ../tests/AVDexedUICpu.cpp
         ../tests/AVDexedLibraryTests.cpp
         ../tests/AVDexedDropTests.cpp
         ../tests/AVDexedQALibrary.cpp

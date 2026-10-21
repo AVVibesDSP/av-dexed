@@ -22,6 +22,7 @@ int AVRunGolden(const juce::StringArray& arguments);
 int AVRunImport(const juce::StringArray& arguments);
 int AVRunPerformanceReport(const juce::File& file);
 int AVRunLayersCpu(const juce::File& bankFile, int slot);
+int AVRunUICpu(const juce::File& bankFile, int slot);
 int AVRunStackEnvelope(const juce::File& bankFile, int slot, bool inStep);
 int AVRunLoaderReport(const juce::File& folder, const juce::File& output);
 
@@ -111,6 +112,8 @@ int main(int argc, char** argv)
     if ((argc == 4 || argc == 5) && juce::String(argv[1]) == "--stack-envelope")
         return AVRunStackEnvelope(juce::File(juce::String::fromUTF8(argv[2])), juce::String(argv[3]).getIntValue(),
                                   argc == 5 && juce::String(argv[4]) == "in-step");
+    if (argc == 4 && juce::String(argv[1]) == "--ui-cpu")
+        return AVRunUICpu(juce::File(juce::String::fromUTF8(argv[2])), juce::String(argv[3]).getIntValue());
     if (argc == 4 && juce::String(argv[1]) == "--layers-cpu")
         return AVRunLayersCpu(juce::File(juce::String::fromUTF8(argv[2])), juce::String(argv[3]).getIntValue());
     if (argc == 3 && juce::String(argv[1]) == "--performances")
