@@ -303,6 +303,7 @@ public:
     friend bool AVRunLibraryQA(const juce::File& outputDirectory);
     friend bool runAVDexedDropTests();
     friend int AVRunUICpu(const juce::File& bankFile, int slot);
+    friend int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& outputDirectory);
 #endif
 
 private:

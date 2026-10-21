@@ -227,7 +227,10 @@ target_compile_definitions(${BaseTargetName} PUBLIC
     JUCE_MODAL_LOOPS_PERMITTED=0 # needed for FileBrowser in CartManager
     JUCE_REPORT_APP_USAGE=0
     JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
-    # JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS=1     # REVERT BACK SINCE THERE IS AN ISSUE WITH JUCE 7.0.0
+    # macOS: each dirty area is painted on its own. Without it CoreGraphics merges
+    # the output meter and the algorithm glow into one block of most of the window
+    # every frame. Checked on JUCE 8.0.14 while resizing (--ui-resize).
+    JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS=1
 )
 
 target_link_libraries(${BaseTargetName} 
