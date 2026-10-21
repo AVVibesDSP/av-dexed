@@ -316,7 +316,12 @@ public:
         from its alpha to 0 (when it is on screen). */
     static void fadeOut(juce::Component& target, double durationMs) {
         cancel(target);
-        if (target.isShowing() && durationMs > 0.0) start(target, false, durationMs);
+        if (target.isShowing() && durationMs > 0.0 && ! start(target, false, durationMs)) {
+            // No picture at the window's pixels (a window at an unusual scale):
+            // JUCE's own fade, which hides the component itself.
+            juce::Desktop::getInstance().getAnimator().fadeOut(&target, juce::roundToInt(durationMs));
+            return;
+        }
         target.setVisible(false);
     }
 
@@ -325,6 +330,7 @@ public:
         picture goes. */
     static void cancel(juce::Component& target) {
         if (auto* fade = find(target)) fade->end(false);
+        juce::Desktop::getInstance().getAnimator().cancelAnimation(&target, false);
     }
 
     /** For the tools: at 0…1, fades hold at that point (once their picture
@@ -332,7 +338,9 @@ public:
     static inline float testFreeze = -1.0f;
 
     /** True while a fade of the component (or of its picture) is on screen. */
-    static bool isFading(juce::Component& target) { return find(target) != nullptr; }
+    static bool isFading(juce::Component& target) {
+        return find(target) != nullptr || juce::Desktop::getInstance().getAnimator().isAnimating(&target);
+    }
 
     /** A component that goes away while it fades in: the fade forgets it. */
     static void forget(juce::Component& target) {
@@ -340,6 +348,7 @@ public:
             fade->target = nullptr;
             fade->end(false);
         }
+        juce::Desktop::getInstance().getAnimator().cancelAnimation(&target, false);
     }
 
     ~AVDexedComponentFade() override {
@@ -363,9 +372,10 @@ private:
         return nullptr;
     }
 
-    static void start(juce::Component& target, bool in, double durationMs) {
+    /** False when a fade-out's picture could not be made (nothing started). */
+    static bool start(juce::Component& target, bool in, double durationMs) {
         auto* p = target.getParentComponent();
-        if (p == nullptr) return;
+        if (p == nullptr) return false;
         auto* fade = new AVDexedComponentFade(target, in, durationMs);
         fade->setBounds(target.getBounds());
         // Just above the component: what was above it stays above its picture.
@@ -373,9 +383,17 @@ private:
         p->addComponentListener(fade);
         fade->fromAlpha = in ? 0.0f : target.getAlpha();
         fade->toAlpha = in ? 1.0f : 0.0f;
-        if (! in) fade->takePicture();   // it is hidden right after this
+        if (! in) {
+            fade->takePicture();   // it is hidden right after this
+            if (! fade->pictured) {
+                fade->failed = true;
+                fade->end(true);
+                return false;
+            }
+        }
         fade->startMs = juce::Time::getMillisecondCounterHiRes();
         fade->animation.start();
+        return true;
     }
 
     void takePicture() {
@@ -409,9 +427,17 @@ private:
         if (testFreeze < 0.0f) progress = juce::jlimit(0.0f, 1.0f, float((now - startMs) / duration));
         if (! pictured && ! failed) {
             takePicture();
-            if (! pictured) {   // not on screen: nothing to see, so no fade
+            if (! pictured) {
+                // No picture at the window's pixels: JUCE's own fade for the
+                // time left (nothing is seen when it is not on screen at all).
                 failed = true;
-                end(true);
+                auto* component = target.getComponent();
+                const double left = duration * double(1.0f - progress);
+                end(false);
+                if (component != nullptr && component->isShowing())
+                    juce::Desktop::getInstance().getAnimator().fadeIn(component, juce::roundToInt(left));
+                else if (component != nullptr)
+                    component->setAlpha(1.0f);
                 return false;
             }
         }
@@ -446,7 +472,7 @@ private:
             p->removeComponentListener(this);
             p->removeChildComponent(this);
         }
-        juce::MessageManager::callAsync([self = this] { delete self; });
+        deleteSoon();
     }
 
     void componentBeingDeleted(juce::Component&) override {
@@ -454,8 +480,28 @@ private:
         compositor.stop();
         target = nullptr;
         parent = nullptr;
-        juce::MessageManager::callAsync([self = this] { delete self; });
+        deleteSoon();
     }
+
+    /** Not from inside its own frame callback: after it (or at once by
+        deleteAllIn(), whichever comes first). */
+    void deleteSoon() {
+        juce::MessageManager::callAsync([self = juce::Component::SafePointer<juce::Component>(this)] { delete self.getComponent(); });
+    }
+
+public:
+    /** Deletes at once every fade over `parent`'s children (an editor that
+        closes: nothing may wait for a later message). */
+    static void deleteAllIn(juce::Component& parent) {
+        for (int i = parent.getNumChildComponents(); --i >= 0;)
+            if (auto* fade = dynamic_cast<AVDexedComponentFade*>(parent.getChildComponent(i))) {
+                parent.removeComponentListener(fade);
+                fade->animation.stop();
+                fade->compositor.stop();
+                delete fade;
+            }
+    }
+private:
 
     juce::Component::SafePointer<juce::Component> target, parent;
     AVDexedScreenImage picture;

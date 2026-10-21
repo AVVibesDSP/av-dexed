@@ -931,3 +931,247 @@ int AVRunUIFadesCheck(const juce::File& bankFile, int slot, const juce::File& ou
     std::cout << (passed ? "UI fades check passed.\n" : "UI fades check FAILED.\n");
     return passed ? 0 : 1;
 }
+
+/** --ui-stress <bank.syx> <slot> <minutes>: the editor in a real window under
+    a long, busy session: eight layers with effects and an arpeggio sound all
+    along while, every 0.25-1.5 s, something happens at random (fixed seed):
+    a tab change, Settings or a dialog opened and closed, a zoom change, the
+    next sound, the layers stacked or reset, low power or the effects
+    switched. Every minute: the process's memory (a leak grows it), the message
+    thread's CPU, the longest the message thread went without a screen frame
+    (a stall), the audio thread's longest block against its 2.67 ms (128
+    samples at 48 kHz) and how many blocks ran over it. At the end, no fade may
+    be left on screen. Exit code 0 when it ran to the end with no fade left. */
+int AVRunUIStress(const juce::File& bankFile, int slot, int minutes) {
+    using namespace juce;
+    IsolatedLibrary library;
+    int result = 1;
+    {
+        DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
+        if (!loadSound(processor, bankFile, slot)) return 2;
+        processor.advancedNoticeHidden = true;
+        // The audio thread, paced in real time, timing every block.
+        struct StressAudio {
+            const double rate = 48000.0;
+            const int block = 128;
+            explicit StressAudio(DexedAudioProcessor& p) : processor(p) {
+                processor.setRateAndBufferSizeDetails(rate, block);
+                processor.prepareToPlay(rate, block);
+                thread = std::thread([this] {
+                    AudioBuffer<float> buffer(2, block);
+                    auto next = std::chrono::steady_clock::now();
+                    const auto period = std::chrono::nanoseconds(int64(1.0e9 * block / rate));
+                    while (running.load()) {
+                        const double start = threadSeconds();
+                        MidiBuffer midi;
+                        buffer.clear();
+                        processor.processBlock(buffer, midi);
+                        const double ms = (threadSeconds() - start) * 1000.0;
+                        if (ms > longestMs.load()) longestMs.store(ms);
+                        if (ms > 1000.0 * block / rate) overruns.fetch_add(1);
+                        next += period;
+                        std::this_thread::sleep_until(next);
+                    }
+                });
+            }
+            ~StressAudio() { running.store(false); thread.join(); }
+            DexedAudioProcessor& processor;
+            std::atomic<bool> running { true };
+            std::atomic<double> longestMs { 0.0 };
+            std::atomic<int> overruns { 0 };
+            std::thread thread;
+        } audio(processor);
+
+        DocumentWindow window("AV Dexed UI stress", Colours::black, DocumentWindow::closeButton);
+        auto* editor = new DexedAudioProcessorEditor(&processor);
+        window.setUsingNativeTitleBar(true);
+        window.setContentOwned(editor, true);
+        window.setTopLeftPosition(80, 80);
+        window.setVisible(true);
+        using View = DexedAudioProcessorEditor::AVView;
+
+        double lastFrame = Time::getMillisecondCounterHiRes(), longestStall = 0.0;
+        VBlankAttachment vblank(&window, [&](double) {
+            const double now = Time::getMillisecondCounterHiRes();
+            longestStall = jmax(longestStall, now - lastFrame);
+            lastFrame = now;
+        });
+        const auto residentMB = [] {
+#if defined(__APPLE__)
+            mach_task_basic_info_data_t info {};
+            mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+            if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t) &info, &count) == KERN_SUCCESS)
+                return double(info.resident_size) / (1024.0 * 1024.0);
+#endif
+            return 0.0;
+        };
+        const auto effects = [&](bool on) {
+            for (auto [id, value] : { std::pair { IDs::reverbAmount.parameter(), 0.3f }, { IDs::chorusAmount.parameter(), 0.5f },
+                                      { IDs::delayAmount.parameter(), 0.2f } })
+                if (auto* parameter = processor.parameters.getParameter(id.getParamID()))
+                    parameter->setValueNotifyingHost(on ? value : 0.0f);
+        };
+        processor.stackAVLayers(8, 7.0f);
+        effects(true);
+        bool effectsOn = true;
+
+        // The arpeggio: eight notes a second over two octaves, all along.
+        bool playing = true;
+        int step = 0;
+        std::function<void()> arpeggio;
+        arpeggio = [&] {
+            if (! playing) return;
+            static constexpr int pattern[] { 48, 52, 55, 60, 64, 67, 72, 67, 64, 60, 55, 52 };
+            const int count = int(std::size(pattern));
+            processor.keyboardState.noteOff(1, pattern[(step + count - 1) % count], 0.0f);
+            processor.keyboardState.noteOn(1, pattern[step % count], 0.8f);
+            ++step;
+            Timer::callAfterDelay(125, arpeggio);
+        };
+        arpeggio();
+
+        Random random(20261021);
+        std::map<String, int> done;
+        String slowest;
+        double slowestMs = 0.0;
+        AVDexedPromptOverlay* prompt = nullptr;
+        std::function<void()> act;
+        const auto timed = [&] {
+            const auto before = done;
+            const double t0 = Time::getMillisecondCounterHiRes();
+            act();
+            const double ms = Time::getMillisecondCounterHiRes() - t0;
+            if (ms > slowestMs) {
+                slowestMs = ms;
+                for (const auto& [name, count] : done)
+                    if (before.count(name) == 0 || before.at(name) != count) slowest = name;
+            }
+        };
+        // As a person would: what a modal dialog covers cannot be clicked, and a
+        // dialog the editor opens by itself (the question about unsaved changes
+        // when the sound changes) is answered (cancelled) before anything else.
+        act = [&] {
+            for (auto& kept : editor->AVPrompts)
+                if (! kept->isFinishing() && kept.get() != prompt) {
+                    kept->dismiss();
+                    ++done["answered"];
+                    return;
+                }
+            const bool modal = ModalComponentManager::getInstance()->getNumModalComponents() > 0;
+            const int pick = random.nextInt(100);
+            if (pick < 35) {
+                if (modal) return;
+                const View views[] { View::play, View::advanced, View::layers };
+                editor->showAVView(views[random.nextInt(3)], true);
+                ++done["tab change"];
+            } else if (pick < 47) {
+                if (editor->AVSettingsOverlay != nullptr && editor->AVSettingsOverlay->isVisible()) {
+                    editor->AVCloseSettings(false);
+                } else if (modal) {
+                    return;
+                } else {
+                    const AVDexedSettingsPanel::AVPage pages[] { AVDexedSettingsPanel::AVPage::audio, AVDexedSettingsPanel::AVPage::instrument,
+                                                                 AVDexedSettingsPanel::AVPage::midi, AVDexedSettingsPanel::AVPage::about };
+                    editor->showAVSettingsPage(pages[random.nextInt(4)]);
+                }
+                ++done["Settings"];
+            } else if (pick < 57) {
+                if (prompt != nullptr) {
+                    prompt->dismiss();
+                    prompt = nullptr;
+                } else if (! modal) {
+                    AVDexedPromptOverlay::Options options;
+                    options.title = "Stress";
+                    options.message = "A dialog opened and closed at random.";
+                    options.confirmText = "OK";
+                    prompt = editor->showAVPrompt(std::move(options), {});
+                }
+                ++done["dialog"];
+            } else if (pick < 64) {
+                if (modal) return;
+                const float zooms[] { 0.8f, 0.9f, 1.0f, 1.1f, 1.25f };
+                processor.setZoomFactor(zooms[random.nextInt(5)]);
+                editor->resetSize();
+                ++done["zoom"];
+            } else if (pick < 80) {
+                if (! editor->AVCanStepSounds()) return;
+                editor->playView.navigatePreset(random.nextBool() ? 1 : -1);
+                ++done["sound"];
+            } else if (pick < 86) {
+                if (processor.isAVLayerModeOn()) processor.resetAVLayers();
+                else processor.stackAVLayers(8, 7.0f);
+                ++done["layers"];
+            } else if (pick < 92) {
+                AVDexedTheme::lowPower = ! AVDexedTheme::lowPower;
+                editor->repaint();
+                ++done["low power"];
+            } else {
+                effectsOn = ! effectsOn;
+                effects(effectsOn);
+                ++done["effects"];
+            }
+        };
+
+        const double startMs = Time::getMillisecondCounterHiRes();
+        double minuteStart = startMs, minuteCpu = threadSeconds(), firstMB = residentMB();
+        int minute = 0;
+        std::cout << "UI stress: " << minutes << " min, memory at the start " << String(firstMB, 1) << " MB\n" << std::flush;
+        std::function<void()> tick;
+        tick = [&] {
+            const double now = Time::getMillisecondCounterHiRes();
+            if (now - minuteStart >= 60000.0) {
+                ++minute;
+                const double cpu = (threadSeconds() - minuteCpu) / ((now - minuteStart) / 1000.0) * 100.0;
+                String actions;
+                for (const auto& [name, count] : done) actions << name << " " << count << ", ";
+                std::function<int(Component&)> descendants = [&](Component& c) {
+                    int n = 1;
+                    for (auto* child : c.getChildren()) n += descendants(*child);
+                    return n;
+                };
+                std::cout << "  min " << minute << ": components " << descendants(window) << ", modal "
+                          << ModalComponentManager::getInstance()->getNumModalComponents() << ", desktop "
+                          << Desktop::getInstance().getNumComponents() << ", prompts kept " << editor->AVPrompts.size()
+                          << ", memory " << String(residentMB(), 1) << " MB, message thread "
+                          << String(cpu, 1) << " %, longest stall " << String(longestStall, 1) << " ms, audio longest block "
+                          << String(audio.longestMs.load(), 2) << " ms (" << audio.overruns.load() << " over 2.67 ms), slowest action "
+                          << slowest << " " << String(slowestMs, 1) << " ms; " << actions.dropLastCharacters(2) << "\n" << std::flush;
+                done.clear();
+                slowest.clear();
+                slowestMs = 0.0;
+                longestStall = 0.0;
+                audio.longestMs.store(0.0);
+                audio.overruns.store(0);
+                minuteStart = now;
+                minuteCpu = threadSeconds();
+                if (minute >= minutes) {
+                    playing = false;
+                    processor.keyboardState.allNotesOff(1);
+                    if (prompt != nullptr) prompt->dismiss();
+                    prompt = nullptr;
+                    editor->AVCloseSettings(false);
+                    Timer::callAfterDelay(1500, [&] { MessageManager::getInstance()->stopDispatchLoop(); });
+                    return;
+                }
+            }
+            timed();
+            Timer::callAfterDelay(250 + random.nextInt(1250), tick);
+        };
+        Timer::callAfterDelay(1500, tick);
+        MessageManager::getInstance()->runDispatchLoop();
+
+        // Nothing of a fade may stay on screen.
+        int covers = 0;
+        for (auto* child : editor->frameComponent.getChildren())
+            if (dynamic_cast<AVDexedComponentFade*>(child) != nullptr) ++covers;
+        const bool clean = covers == 0 && ! editor->AVPageFade.isRunning();
+        std::cout << "UI stress: memory at the end " << String(residentMB(), 1) << " MB (" << String(residentMB() - firstMB, 1)
+                  << " MB more than at the start), " << covers << " fade covers left, page fade "
+                  << (editor->AVPageFade.isRunning() ? "still running" : "ended") << (clean ? "" : "  FAILED") << "\n";
+        result = clean ? 0 : 1;
+        AVDexedTheme::lowPower = false;
+        window.setVisible(false);
+        window.clearContentComponent();
+    }
+    return result;
+}

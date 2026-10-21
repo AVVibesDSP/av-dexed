@@ -345,6 +345,7 @@ public:
     friend int AVRunAdvancedNotice(const juce::File& outputDirectory);
     friend int AVRunUIFades(const juce::File& bankFile, int slot);
     friend int AVRunUIFadesCheck(const juce::File& bankFile, int slot, const juce::File& outputDirectory);
+    friend int AVRunUIStress(const juce::File& bankFile, int slot, int minutes);
 #endif
 
 private:

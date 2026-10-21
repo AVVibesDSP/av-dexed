@@ -102,7 +102,13 @@ public:
         auto* peer = owner.getPeer();
         if (peer == nullptr) return 0.0f;
         auto* display = Desktop::getInstance().getDisplays().getDisplayForRect(peer->getComponent().getScreenBounds());
-        return display == nullptr ? 0.0f : float(display->scale) * Desktop::getInstance().getGlobalScaleFactor();
+        if (display == nullptr) return 0.0f;
+       #if JUCE_WINDOWS
+        // A window that maps its points to pixels at another scale than its
+        // screen's (a host that does not handle DPI): no screen pictures.
+        if (std::abs(float(peer->getPlatformScaleFactor()) - float(display->scale)) > 0.01f) return 0.0f;
+       #endif
+        return float(display->scale) * Desktop::getInstance().getGlobalScaleFactor();
     }
 
 private:

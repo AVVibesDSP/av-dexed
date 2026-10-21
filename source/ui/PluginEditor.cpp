@@ -609,6 +609,8 @@ DexedAudioProcessorEditor::~DexedAudioProcessorEditor() {
     for (auto& prompt : AVPrompts)
         AVDexedComponentFade::forget(*prompt);
     AVPrompts.clear();
+    AVDexedComponentFade::deleteAllIn(frameComponent);   // dialogs, Settings, Play's effect window
+    AVDexedComponentFade::deleteAllIn(*this);            // an alert's veil
     // Waits for a running adoption (it only copies a few small files); one
     // still queued is dropped and the next editor tries again.
     AVAdoptionPool.reset();
@@ -616,6 +618,8 @@ DexedAudioProcessorEditor::~DexedAudioProcessorEditor() {
     avAdoptionState.compare_exchange_strong(queued, avAdoptionIdle);
     midiKeyboard.releaseAVUINotes();
     AVPageFade.finish();
+    for (auto* page : std::initializer_list<Component*> { &classicView, &playView, &layersView })
+        Desktop::getInstance().getAnimator().cancelAnimation(page, false);   // a JUCE cross-fade (AVPageFade could not)
     AVDexedLanguageService::getInstance().removeChangeListener(this);
     setLookAndFeel(nullptr);
 }
@@ -761,15 +765,24 @@ void DexedAudioProcessorEditor::showAVView(AVView view, bool animate) {
         pictured = AVPageFade.takeCurrentFrameAsOutgoing(area)
                    || AVPageFade.outgoing.make(frameComponent, area, true, [&](Graphics& g) { paintPage(g, outgoing); });
     AVPageFade.finish();
+    // No picture at the window's pixels (a window at an unusual scale): JUCE's
+    // own cross-fade, as before.
+    const bool legacy = fade && ! pictured;
     // The pages as they stay: only the new one shown (also under the fade,
     // so it takes the focus and clicks at once).
     for (auto other : { AVView::play, AVView::advanced, AVView::layers }) {
         auto& page = AVViewComponent(other);
+        Desktop::getInstance().getAnimator().cancelAnimation(&page, false);
         page.setAlpha(1.0f);
         page.setInterceptsMouseClicks(true, true);
-        if (other != view) page.setVisible(false);
+        if (other != view && ! (legacy && other == previous)) page.setVisible(false);
     }
-    incoming.setVisible(true);
+    if (legacy) {
+        Desktop::getInstance().getAnimator().fadeOut(&outgoing, 220);   // hides it; a proxy fades
+        Desktop::getInstance().getAnimator().fadeIn(&incoming, 220);
+    } else {
+        incoming.setVisible(true);
+    }
     AVVisibleView = view;
     playTabButton.setToggleState(view == AVView::play, dontSendNotification);
     advancedTabButton.setToggleState(view == AVView::advanced, dontSendNotification);
