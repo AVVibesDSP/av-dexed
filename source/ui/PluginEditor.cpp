@@ -1558,13 +1558,10 @@ void DexedAudioProcessorEditor::comboBoxChanged (ComboBox* comboBoxThatHasChange
 }
 
 void DexedAudioProcessorEditor::timerCallback() {
-    // Minimised or hidden: only what is not drawn (the size, a program change).
-    const bool visible = isShowing() && !(getPeer() != nullptr && getPeer()->isMinimised());
-    if (visible) {
-        AVUpdateFooter();
-        if (!AVPitchWheel.isBeingDragged()) AVPitchWheel.setValue(processor->getAVKeyboardPitch(), dontSendNotification);
-        if (!AVModWheel.isBeingDragged()) AVModWheel.setValue(processor->getAVKeyboardMod(), dontSendNotification);
-    }
+    // Text and wheel positions only: out of sight they ask for no painting.
+    AVUpdateFooter();
+    if (!AVPitchWheel.isBeingDragged()) AVPitchWheel.setValue(processor->getAVKeyboardPitch(), dontSendNotification);
+    if (!AVModWheel.isBeingDragged()) AVModWheel.setValue(processor->getAVKeyboardMod(), dontSendNotification);
     if (resizeSaveCountdown > 0) {
         resizeSaveCountdown -= 20;
         if (resizeSaveCountdown <= 0)
