@@ -113,6 +113,11 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     void AVPaintBackground(Graphics& g);
     /** Follows Settings > Instrument > "Low power" (AVDexedTheme::lowPower). */
     void AVApplyLowPower();
+    /** The first time Advanced opens in this editor (on screen, after the
+        cross-fade, no other dialog up): a notice that it draws more while notes
+        sound, with "Don't show again". */
+    void AVMaybeShowAdvancedNotice();
+    bool AVAdvancedNoticeShown = false;
     void AVUpdateFooter();
     /** The footer help text: the hovered control's help, or a temporary notice. */
     void AVUpdateHelpText();
@@ -328,6 +333,7 @@ public:
     friend bool runAVDexedDropTests();
     friend int AVRunUICpu(const juce::File& bankFile, int slot);
     friend int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& outputDirectory);
+    friend int AVRunAdvancedNotice(const juce::File& outputDirectory);
 #endif
 
 private:

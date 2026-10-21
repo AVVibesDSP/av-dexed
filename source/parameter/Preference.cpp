@@ -38,6 +38,7 @@ void DexedAudioProcessor::loadPreference() {
     }
 
     lowPowerUI = prop.getBoolValue(String("lowPowerUI"), false);
+    advancedNoticeHidden = prop.getBoolValue(String("advancedCpuNoticeHidden"), false);
 
     controllers.refresh();
 }
@@ -61,6 +62,7 @@ void DexedAudioProcessor::savePreference() {
     prop.setValue(String("zoomFactor"), zoomFactor);
 
     prop.setValue(String("lowPowerUI"), lowPowerUI);
+    prop.setValue(String("advancedCpuNoticeHidden"), advancedNoticeHidden);
 
     prop.save();
 }

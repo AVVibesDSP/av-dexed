@@ -767,6 +767,32 @@ void DexedAudioProcessorEditor::showAVView(AVView view, bool animate) {
     layersTabButton.setToggleState(view == AVView::layers, dontSendNotification);
     if (view == AVView::play)
         playView.refreshLabels();
+    if (view == AVView::advanced)
+        AVMaybeShowAdvancedNotice();
+}
+
+void DexedAudioProcessorEditor::AVMaybeShowAdvancedNotice() {
+    if (processor->advancedNoticeHidden || AVAdvancedNoticeShown || !isShowing())
+        return;
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    Timer::callAfterDelay(240, [safeThis] {
+        if (safeThis == nullptr || safeThis->AVAdvancedNoticeShown || safeThis->AVVisibleView != AVView::advanced
+            || !safeThis->isShowing() || !safeThis->AVCanShowNoticeNow())
+            return;
+        safeThis->AVAdvancedNoticeShown = true;
+        auto& language = AVDexedLanguageService::getInstance();
+        AVDexedPromptOverlay::Options options;
+        options.title = language.text("advancedCpuTitle");
+        options.message = language.text("advancedCpuMessage");
+        options.confirmText = language.text("gotIt");
+        options.altText = language.text("dontShowAgain");
+        options.onAlt = [safeThis] {
+            if (safeThis == nullptr) return;
+            safeThis->processor->advancedNoticeHidden = true;
+            safeThis->processor->savePreference();
+        };
+        safeThis->showAVPrompt(std::move(options), {});
+    });
 }
 
 void DexedAudioProcessorEditor::applyLanguage() {

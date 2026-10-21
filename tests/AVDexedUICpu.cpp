@@ -8,6 +8,11 @@
 // on top of that, in its own process). The message thread's own share (where
 // the editor paints) is printed apart.
 //
+// --advanced-notice <folder>: opens Advanced in a real window: the notice
+// that Advanced draws more while notes sound shows once (Spanish), "Don't show
+// again" is chosen and saved, and Advanced opens again without it; then the
+// English notice. The captures go to <folder>.
+//
 // --ui-resize <bank.syx> <slot> <folder>: the window is resized as the grip
 // does (zoom 1.0 → 0.8 → 1.6 → 1.25) while eight layers sound, then the keys
 // go up and everything settles. The window as the screen shows it then must
@@ -160,6 +165,7 @@ int AVRunUICpu(const juce::File& bankFile, int slot) {
     {
         DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
         if (!loadSound(processor, bankFile, slot)) return 2;
+        processor.advancedNoticeHidden = true;   // its dialog would cover Advanced
         RealTimeAudio audio(processor);
 
         // Counts the editor's real paints: a see-through cover over the whole
@@ -419,5 +425,105 @@ int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& output
         window.setVisible(false);
         window.clearContentComponent();
     }
+    return passed ? 0 : 1;
+}
+
+int AVRunAdvancedNotice(const juce::File& outputDirectory) {
+    using namespace juce;
+    outputDirectory.createDirectory();
+    IsolatedLibrary library;
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto oldLanguage = language.getLanguage();
+    // Language changes are saved: to the isolated library's preferences only.
+    language.configure(library.root.getChildFile(DexedAudioProcessor::preferencesFileName));
+    bool passed = true;
+    const auto check = [&passed](bool condition, const char* what) {
+        std::cout << (condition ? "  ok   " : "  FAIL ") << what << "\n";
+        passed &= condition;
+    };
+    // The dialog's pill with this text, if it is up.
+    const auto findPill = [](Component& root, const String& text) -> Button* {
+        std::function<Button*(Component&)> search = [&](Component& c) -> Button* {
+            for (auto* child : c.getChildren()) {
+                if (auto* button = dynamic_cast<TextButton*>(child))
+                    if (button->isShowing() && button->getButtonText() == text) return button;
+                if (auto* found = search(*child)) return found;
+            }
+            return nullptr;
+        };
+        return search(root);
+    };
+    {
+        DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
+        DocumentWindow window("AV Dexed notice", Colours::black, DocumentWindow::closeButton);
+        window.setUsingNativeTitleBar(true);
+        window.setTopLeftPosition(80, 80);
+        const auto open = [&](const char* locale) {
+            language.setLanguage(locale);
+            language.sendSynchronousChangeMessage();
+            auto* editor = new DexedAudioProcessorEditor(&processor);
+            window.setContentOwned(editor, true);
+            window.setVisible(true);
+            editor->applyLanguage();
+            editor->showAVView(DexedAudioProcessorEditor::AVView::play, false);
+            return editor;
+        };
+        // Each stage runs after the previous one's delay, in the app's own loop.
+        DexedAudioProcessorEditor* editor = nullptr;
+        std::vector<std::pair<int, std::function<void()>>> stages {
+            { 0, [&] {
+                processor.advancedNoticeHidden = false;
+                editor = open("es");
+                editor->showAVView(DexedAudioProcessorEditor::AVView::advanced, true);
+            } },
+            { 900, [&] {
+                captureWindow(outputDirectory.getChildFile("advanced-notice-es.png"));
+                check(editor->hasAVPromptOpen(), "the notice shows the first time Advanced opens");
+                auto* dontShow = findPill(*editor, language.text("dontShowAgain"));
+                check(dontShow != nullptr, "it has \"No volver a mostrar\"");
+                if (dontShow != nullptr) dontShow->triggerClick();
+            } },
+            { 600, [&] {
+                check(!editor->hasAVPromptOpen(), "\"No volver a mostrar\" closes it");
+                check(processor.advancedNoticeHidden, "and is remembered");
+                processor.advancedNoticeHidden = false;
+                processor.loadPreference();
+                check(processor.advancedNoticeHidden, "and saved with the preferences");
+                editor->showAVView(DexedAudioProcessorEditor::AVView::play, true);
+            } },
+            { 400, [&] { editor->showAVView(DexedAudioProcessorEditor::AVView::advanced, true); } },
+            { 900, [&] {
+                check(!editor->hasAVPromptOpen(), "Advanced opens again without it");
+                processor.advancedNoticeHidden = false;
+                editor = open("en");
+                editor->showAVView(DexedAudioProcessorEditor::AVView::advanced, true);
+            } },
+            { 900, [&] {
+                captureWindow(outputDirectory.getChildFile("advanced-notice-en.png"));
+                check(editor->hasAVPromptOpen(), "the English notice shows too");
+                if (auto* gotIt = findPill(*editor, language.text("gotIt"))) gotIt->triggerClick();
+            } },
+            { 600, [&] {
+                check(!editor->hasAVPromptOpen() && !processor.advancedNoticeHidden, "\"Got it\" only closes it");
+                MessageManager::getInstance()->stopDispatchLoop();
+            } },
+        };
+        size_t stage = 0;
+        std::function<void()> next;
+        next = [&] {
+            stages[stage].second();
+            if (++stage < stages.size()) Timer::callAfterDelay(stages[stage].first, next);
+        };
+        Timer::callAfterDelay(100, next);
+        MessageManager::getInstance()->runDispatchLoop();
+        window.setVisible(false);
+        window.clearContentComponent();
+    }
+    // As --render-ui: a test binary never resolved a data folder, so nothing is written back.
+    language.configure(library.oldAppDirectory == File() ? File()
+                       : library.oldAppDirectory.getChildFile(DexedAudioProcessor::preferencesFileName));
+    language.setLanguage(oldLanguage);
+    language.sendSynchronousChangeMessage();
+    std::cout << (passed ? "Advanced notice checks passed.\n" : "Advanced notice checks FAILED.\n");
     return passed ? 0 : 1;
 }

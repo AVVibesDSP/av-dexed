@@ -332,6 +332,8 @@ public :
     bool showKeyboard;
     /** Settings > Instrument > "Low power" (AVDexedTheme::lowPower). */
     bool lowPowerUI = false;
+    /** "Don't show again" on the notice that Advanced draws more while notes sound. */
+    bool advancedNoticeHidden = false;
     int getEngineType();
     void setEngineType(int rs);
 
