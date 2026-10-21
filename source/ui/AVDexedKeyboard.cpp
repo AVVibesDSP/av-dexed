@@ -58,10 +58,45 @@ AVDexedKeyboardComponent::AVDexedKeyboardComponent(MidiKeyboardState& state)
     setColour(shadowColourId, Colour(0x55000000));
 }
 
+void AVDexedKeyboardComponent::resized() {
+    MidiKeyboardComponent::resized();
+    AVBlackKeyShadows.clear();
+}
+
+void AVDexedKeyboardComponent::AVDrawBlackKeyShadow(Graphics& g, const Path& shape) {
+    // As DropShadow::drawForPath, but the blur covers the whole key's shadow,
+    // which is what a full repaint draws (a partial one blurred only the part
+    // it reached, a few levels apart at its edge).
+    constexpr int radius = 5;
+    const Point<int> offset { 0, 2 };
+    const auto bounds = shape.getBounds();
+    const auto area = (bounds.getSmallestIntegerContainer() + offset).expanded(radius + 1);
+    if (area.getWidth() <= 2 || area.getHeight() <= 2 || !g.clipRegionIntersects(area))
+        return;
+    auto& shadow = AVBlackKeyShadows[{ bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight() }];
+    if (!shadow.isValid()) {
+        const auto imageType = g.getInternalContext().getPreferredImageTypeForTemporaryImages();
+        shadow = Image(Image::SingleChannel, area.getWidth(), area.getHeight(), true, *imageType);
+        {
+            Graphics shadowGraphics(shadow);
+            shadowGraphics.setColour(Colours::white);
+            shadowGraphics.fillPath(shape, AffineTransform::translation(float(offset.x - area.getX()),
+                                                                        float(offset.y - area.getY())));
+        }
+        shadow.getPixelData()->applySingleChannelBoxBlurEffect(radius);
+    }
+    g.setColour(Colour(0x70000000));
+    g.drawImageAt(shadow, area.getX(), area.getY(), true);
+}
+
 void AVDexedKeyboardComponent::drawWhiteNote(int midiNoteNumber, Graphics& g,
                                               Rectangle<float> area, bool isDown,
                                               bool isOver, Colour lineColour,
                                               Colour textColour) {
+    // JUCE paints every key on every paint: one wholly outside the area being
+    // painted (a pressed key's neighbours) would change no pixel.
+    if (!g.clipRegionIntersects(area.expanded(1.0f).getSmallestIntegerContainer()))
+        return;
     // A GOZO-like gap (about 2.4 px) lets the rounded bottoms read as shapes.
     const auto key = area.reduced(1.2f, 0.0f);
     const auto shape = bottomRoundedKey(key, bottomRadius(key));
@@ -96,7 +131,9 @@ void AVDexedKeyboardComponent::drawBlackNote(int, Graphics& g, Rectangle<float> 
                                               bool isDown, bool isOver, Colour) {
     const auto key = area.reduced(0.45f, 0.0f);
     const auto shape = bottomRoundedKey(key, bottomRadius(key));
-    DropShadow(Colour(0x70000000), 5, { 0, 2 }).drawForPath(g, shape);
+    AVDrawBlackKeyShadow(g, shape);
+    if (!g.clipRegionIntersects(area.expanded(1.0f).getSmallestIntegerContainer()))
+        return;
 
     g.setGradientFill(ColourGradient(Colour(0xff12222b), key.getCentreX(), key.getY(),
                                     Colour(0xff000000), key.getCentreX(), key.getBottom(), false));

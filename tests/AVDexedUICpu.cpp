@@ -187,6 +187,20 @@ int AVRunUICpu(const juce::File& bankFile, int slot) {
                 if (auto* parameter = processor.parameters.getParameter(id.getParamID()))
                     parameter->setValueNotifyingHost(on ? value : 0.0f);
         };
+        // An arpeggio, eight notes a second over two octaves: the keyboard and
+        // the glow change on every note.
+        bool arpeggiating = false;
+        int arpeggioStep = 0;
+        std::function<void()> arpeggio;
+        arpeggio = [&] {
+            if (!arpeggiating) return;
+            static constexpr int pattern[] { 48, 52, 55, 60, 64, 67, 72, 67, 64, 60, 55, 52 };
+            const int count = int(std::size(pattern));
+            processor.keyboardState.noteOff(1, pattern[(arpeggioStep + count - 1) % count], 0.0f);
+            processor.keyboardState.noteOn(1, pattern[arpeggioStep % count], 0.8f);
+            ++arpeggioStep;
+            Timer::callAfterDelay(125, arpeggio);
+        };
         // A stack starts by silencing every layer: the keys go down a moment after.
         const auto stackThenPlay = [&] {
             play(false);
@@ -207,8 +221,16 @@ int AVRunUICpu(const juce::File& bankFile, int slot) {
                 editor->showAVView(DexedAudioProcessorEditor::AVView::play, false);
                 editor->showAVSettingsPage(AVDexedSettingsPanel::AVPage::instrument);
             } },
-            { "window hidden, 8 layers, 16 keys, effects", [&] {
+            { "Play page, 8 layers, effects, arpeggio", [&] {
                 editor->AVCloseSettings(true);
+                play(false);
+                arpeggiating = true;
+                arpeggio();
+            } },
+            { "window hidden, 8 layers, effects", [&] {
+                arpeggiating = false;
+                processor.keyboardState.allNotesOff(1);
+                play(true);
                 window.setVisible(false);
             } },
         };

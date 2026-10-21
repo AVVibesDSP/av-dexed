@@ -4,6 +4,8 @@
 #pragma once
 
 #include <juce_audio_utils/juce_audio_utils.h>
+#include <map>
+#include <tuple>
 
 /** Vector piano that keeps JUCE's MidiKeyboardState note tracking and input
     behaviour while using the AV Dexed key treatment. */
@@ -20,6 +22,11 @@ public:
                        juce::Colour textColour) override;
     void drawBlackNote(int midiNoteNumber, juce::Graphics& g, juce::Rectangle<float> area,
                        bool isDown, bool isOver, juce::Colour noteFillColour) override;
+    void resized() override;
 private:
     bool AVMouseHeld = false;
+    /** DropShadow (0x70000000, 5, {0, 2}).drawForPath for a black key, with
+        the blur made once per key (by its place) instead of on every paint. */
+    void AVDrawBlackKeyShadow(juce::Graphics& g, const juce::Path& shape);
+    std::map<std::tuple<float, float, float, float>, juce::Image> AVBlackKeyShadows;
 };
