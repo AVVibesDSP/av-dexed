@@ -11,7 +11,9 @@
 // does (zoom 1.0 → 0.8 → 1.6 → 1.25) while eight layers sound, then the keys
 // go up and everything settles. The window as the screen shows it then must
 // equal the same window after a full repaint: a region that was not redrawn
-// (or drawn black) after the resize would differ. The captures go to <folder>.
+// (or drawn black) after the resize would differ. Then the same window is
+// painted with no cached images (AVDexedPixelCache off): it must look the
+// same. The captures go to <folder>.
 
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
@@ -19,6 +21,7 @@
 #include <unistd.h>
 #endif
 #include "../source/ui/PluginEditor.h"
+#include "../source/ui/AVDexedPixelCache.h"
 #include "../source/core/AVDexedLibrary.h"
 #include "../source/parameter/Model.h"
 #include <atomic>
@@ -271,7 +274,7 @@ int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& output
         zooms.push_back(1.25f);
 
         size_t step = 0;
-        Image settled, repainted, repaintedAgain;
+        Image settled, repainted, repaintedAgain, direct;
         std::function<void()> next;
         const auto after = [&](int milliseconds, std::function<void()> then) {
             Timer::callAfterDelay(milliseconds, [&, then] { then(); });
@@ -297,7 +300,13 @@ int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& output
                         editor->repaint();
                         after(600, [&] {
                             repaintedAgain = captureWindow(outputDirectory.getChildFile("resize-repainted-again.png"));
-                            finish();
+                            AVDexedPixelCache::enabled = false;
+                            editor->repaint();
+                            after(600, [&] {
+                                direct = captureWindow(outputDirectory.getChildFile("resize-direct.png"));
+                                AVDexedPixelCache::enabled = true;
+                                finish();
+                            });
                         });
                     });
                 });
@@ -311,13 +320,18 @@ int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& output
 
         // Two full repaints in a row: what differs between them is the renderer's
         // own noise (gradients are dithered), not something left undrawn.
+        // Pixels that differ, and by how many levels at most.
         const auto differences = [](const Image& a, const Image& b) {
-            int count = 0;
+            int count = 0, largest = 0;
             if (a.isValid() && b.isValid() && a.getBounds() == b.getBounds())
                 for (int y = 0; y < a.getHeight(); ++y)
-                    for (int x = 0; x < a.getWidth(); ++x)
-                        count += a.getPixelAt(x, y).getARGB() != b.getPixelAt(x, y).getARGB() ? 1 : 0;
-            return count;
+                    for (int x = 0; x < a.getWidth(); ++x) {
+                        const auto p = a.getPixelAt(x, y), q = b.getPixelAt(x, y);
+                        const int change = jmax(std::abs(p.getRed() - q.getRed()), std::abs(p.getGreen() - q.getGreen()),
+                                                std::abs(p.getBlue() - q.getBlue()));
+                        if (change > 0) { ++count; largest = jmax(largest, change); }
+                    }
+            return String(count) + " px (at most " + String(largest) + " levels)";
         };
         if (settled.isNull() || repainted.isNull() || settled.getBounds() != repainted.getBounds()) {
             std::cout << "UI resize: the window could not be captured (screen recording permission?)\n";
@@ -347,7 +361,8 @@ int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& output
                       << settled.getHeight() << " px, " << different << " px differ from a full repaint"
                       << (different > 0 ? " in " + area.toString() : String()) << " (" << slight << " by 16 or less, "
                       << footer << " in the footer figures); two full repaints differ in "
-                      << differences(repainted, repaintedAgain) << " px\n";
+                      << differences(repainted, repaintedAgain) << "; with no cached images: "
+                      << differences(repaintedAgain, direct) << "\n";
         }
         window.setVisible(false);
         window.clearContentComponent();

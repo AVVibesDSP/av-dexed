@@ -26,6 +26,7 @@
 #include "parameter/DexedApvts.h"
 #include "parameter/Model.h"
 #include "../util/CachedParameter.h"
+#include "../AVDexedPixelCache.h"
 
 #include "../../debugger/Logger.h"
 
@@ -42,29 +43,57 @@ class AlgoDisplay : public juce::Component, public juce::SettableTooltipClient, 
     std::array<float, 6> levelTargets {};
     double lastGlowTick = 0.0;
     void timerCallback() override;
+    /** Repaints only the node `op` and its glow: the rest of the diagram is
+        unchanged by a level (paint skips what lies outside that area). */
+    void repaintGlow(size_t op);
     std::array<juce::Rectangle<float>, 6> opBounds {};
     juce::AffineTransform heroTransform;
     int hoveredOp = -1;
+    // Play: the empty grid and each operator's body and wires, as images at
+    // the screen's pixels; a glow frame draws them back around the glows.
+    AVDexedPixelCache gridLayer;
+    std::array<AVDexedPixelCache, 6> opLayers;
+    void invalidateLayers() {
+        gridLayer.invalidate();
+        for (auto& layer : opLayers) layer.invalidate();
+    }
 
     void displayOp(juce::Graphics &g, char id, int x, int y, char link, char fb);
     int operatorAt(juce::Point<float> position) const;
     juce::String frequencyText(int op) const;
+    // Each operator's frequency parameters, looked up once; the text is made
+    // again only when one of them changes (paint runs on every glow frame).
+    struct FrequencyLabel {
+        std::atomic<float>* coarse = nullptr;
+        std::atomic<float>* fine = nullptr;
+        std::atomic<float>* fixed = nullptr;
+        float coarseShown = 0.0f, fineShown = 0.0f, fixedShown = 0.0f;
+        juce::String text;
+    };
+    mutable std::array<FrequencyLabel, 6> frequencyLabels;
 public:
     AlgoDisplay(DexedApvts &apvts) : state(apvts) {
         algoValue.referTo(apvts, IDs::algorithm.name);
         algoValue.callback = [this]() {
+            invalidateLayers();
             repaint();
         };
 
         for (int i=0;i<6;i++) {
             opSwitch[i].referTo(apvts, IDs::on.op(i).name);
             opSwitch[i].callback = [this]() {
+                invalidateLayers();
                 repaint();
             };
+            auto& label = frequencyLabels[size_t(i)];
+            label.coarse = apvts.getRawParameterValue(IDs::frequencyCoarse.op(i).name);
+            label.fine = apvts.getRawParameterValue(IDs::frequencyFine.op(i).name);
+            label.fixed = apvts.getRawParameterValue(IDs::mode.op(i).name);
         }
     }
 
     void paint(juce::Graphics &g) override;
+    void resized() override { invalidateLayers(); }
     void setHeroStyle(bool shouldUseHeroStyle);
     /** Normalised operator output levels (0..1), op 1 first. */
     void setLevels(const std::array<float, 6>& newLevels);
