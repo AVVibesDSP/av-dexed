@@ -1175,3 +1175,57 @@ int AVRunUIStress(const juce::File& bankFile, int slot, int minutes) {
     }
     return result;
 }
+
+/** --ui-sounds <bank.syx> <slot>: the next sound 60 times (every 300 ms, Play
+    page, a real window, eight layers stacked first), as the arrow beside the
+    sound's name does: how long each change takes on the message thread, and
+    the first paint after it. */
+int AVRunUISounds(const juce::File& bankFile, int slot) {
+    using namespace juce;
+    IsolatedLibrary library;
+    {
+        DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
+        if (!loadSound(processor, bankFile, slot)) return 2;
+        processor.advancedNoticeHidden = true;
+        RealTimeAudio audio(processor);
+        DocumentWindow window("AV Dexed UI sounds", Colours::black, DocumentWindow::closeButton);
+        auto* editor = new DexedAudioProcessorEditor(&processor);
+        window.setUsingNativeTitleBar(true);
+        window.setContentOwned(editor, true);
+        window.setTopLeftPosition(80, 80);
+        window.setVisible(true);
+        editor->showAVView(DexedAudioProcessorEditor::AVView::play, false);
+        processor.stackAVLayers(8, 7.0f);
+        std::vector<double> changes, paints;
+        struct FirstPaint : ComponentListener {
+            double since = -1.0, took = -1.0;
+            void componentPainted(Component&, const ComponentPaintDiagnostics&) override {
+                if (since >= 0.0 && took < 0.0) took = Time::getMillisecondCounterHiRes() - since;
+            }
+        } first;
+        window.addComponentListener(&first);
+        int left = 60;
+        std::function<void()> step;
+        step = [&] {
+            if (first.took >= 0.0) paints.push_back(first.took);
+            if (left-- == 0) { MessageManager::getInstance()->stopDispatchLoop(); return; }
+            first.took = -1.0;
+            first.since = Time::getMillisecondCounterHiRes();
+            editor->playView.navigatePreset(1);
+            changes.push_back(Time::getMillisecondCounterHiRes() - first.since);
+            Timer::callAfterDelay(300, step);
+        };
+        Timer::callAfterDelay(1500, step);
+        MessageManager::getInstance()->runDispatchLoop();
+        window.removeComponentListener(&first);
+        const auto summary = [](std::vector<double> v) {
+            if (v.empty()) return String("none");
+            std::sort(v.begin(), v.end());
+            return "median " + String(v[v.size() / 2], 1) + " ms, max " + String(v.back(), 1) + " ms";
+        };
+        std::cout << "UI sounds: change " << summary(changes) << "; until the first paint " << summary(paints) << "\n";
+        window.setVisible(false);
+        window.clearContentComponent();
+    }
+    return 0;
+}
