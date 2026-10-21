@@ -131,9 +131,7 @@ void AlgoDisplay::displayOp(juce::Graphics &g, char id, int x, int y, char link,
         const auto node = Rectangle<float>(float(x) - 1.0f, float(y) - 1.0f, 18.0f, 14.0f);
         const size_t index = size_t(id - 1);
         opBounds[index] = node.transformedBy(heroTransform);
-        // Opacity grows from exactly zero, so the glow fades rather than
-        // switching on at a minimum strength.
-        const float glow = opOn ? std::pow(levels[index], 0.7f) : 0.0f;
+        const float glow = glowOf(index);
         if (glow > 0.002f && g.clipRegionIntersects(node.expanded(3.2f).transformedBy(heroTransform).getSmallestIntegerContainer())) {
             Graphics::ScopedSaveState state(g);
             g.addTransform(heroTransform);
@@ -516,11 +514,27 @@ void AlgoDisplay::timerCallback() {
         float next = levels[i] + (target - levels[i]) * (target > levels[i] ? rise : fall);
         if (std::abs(target - next) <= 0.002f) next = target;
         else moving = true;
-        // A muted operator never glows: its level changes nothing on screen.
-        if (next != levels[i] && opSwitch[i]) repaintGlow(i);
         levels[i] = next;
+        const int pixels = glowPixels(i);
+        if (pixels != glowOnScreen[i]) {
+            glowOnScreen[i] = pixels;
+            repaintGlow(i);
+        }
     }
     if (!moving) stopTimer();
+}
+
+float AlgoDisplay::glowOf(size_t op) const {
+    // Opacity grows from exactly zero, so the glow fades rather than
+    // switching on at a minimum strength.
+    return opSwitch[op] ? std::pow(levels[op], 0.7f) : 0.0f;
+}
+
+int AlgoDisplay::glowPixels(size_t op) const {
+    const float glow = glowOf(op);
+    if (!(glow > 0.002f)) return -1;
+    return (int(AVDexedTheme::oceanHighlight.withAlpha(0.32f * glow).getAlpha()) << 8)
+         | int(AVDexedTheme::oceanHighlight.withAlpha(0.44f * glow).getAlpha());
 }
 
 void AlgoDisplay::repaintGlow(size_t op) {

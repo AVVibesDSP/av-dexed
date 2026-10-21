@@ -46,6 +46,13 @@ class AlgoDisplay : public juce::Component, public juce::SettableTooltipClient, 
     /** Repaints only the node `op` and its glow: the rest of the diagram is
         unchanged by a level (paint skips what lies outside that area). */
     void repaintGlow(size_t op);
+    /** The glow's strength as paint draws it (0 when the operator is off). */
+    float glowOf(size_t op) const;
+    /** What the glow of `op` puts on screen: -1 (none) or its two fills'
+        alpha bytes. Most frames move a level by less than one byte: those
+        are not repainted, which changes no pixel. */
+    int glowPixels(size_t op) const;
+    std::array<int, 6> glowOnScreen { -1, -1, -1, -1, -1, -1 };
     std::array<juce::Rectangle<float>, 6> opBounds {};
     juce::AffineTransform heroTransform;
     int hoveredOp = -1;
