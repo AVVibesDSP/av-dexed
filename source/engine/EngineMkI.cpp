@@ -64,20 +64,15 @@ static uint16_t sinExpTable[SINEXP_TABLESIZE];
 
 const uint16_t ENV_MAX = 1<<ENV_BITDEPTH;
 
+// The quarter of the wave as masks, not a switch: with FM the quarter changes
+// from sample to sample and the switch was a branch the processor mispredicted
+// (a modulated operator took 1.57 times as long). Mirrored in the 2nd and 4th
+// quarters, negative in the 3rd and 4th: the same table entries and bits.
 static inline uint16_t sinLog(uint16_t phi) {
-    const uint16_t SINLOG_TABLEFILTER = SINLOG_TABLESIZE-1;
-    const uint16_t index = (phi & SINLOG_TABLEFILTER);
-    
-    switch( ( phi & (SINLOG_TABLESIZE * 3) ) ) {
-        case 0:
-            return sinLogTable[index];
-        case SINLOG_TABLESIZE:
-            return sinLogTable[index ^ SINLOG_TABLEFILTER];
-        case SINLOG_TABLESIZE * 2 :
-            return sinLogTable[index] | NEGATIVE_BIT;
-        default:
-            return sinLogTable[index ^ SINLOG_TABLEFILTER] | NEGATIVE_BIT;
-    }
+    const uint32_t SINLOG_TABLEFILTER = SINLOG_TABLESIZE-1;
+    const uint32_t quarter = phi >> SINLOG_BITDEPTH;
+    const uint32_t index = (phi & SINLOG_TABLEFILTER) ^ ((0u - (quarter & 1u)) & SINLOG_TABLEFILTER);
+    return uint16_t(sinLogTable[index] | ((0u - ((quarter >> 1) & 1u)) & NEGATIVE_BIT));
 }
 
 EngineMkI::EngineMkI() {
@@ -124,6 +119,11 @@ EngineMkI::EngineMkI() {
 #endif
 }
 
+#if defined(AVDEXED_TESTING)
+const uint16_t* EngineMkI::testSinLogTable() { return sinLogTable; }
+const uint16_t* EngineMkI::testSinExpTable() { return sinExpTable; }
+#endif
+
 inline int32_t mkiSin(int32_t phase, uint16_t env) {
     uint16_t expVal = sinLog(phase >> (22 - SINLOG_BITDEPTH)) + (env);
     //int16_t expValShow = expVal;
@@ -146,10 +146,8 @@ inline int32_t mkiSin(int32_t phase, uint16_t env) {
     }
 #endif
     
-    if( isSigned )
-        return (-result - 1) << 13;
-    else
-        return result << 13;
+    // -result - 1 is ~result: the sign as a mask instead of a branch.
+    return int32_t((uint32_t(result) ^ (0u - uint32_t(isSigned))) << 13);
 }
 
 void EngineMkI::compute(int32_t *output, const int32_t *input,

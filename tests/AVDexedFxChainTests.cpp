@@ -18,6 +18,7 @@ bool runAVDexedDropTests();
 bool runAVDexedSysexTests();
 bool runAVDexedLayerTests();
 bool runAVDexedPerformanceTests();
+bool runAVDexedKernelTests();
 int AVRunGolden(const juce::StringArray& arguments);
 int AVRunImport(const juce::StringArray& arguments);
 int AVRunPerformanceReport(const juce::File& file);
@@ -145,6 +146,7 @@ int main(int argc, char** argv)
     passed &= runAVDexedSysexTests();
     passed &= runAVDexedLayerTests();
     passed &= runAVDexedPerformanceTests();
+    passed &= runAVDexedKernelTests();
     std::cout << (passed ? "AV Dexed regression tests passed.\n" : "AV Dexed regression tests FAILED.\n");
     return passed ? 0 : 1;
 }

@@ -43,6 +43,12 @@ public:
     void compute_fb2(int32_t *output, FmOpParams *params, int32_t gain01, int32_t gain02, int32_t *fb_buf, int fb_shift);
     
     void compute_fb3(int32_t *output, FmOpParams *params, int32_t gain01, int32_t gain02, int32_t *fb_buf, int fb_shift);
+
+#if defined(AVDEXED_TESTING)
+    /** The sine tables, for the kernel tests' copy of the original code. */
+    static const uint16_t* testSinLogTable();
+    static const uint16_t* testSinExpTable();
+#endif
 };
 
 

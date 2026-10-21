@@ -71,23 +71,17 @@ uint16_t sinExpTable[256] = {
     937, 942, 948, 953, 959, 964, 969, 975, 980, 986, 991, 996, 1002, 1007, 1013, 1018
 };
 
-inline uint16_t sinLog(uint16_t phi) {
-    const uint8_t index = (phi & 0xff);
+#if defined(AVDEXED_TESTING)
+const uint16_t* EngineOpl::testSinLogTable() { return sinLogTable; }
+const uint16_t* EngineOpl::testSinExpTable() { return sinExpTable; }
+#endif
 
-    switch( ( phi & 0x0300 ) ) {
-        case 0x0000:
-            // rising quarter wave  Shape A
-            return sinLogTable[index];
-        case 0x0100:
-            // falling quarter wave  Shape B
-            return sinLogTable[index ^ 0xFF];
-        case 0x0200:
-            // rising quarter wave -ve  Shape C
-            return sinLogTable[index] | SignBit;
-        default:
-            // falling quarter wave -ve  Shape D
-            return sinLogTable[index ^ 0xFF] | SignBit;
-    }
+// Shapes A-D (rising, falling, rising -ve, falling -ve) as masks rather than a
+// switch the processor mispredicts under FM: the same table entries and bits.
+inline uint16_t sinLog(uint16_t phi) {
+    const uint32_t quarter = (phi >> 8) & 3u;
+    const uint32_t index = (phi & 0xFFu) ^ ((0u - (quarter & 1u)) & 0xFFu);
+    return uint16_t(sinLogTable[index] | ((0u - (quarter >> 1)) & SignBit));
 }
 
 // 16 env units are ~3dB and halve the output
@@ -108,12 +102,8 @@ inline int16_t oplSin( uint16_t phase, uint16_t env ) {
     result <<= 1;
     result >>= ( expVal >> 8 ); // exp
 
-    if( isSigned ) {
-        // -1 for one's complement
-        return -result - 1;
-    } else {
-        return result;
-    }    
+    // -result - 1 (one's complement) is ~result: the sign as a mask.
+    return int16_t(result ^ (0u - uint32_t(isSigned)));
 }
 
 void EngineOpl::compute(int32_t *output, const int32_t *input, int32_t phase0, int32_t freq, int32_t gain1, int32_t gain2, bool add) {
