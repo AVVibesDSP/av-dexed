@@ -84,14 +84,18 @@ struct FocusKeyListener final : public juce::KeyListener {
         return false;
     }
 };
+/** Settings > Instrument > "Low power": animations at 30 frames a second,
+    text in one solid tone, black keys without their shadow. Off by default. */
+inline bool lowPower = false;
 /** Vertical text fill from `top` to `bottom` over y1..y2. CoreGraphics paints a
     gradient glyph run as one clipped outline per glyph, and on 1x displays thin
     stems such as "l" or "-" can drop out of small text. Below ~16 device pixels
     the text uses one solid tone between both stops, which CoreText rasterises
-    normally; larger text keeps the gradient. Returns whether it is a gradient. */
+    normally; larger text keeps the gradient (in low power, the solid tone too).
+    Returns whether it is a gradient. */
 inline bool textFill(juce::Graphics& g, const juce::Font& textFont, juce::Colour top, juce::Colour bottom,
                      float y1, float y2) {
-    if (textFont.getHeight() * g.getInternalContext().getPhysicalPixelScaleFactor() < 16.0f) {
+    if (lowPower || textFont.getHeight() * g.getInternalContext().getPhysicalPixelScaleFactor() < 16.0f) {
         g.setColour(top.interpolatedWith(bottom, 0.4f));
         return false;
     }

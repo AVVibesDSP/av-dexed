@@ -330,6 +330,8 @@ public :
     float vuSignal;
     double vuDecayFactor = 0.999361; // (for 48 kHz sampling rate)
     bool showKeyboard;
+    /** Settings > Instrument > "Low power" (AVDexedTheme::lowPower). */
+    bool lowPowerUI = false;
     int getEngineType();
     void setEngineType(int rs);
 

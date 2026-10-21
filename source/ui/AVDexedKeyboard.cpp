@@ -131,7 +131,7 @@ void AVDexedKeyboardComponent::drawBlackNote(int, Graphics& g, Rectangle<float> 
                                               bool isDown, bool isOver, Colour) {
     const auto key = area.reduced(0.45f, 0.0f);
     const auto shape = bottomRoundedKey(key, bottomRadius(key));
-    AVDrawBlackKeyShadow(g, shape);
+    if (!AVDexedTheme::lowPower) AVDrawBlackKeyShadow(g, shape);
     if (!g.clipRegionIntersects(area.expanded(1.0f).getSmallestIntegerContainer()))
         return;
 

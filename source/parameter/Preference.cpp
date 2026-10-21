@@ -37,6 +37,8 @@ void DexedAudioProcessor::loadPreference() {
         zoomFactor = prop.getDoubleValue(String("zoomFactor"));
     }
 
+    lowPowerUI = prop.getBoolValue(String("lowPowerUI"), false);
+
     controllers.refresh();
 }
 
@@ -57,6 +59,8 @@ void DexedAudioProcessor::savePreference() {
     prop.setValue(String("showKeyboard"), showKeyboard);
 
     prop.setValue(String("zoomFactor"), zoomFactor);
+
+    prop.setValue(String("lowPowerUI"), lowPowerUI);
 
     prop.save();
 }

@@ -88,6 +88,11 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
 
     showKeyboard->setBounds (264, 96, 56, 24);
 
+    lowPower.reset (new LightedToggleButton ("lowPower"));
+    addAndMakeVisible (lowPower.get());
+    lowPower->setButtonText (juce::String());
+    lowPower->addListener (this);
+
     // Wheel modulation components (owned by attachments_)
     auto whlRange = std::make_unique<juce::Slider>(IDs::modWheel.name);
     whlRange->setSliderStyle (juce::Slider::RotaryVerticalDrag);
@@ -324,6 +329,7 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     sysexChl->setTitle("Sysex Channel");
     engineType->setTitle("Engine Resolution");
     showKeyboard->setTitle("Show Keyboard");
+    lowPower->setTitle("Low Power");
     sclButton->setTitle("Scale Button");
     kbmButton->setTitle("Keyboard Mapping Button");
     showTunButton->setTitle("Show Tuning Button");
@@ -342,6 +348,7 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     sysexChl->setWantsKeyboardFocus(true);
     engineType->setWantsKeyboardFocus(true);
     showKeyboard->setWantsKeyboardFocus(true);
+    lowPower->setWantsKeyboardFocus(true);
     sclButton->setWantsKeyboardFocus(true);
     kbmButton->setWantsKeyboardFocus(true);
     showTunButton->setWantsKeyboardFocus(true);
@@ -374,6 +381,7 @@ ParamDialog::ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc) : apvts_
     };
     AVGlissandoPills = pills(AVChild(IDs::glissando.name));
     AVShowKeyboardPills = pills(showKeyboard.get());
+    AVLowPowerPills = pills(lowPower.get());
     AVTransposePills = pills(AVChild(IDs::transposeTuningScale.name));
     AVMpePills = pills(mpeEnabled.get());
     for (const auto& name : { IDs::modWheelPitch.name, IDs::modWheelAmp.name, IDs::modWheelEgBias.name,
@@ -402,6 +410,7 @@ ParamDialog::~ParamDialog() {
     sysexChl = nullptr;
     engineType = nullptr;
     showKeyboard = nullptr;
+    lowPower = nullptr;
     sclButton = nullptr;
     kbmButton = nullptr;
     showTunButton = nullptr;
@@ -437,10 +446,10 @@ void ParamDialog::paint(Graphics& g) {
 
     S::heading(g, language.text("instrumentGeneral"), { 0.0f, 0.0f, column, 24.0f });
     const char* leftKeys[] { "pitchBendUp", "pitchBendDown", "pitchBendStep", "portamentoRate", "glissando",
-                             "showKeyboard", "uiScaling", "engineResolution" };
-    for (int i = 0; i < 8; ++i)
+                             "showKeyboard", "uiScaling", "engineResolution", "lowPowerMode" };
+    for (int i = 0; i < 9; ++i)
         S::label(g, language.text(leftKeys[i]) + ":", { 0.0f, row(i), 170.0f, S::rowHeight });
-    S::heading(g, language.text("profile"), { 0.0f, 340.0f, column, 24.0f });
+    S::heading(g, language.text("profile"), { 0.0f, 376.0f, column, 24.0f });
 
     S::heading(g, language.text("controllerModulation"), { right, 0.0f, column, 24.0f });
     S::hint(g, language.text("modRange"), { right + 134.0f, 28.0f, 120.0f, 20.0f });
@@ -479,10 +488,11 @@ void ParamDialog::resized() {
     engineType->setBounds(field, row(7), fieldWidth, 30);
     sysexIn->setBounds(field, row(7), fieldWidth, 30);     // hidden: lives in Settings > SysEx
     sysexChl->setBounds(field, row(7), fieldWidth, 30);
+    AVLowPowerPills->setBounds(field, row(8), pillsWidth(*AVLowPowerPills, fieldWidth), 30);
 
     const int save = AVDexedSettingsStyle::pillWidth(storeButton->getButtonText(), 110);
-    profileSelector->setBounds(0, 374, column - save - 8, 30);
-    storeButton->setBounds(column - save, 374, save, 30);
+    profileSelector->setBounds(0, 410, column - save - 8, 30);
+    storeButton->setBounds(column - save, 410, save, 30);
 
     const String ranges[] { IDs::modWheel.name, IDs::modFoot.name, IDs::modBreath.name, IDs::modAftertouch.name };
     const String pitch[] { IDs::modWheelPitch.name, IDs::modFootPitch.name, IDs::modBreathPitch.name, IDs::modAftertouchPitch.name };
@@ -516,6 +526,7 @@ void ParamDialog::AVRefreshLanguage() {
         { pitchRangeUp.get(), "pitchBendUp" }, { pitchRangeDn.get(), "pitchBendDown" },
         { pitchStep.get(), "pitchBendStep" }, { sysexIn.get(), "sysexInput" }, { sysexChl.get(), "sysexChannel" },
         { engineType.get(), "engineResolution" }, { showKeyboard.get(), "showKeyboard" },
+        { lowPower.get(), "lowPowerMode" },
         { sclButton.get(), "loadScale" }, { kbmButton.get(), "loadKeyboardMap" },
         { showTunButton.get(), "showTuning" }, { resetTuningButton.get(), "resetTuning" },
         { mpePBRange.get(), "mpeBendRange" }, { mpeEnabled.get(), "mpeEnabled" },
@@ -552,8 +563,11 @@ void ParamDialog::AVRefreshLanguage() {
     showTunButton->setButtonText(language.text("show"));
     resetTuningButton->setButtonText(language.text("reset"));
     storeButton->setButtonText(language.text("storeProfile"));
-    for (auto* pair : { AVGlissandoPills.get(), AVShowKeyboardPills.get(), AVTransposePills.get(), AVMpePills.get() })
+    for (auto* pair : { AVGlissandoPills.get(), AVShowKeyboardPills.get(), AVTransposePills.get(), AVMpePills.get(),
+                        AVLowPowerPills.get() })
         if (pair != nullptr) pair->setTexts(language.text("optionOn"), language.text("optionOff"));
+    // The footer explains what low power gives up.
+    if (AVLowPowerPills != nullptr) AVLowPowerPills->setHelp(language.text("lowPowerModeHelp"));
     resized();
     // changeItemText leaves the visible caption stale, and getSelectedId() reads
     // 0 once caption and item differ: keep the ids and refresh both displays.
@@ -684,7 +698,7 @@ void ParamDialog::buttonClicked (juce::Button* buttonThatWasClicked) {
 
 //[MiscUserCode] You can add your own definitions of your custom methods or any other code here...
 
-void ParamDialog::setDialogValues(Controllers &c, SysexComm &mgr, bool showKey, float dpiScaleFactor) {
+void ParamDialog::setDialogValues(Controllers &c, SysexComm &mgr, bool showKey, float dpiScaleFactor, bool lowPowerOn) {
     sysexChl->setValue(mgr.getChl() + 1);
 
     // Modulation components (whl, ft, br, at) are synced via parameter attachments
@@ -698,6 +712,7 @@ void ParamDialog::setDialogValues(Controllers &c, SysexComm &mgr, bool showKey, 
     sysexIn->setSelectedItemIndex(inputIndex, dontSendNotification);
 
     showKeyboard->setToggleState(showKey, NotificationType::dontSendNotification);
+    lowPower->setToggleState(lowPowerOn, NotificationType::dontSendNotification);
 
     const auto exactScale = String(dpiScaleFactor * 100.0f, 1).trimCharactersAtEnd("0").trimCharactersAtEnd(".") + " %";
     int selectedId = 0;
@@ -711,7 +726,7 @@ void ParamDialog::setDialogValues(Controllers &c, SysexComm &mgr, bool showKey, 
     scalingFactor->setSelectedId(selectedId, dontSendNotification);
 }
 
-bool ParamDialog::getDialogValues(Controllers &c, SysexComm &mgr, bool *showKey, float *dpiScaleFactor) {
+bool ParamDialog::getDialogValues(Controllers &c, SysexComm &mgr, bool *showKey, float *dpiScaleFactor, bool *lowPowerOn) {
     bool ret = true;
 
     // Modulation components (whl, ft, br, at) are synced via parameter attachments
@@ -728,6 +743,7 @@ bool ParamDialog::getDialogValues(Controllers &c, SysexComm &mgr, bool *showKey,
     mgr.setChl(sysexChl->getValue() - 1);
 
     *showKey = showKeyboard->getToggleState();
+    *lowPowerOn = lowPower->getToggleState();
 
     *dpiScaleFactor = jlimit(DexedAudioProcessorEditor::AVMinZoom, 1.6f, scalingFactor->getText().getFloatValue() / 100.0f);
     return ret;

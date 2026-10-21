@@ -4,6 +4,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include "AVDexedTheme.h"
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -53,9 +54,11 @@ public:
         }
         void frame(double displaySeconds) {
             if (entries.empty()) return;
-            // 120 Hz (and faster) screens: every other refresh or so, as 60 Hz.
-            // The screen's own frame times are regular; the message queue's are not.
-            if (lastFrame >= 0.0 && displaySeconds - lastFrame < 0.0125 && displaySeconds >= lastFrame) return;
+            // 120 Hz (and faster) screens: every other refresh or so, as 60 Hz;
+            // in low power, 30 Hz. The screen's own frame times are regular;
+            // the message queue's are not.
+            const double shortest = AVDexedTheme::lowPower ? 0.030 : 0.0125;
+            if (lastFrame >= 0.0 && displaySeconds - lastFrame < shortest && displaySeconds >= lastFrame) return;
             lastFrame = displaySeconds;
             const double now = juce::Time::getMillisecondCounterHiRes();
             // A tick may start or stop others: entries are only marked during

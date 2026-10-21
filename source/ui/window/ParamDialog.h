@@ -23,8 +23,8 @@ public:
     ParamDialog (DexedApvts &apvts, DexedAudioProcessor &proc);
     ~ParamDialog() override;
 
-    void setDialogValues(Controllers &c, SysexComm &mgr, bool showKeyboard, float dpiScaleFactor);
-    bool getDialogValues(Controllers &c, SysexComm &mgr, bool *showKeyboard, float *dpiScaleFactor);
+    void setDialogValues(Controllers &c, SysexComm &mgr, bool showKeyboard, float dpiScaleFactor, bool lowPower);
+    bool getDialogValues(Controllers &c, SysexComm &mgr, bool *showKeyboard, float *dpiScaleFactor, bool *lowPower);
 
     typedef enum {
         LOAD_SCL,
@@ -68,6 +68,7 @@ private:
     std::unique_ptr<juce::Slider> sysexChl;
     std::unique_ptr<juce::ComboBox> engineType;
     std::unique_ptr<LightedToggleButton> showKeyboard;
+    std::unique_ptr<LightedToggleButton> lowPower;
     std::unique_ptr<juce::TextButton> sclButton;
     std::unique_ptr<juce::TextButton> kbmButton;
     std::unique_ptr<juce::TextButton> showTunButton;
@@ -79,7 +80,8 @@ private:
     std::unique_ptr<juce::ComboBox> profileSelector;
     std::unique_ptr<juce::TextButton> storeButton;
     // GOZO On/Off pills over the (hidden) toggles they drive.
-    std::unique_ptr<AVDexedSettingsStyle::OnOffPills> AVGlissandoPills, AVShowKeyboardPills, AVTransposePills, AVMpePills;
+    std::unique_ptr<AVDexedSettingsStyle::OnOffPills> AVGlissandoPills, AVShowKeyboardPills, AVTransposePills, AVMpePills,
+                                                      AVLowPowerPills;
     int AVColumnWidth() const { return (getWidth() - 35) / 2; }
     juce::Component* AVChild(const juce::String& name) const;
 

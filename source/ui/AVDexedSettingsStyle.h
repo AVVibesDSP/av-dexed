@@ -133,6 +133,11 @@ public:
         AVOff.setTitle(AVTarget.getTitle() + ": " + off);
         resized();
     }
+    /** What the footer shows over either pill (it reads a tooltip before a title). */
+    void setHelp(const juce::String& help) {
+        AVOn.setTooltip(help);
+        AVOff.setTooltip(help);
+    }
     /** Width both pills take at the body size, with an 8 px gap. */
     int idealWidth() const {
         return 2 * juce::jmax(pillWidth(AVOn.getButtonText(), 72), pillWidth(AVOff.getButtonText(), 72)) + 8;

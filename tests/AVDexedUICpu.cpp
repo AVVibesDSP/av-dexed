@@ -227,7 +227,12 @@ int AVRunUICpu(const juce::File& bankFile, int slot) {
                 arpeggiating = true;
                 arpeggio();
             } },
+            { "Play page, 8 layers, effects, arpeggio, low power", [&] {
+                AVDexedTheme::lowPower = true;
+                editor->repaint();
+            } },
             { "window hidden, 8 layers, effects", [&] {
+                AVDexedTheme::lowPower = false;
                 arpeggiating = false;
                 processor.keyboardState.allNotesOff(1);
                 play(true);

@@ -822,7 +822,8 @@ AVDexedSettingsPanel::AVDexedSettingsPanel(DexedAudioProcessor& processor, AVCal
     AVClose.setColour(DrawableButton::backgroundOnColourId, Colours::transparentBlack);
     AVClose.onClick = [this] { if (AVActions.close) AVActions.close(); };
     AVInstrument = std::make_unique<ParamDialog>(processor.parameters, processor);
-    AVInstrument->setDialogValues(processor.controllers, processor.sysexComm, processor.showKeyboard, processor.getZoomFactor());
+    AVInstrument->setDialogValues(processor.controllers, processor.sysexComm, processor.showKeyboard, processor.getZoomFactor(),
+                                  processor.lowPowerUI);
     AVInstrument->setIsStandardTuning(processor.synthTuningState->is_standard_tuning());
     AVInstrument->setGeneralCallback(AVActions.applyInstrumentSettings ? AVActions.applyInstrumentSettings : [](ParamDialog*) {});
     AVInstrument->setTuningCallback(AVActions.tuningAction ? AVActions.tuningAction : [](ParamDialog*, ParamDialog::TuningAction) {});
@@ -857,7 +858,8 @@ AVDexedSettingsPanel::~AVDexedSettingsPanel() {
 void AVDexedSettingsPanel::AVShowPage(AVPage page) {
     AVSelectedPage = page;
     if (page == AVPage::instrument)
-        AVInstrument->setDialogValues(AVProcessor.controllers, AVProcessor.sysexComm, AVProcessor.showKeyboard, AVProcessor.getZoomFactor());
+        AVInstrument->setDialogValues(AVProcessor.controllers, AVProcessor.sysexComm, AVProcessor.showKeyboard,
+                                      AVProcessor.getZoomFactor(), AVProcessor.lowPowerUI);
     if (auto* midi = dynamic_cast<AVMidiPage*>(AVMidi.get()))
         if (page == AVPage::midi) midi->AVRefreshRuntime();
     if (page == AVPage::sysex) AVSysEx->AVRefreshRuntime();

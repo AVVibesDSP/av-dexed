@@ -334,6 +334,7 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     addAndMakeVisible(&frameComponent);
     setLookAndFeel(&*lookAndFeel);
     background = AVDexedTheme::canvas;
+    AVDexedTheme::lowPower = processor->lowPowerUI;
     setOpaque(true);   // paint fills it all: what lies under it is never painted
 
     brandLabel.setText("AV Dexed", dontSendNotification);
@@ -620,6 +621,14 @@ DexedAudioProcessorEditor::~DexedAudioProcessorEditor() {
 }
 
 //==============================================================================
+void DexedAudioProcessorEditor::AVApplyLowPower() {
+    if (AVDexedTheme::lowPower == processor->lowPowerUI) return;
+    AVDexedTheme::lowPower = processor->lowPowerUI;
+    // The text in the background image changes tone; everything repaints.
+    AVBackgroundLayer.invalidate();
+    repaint();
+}
+
 void DexedAudioProcessorEditor::paint (Graphics& g) {
     // Wholly under the page shown, when that page is opaque (Play), none of
     // the background shows: every glow frame used to paint it for nothing.
@@ -1227,8 +1236,10 @@ void DexedAudioProcessorEditor::parmShow() {
         if (!safeThis) return;
         float scale = safeThis->processor->getZoomFactor();
         const bool opened = dialog->getDialogValues(safeThis->processor->controllers, safeThis->processor->sysexComm,
-                                                    &safeThis->processor->showKeyboard, &scale);
+                                                    &safeThis->processor->showKeyboard, &scale,
+                                                    &safeThis->processor->lowPowerUI);
         safeThis->processor->setZoomFactor(scale);
+        safeThis->AVApplyLowPower();
         safeThis->processor->savePreference();
         safeThis->resetSize();
         if (!opened) {
