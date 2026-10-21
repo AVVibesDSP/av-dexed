@@ -252,6 +252,33 @@ int AVRunLayersCpu(const juce::File& bankFile, int slot) {
         std::cout << layers << " layer(s), " << processor->getAVActiveVoices() << " voices: "
                   << juce::String(100.0 * seconds / 10.0, 2) << " % of one core\n";
     }
+    // After playing: every voice of every layer used and ended, then four keys
+    // held. The ended voices are still computed (their modulators run on).
+    for (int layers : { 1, 8 }) {
+        auto processor = makeProcessor(bank, juce::jlimit(0, 31, slot - 1), 1);
+        if (layers > 1) processor->stackAVLayers(layers, 7.0f);
+        juce::AudioBuffer<float> buffer(2, 256);
+        const auto run = [&](juce::MidiBuffer midi) {
+            buffer.clear();
+            processor->processBlock(buffer, midi);
+        };
+        juce::MidiBuffer keys;
+        for (int n = 0; n < 16; ++n) keys.addEvent(juce::MidiMessage::noteOn(1, 36 + n * 3, (juce::uint8) 100), 0);
+        run(keys);
+        for (int b = 0; b < int(2.0 * goldenRate / 256); ++b) run({});
+        juce::MidiBuffer release;
+        for (int n = 0; n < 16; ++n) release.addEvent(juce::MidiMessage::noteOff(1, 36 + n * 3), 0);
+        run(release);
+        for (int b = 0; b < int(30.0 * goldenRate / 256) && processor->getAVActiveVoices() > 0; ++b) run({});
+        juce::MidiBuffer four;
+        for (int note : { 36, 48, 60, 72 }) four.addEvent(juce::MidiMessage::noteOn(1, note, (juce::uint8) 100), 0);
+        const int blocks = int(10.0 * goldenRate / 256);
+        const auto t0 = juce::Time::getHighResolutionTicks();
+        for (int b = 0; b < blocks; ++b) run(b == 0 ? four : juce::MidiBuffer());
+        const double seconds = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
+        std::cout << "ended voices, " << layers << " layer(s), 4 keys held: "
+                  << juce::String(100.0 * seconds / 10.0, 2) << " % of one core\n";
+    }
     return 0;
 }
 

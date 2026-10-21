@@ -4,13 +4,15 @@
 // The engine's kernels against their original code, kept here as it was in
 // 0.3.0 (only the tables are read from the engine): a change made to run
 // faster (the branch-free sine) must give the very same samples, bit for bit.
-// And the free phase donor: advancing only the phases must leave them where
-// computing whole blocks does.
+// The same for each engine's render (which operators it computes, in which
+// order, into which bus). And the free phase donor: advancing only the phases
+// must leave them where computing whole blocks does.
 
 #include "../source/engine/EngineMkI.h"
 #include "../source/engine/EngineOpl.h"
 #include "../source/core/Program.h"
 #include "../source/msfa/dx7note.h"
+#include "../source/msfa/fm_op_kernel.h"
 #include "../source/msfa/env.h"
 #include "../source/msfa/exp2.h"
 #include "../source/msfa/freqlut.h"
@@ -259,6 +261,139 @@ void oplComputeFb(int32_t *output, int32_t phase0, int32_t freq, int32_t gain1, 
     fb_buf[0] = y0;
     fb_buf[1] = y;
 }
+
+// The engines' render, 0.3.0: the same control flow, with the engines' own
+// kernels (checked above) and buses of its own.
+struct Buses { int32_t data[2][N]; int32_t* get(int bus) { return data[bus]; } };
+
+void msfaRender(int32_t *output, FmOpParams *params, int algorithm, int32_t *fb_buf, int feedback_shift, Buses& buf_) {
+    const int kLevelThresh = 1120;
+    const FmAlgorithm alg = FmCore::testAlgorithm(algorithm);
+    bool has_contents[3] = { true, false, false };
+    for (int op = 0; op < 6; op++) {
+        int flags = alg.ops[op];
+        bool add = (flags & OUT_BUS_ADD) != 0;
+        FmOpParams &param = params[op];
+        int inbus = (flags >> 4) & 3;
+        int outbus = flags & 3;
+        int32_t *outptr = (outbus == 0) ? output : buf_.get(outbus - 1);
+        int32_t gain1 = param.gain_out;
+        int32_t gain2 = Exp2::lookup(param.level_in - (14 * (1 << 24)));
+        param.gain_out = gain2;
+        if (gain1 >= kLevelThresh || gain2 >= kLevelThresh) {
+            if (!has_contents[outbus]) {
+                add = false;
+            }
+            if (inbus == 0 || !has_contents[inbus]) {
+                if ((flags & 0xc0) == 0xc0 && feedback_shift < 16) {
+                    FmOpKernel::compute_fb(outptr, param.phase, param.freq, gain1, gain2, fb_buf, feedback_shift, add);
+                } else {
+                    FmOpKernel::compute_pure(outptr, param.phase, param.freq, gain1, gain2, add);
+                }
+            } else {
+                FmOpKernel::compute(outptr, buf_.get(inbus - 1), param.phase, param.freq, gain1, gain2, add);
+            }
+            has_contents[outbus] = true;
+        } else if (!add) {
+            has_contents[outbus] = false;
+        }
+        param.phase += param.freq << LG_N;
+    }
+}
+
+void mkiRender(EngineMkI& engine, int32_t *output, FmOpParams *params, int algorithm, int32_t *fb_buf, int32_t feedback_shift, Buses& buf_) {
+    const int kLevelThresh = ENV_MAX-100;
+    FmAlgorithm alg = FmCore::testAlgorithm(algorithm);
+    bool has_contents[3] = { true, false, false };
+    bool fb_on = feedback_shift < 16;
+    switch(algorithm) {
+        case 3 : case 5 :
+            if ( fb_on )
+                alg.ops[0] = 0xc4;
+    }
+    for (int op = 0; op < 6; op++) {
+        int flags = alg.ops[op];
+        bool add = (flags & OUT_BUS_ADD) != 0;
+        FmOpParams &param = params[op];
+        int inbus = (flags >> 4) & 3;
+        int outbus = flags & 3;
+        int32_t *outptr = (outbus == 0) ? output : buf_.get(outbus - 1);
+        int32_t gain1 = param.gain_out == 0 ? (ENV_MAX-1) : param.gain_out;
+        int32_t gain2 = ENV_MAX-(param.level_in >> (28-ENV_BITDEPTH));
+        param.gain_out = gain2;
+        if (gain1 <= kLevelThresh || gain2 <= kLevelThresh) {
+            if (!has_contents[outbus]) {
+                add = false;
+            }
+            if (inbus == 0 || !has_contents[inbus]) {
+                if ((flags & 0xc0) == 0xc0 && fb_on) {
+                    switch ( algorithm ) {
+                        case 3 :
+                            engine.compute_fb3(outptr, params, gain1, gain2, fb_buf, std::min((feedback_shift+2), 16));
+                            params[1].phase += params[1].freq << LG_N;
+                            params[2].phase += params[2].freq << LG_N;
+                            op += 2;
+                            break;
+                        case 5 :
+                            engine.compute_fb2(outptr, params, gain1, gain2, fb_buf, std::min((feedback_shift+2), 16));
+                            params[1].phase += params[1].freq << LG_N;
+                            op++;
+                            break;
+                        case 31 :
+                            engine.compute_fb(outptr, param.phase, param.freq, gain1, gain2, fb_buf, std::min((feedback_shift+2), 16), add);
+                            break;
+                        default:
+                            engine.compute_fb(outptr, param.phase, param.freq, gain1, gain2, fb_buf, feedback_shift, add);
+                            break;
+                    }
+                } else {
+                    engine.compute_pure(outptr, param.phase, param.freq, gain1, gain2, add);
+                }
+            } else {
+                engine.compute(outptr, buf_.get(inbus - 1), param.phase, param.freq, gain1, gain2, add);
+            }
+            has_contents[outbus] = true;
+        } else if (!add) {
+            has_contents[outbus] = false;
+        }
+        param.phase += param.freq << LG_N;
+    }
+}
+
+void oplRender(EngineOpl& engine, int32_t *output, FmOpParams *params, int algorithm, int32_t *fb_buf, int32_t feedback_shift, Buses& buf_) {
+    const int kLevelThresh = 507;
+    const FmAlgorithm alg = FmCore::testAlgorithm(algorithm);
+    bool has_contents[3] = { true, false, false };
+    for (int op = 0; op < 6; op++) {
+        int flags = alg.ops[op];
+        bool add = (flags & OUT_BUS_ADD) != 0;
+        FmOpParams &param = params[op];
+        int inbus = (flags >> 4) & 3;
+        int outbus = flags & 3;
+        int32_t *outptr = (outbus == 0) ? output : buf_.get(outbus - 1);
+        int32_t gain1 = param.gain_out == 0 ? 511 : param.gain_out;
+        int32_t gain2 = 512-(param.level_in >> 19);
+        param.gain_out = gain2;
+        if (gain1 <= kLevelThresh || gain2 <= kLevelThresh) {
+            if (!has_contents[outbus]) {
+                add = false;
+            }
+            if (inbus == 0 || !has_contents[inbus]) {
+                if ((flags & 0xc0) == 0xc0 && feedback_shift < 16) {
+                    engine.compute_fb(outptr, param.phase, param.freq, gain1, gain2, fb_buf, feedback_shift, add);
+                } else {
+                    engine.compute_pure(outptr, param.phase, param.freq, gain1, gain2, add);
+                }
+            } else {
+                engine.compute(outptr, buf_.get(inbus - 1), param.phase, param.freq, gain1, gain2, add);
+            }
+            has_contents[outbus] = true;
+        } else if (!add) {
+            has_contents[outbus] = false;
+        }
+        param.phase += param.freq << LG_N;
+    }
+}
 }
 
 struct Blocks {
@@ -381,6 +516,62 @@ bool runAVDexedKernelTests() {
     }
     passed &= report("Mark I, random kernels", mkiMismatches, kernels);
     passed &= report("OPL, random kernels", oplMismatches, kernels);
+
+    // Whole renders, eight blocks in a row (feedback memory and gains carry on),
+    // every algorithm and feedback; in half the cases every operator that
+    // writes to the output is silent (its gains past the threshold) while the
+    // others sound, as in a voice whose carriers have ended.
+    {
+        FmCore msfa;
+        long mismatches = 0, total = 0;
+        for (int engineIndex = 0; engineIndex < 3; ++engineIndex)
+            for (int round = 0; round < 1500; ++round) {
+                const int algorithm = int(random() % 32);
+                const int feedbackShift = int(random() % 17);
+                const bool carriersSilent = (round & 1) != 0;
+                FmOpParams expectedParams[6], actualParams[6];
+                for (int op = 0; op < 6; ++op) {
+                    const bool carrier = (FmCore::testAlgorithm(algorithm).ops[op] & 3) == 0;
+                    const bool silent = carrier && carriersSilent;
+                    auto& p = expectedParams[op];
+                    p.freq = int32_t(random() >> (4 + random() % 8));
+                    p.phase = int32_t(random());
+                    if (engineIndex == 0) {        // MSFA: louder gains are larger
+                        p.level_in = silent ? int32_t(random() % (8u << 24)) : int32_t((14u << 24) + random() % (6u << 24));
+                        p.gain_out = silent ? int32_t(random() % 1000) : int32_t(random() % (1 << 24));
+                    } else if (engineIndex == 1) { // Mark I: louder gains are smaller
+                        p.level_in = silent ? int32_t(random() % (90u << 14)) : int32_t(random() % (1u << 28));
+                        p.gain_out = silent ? original::ENV_MAX - 50 : randomGain(original::ENV_MAX);
+                    } else {                       // OPL: louder gains are smaller
+                        p.level_in = silent ? int32_t(random() % (4u << 19)) : int32_t(random() % (1u << 28));
+                        p.gain_out = silent ? 510 : randomGain(512);
+                    }
+                }
+                std::memcpy(actualParams, expectedParams, sizeof(expectedParams));
+                int32_t fbExpected[2] = { int32_t(random()) >> 3, int32_t(random()) >> 3 }, fbActual[2] = { fbExpected[0], fbExpected[1] };
+                original::Buses buses;
+                bool same = true;
+                for (int block = 0; block < 8 && same; ++block) {
+                    Blocks b;
+                    b.fill(random);
+                    if (engineIndex == 0) {
+                        original::msfaRender(b.expected, expectedParams, algorithm, fbExpected, feedbackShift, buses);
+                        msfa.render(b.actual, actualParams, algorithm, fbActual, feedbackShift);
+                    } else if (engineIndex == 1) {
+                        original::mkiRender(mki, b.expected, expectedParams, algorithm, fbExpected, feedbackShift, buses);
+                        mki.render(b.actual, actualParams, algorithm, fbActual, feedbackShift);
+                    } else {
+                        original::oplRender(opl, b.expected, expectedParams, algorithm, fbExpected, feedbackShift, buses);
+                        opl.render(b.actual, actualParams, algorithm, fbActual, feedbackShift);
+                    }
+                    same = b.same() && fbExpected[0] == fbActual[0] && fbExpected[1] == fbActual[1]
+                        && std::memcmp(expectedParams, actualParams, sizeof(expectedParams)) == 0;
+                }
+                mismatches += same ? 0 : 1;
+                ++total;
+            }
+        passed &= report("engine render (8 blocks)", mismatches, total);
+    }
 
     // The free phase donor (AVDexedLayer::startFreePhase): N whole blocks
     // against N blocks of advancePhases, as the layer tunes it, over varied

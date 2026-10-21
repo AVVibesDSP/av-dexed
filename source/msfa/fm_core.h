@@ -50,6 +50,9 @@ public:
     static void dump();
     static bool isCarrier(int algorithm, int op);
     virtual void render(int32_t *output, FmOpParams *params, int algorithm, int32_t *fb_buf, int32_t feedback_gain);
+#if defined(AVDEXED_TESTING)
+    static const FmAlgorithm& testAlgorithm(int algorithm) { return algorithms[algorithm]; }
+#endif
 protected:
     AlignedBuf<int32_t, N>buf_[2];
     const static FmAlgorithm algorithms[32];

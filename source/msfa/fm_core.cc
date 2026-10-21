@@ -97,6 +97,19 @@ void FmCore::render(int32_t *output, FmOpParams *params, int algorithm, int32_t 
     const int kLevelThresh = 1120;
     const FmAlgorithm alg = algorithms[algorithm];
     bool has_contents[3] = { true, false, false };
+    // When no operator that writes to the output sounds this block, the other
+    // operators' kernels would only fill buses that nothing reads: they are not
+    // computed. Every gain, flag and branch is still followed as before, so a
+    // feedback operator still computes (its memory carries on to later blocks)
+    // and nothing that is kept changes.
+    int32_t gains1[6], gains2[6];
+    bool outputSilent = true;
+    for (int op = 0; op < 6; op++) {
+        gains1[op] = params[op].gain_out;
+        gains2[op] = Exp2::lookup(params[op].level_in - (14 * (1 << 24)));
+        if ((alg.ops[op] & 3) == 0 && (gains1[op] >= kLevelThresh || gains2[op] >= kLevelThresh))
+            outputSilent = false;
+    }
     for (int op = 0; op < 6; op++) {
         int flags = alg.ops[op];
         bool add = (flags & OUT_BUS_ADD) != 0;
@@ -104,8 +117,8 @@ void FmCore::render(int32_t *output, FmOpParams *params, int algorithm, int32_t 
         int inbus = (flags >> 4) & 3;
         int outbus = flags & 3;
         int32_t *outptr = (outbus == 0) ? output : buf_[outbus - 1].get();
-        int32_t gain1 = param.gain_out;
-        int32_t gain2 = Exp2::lookup(param.level_in - (14 * (1 << 24)));
+        int32_t gain1 = gains1[op];
+        int32_t gain2 = gains2[op];
         param.gain_out = gain2;
         
         if (gain1 >= kLevelThresh || gain2 >= kLevelThresh) {
@@ -119,12 +132,12 @@ void FmCore::render(int32_t *output, FmOpParams *params, int algorithm, int32_t 
                     FmOpKernel::compute_fb(outptr, param.phase, param.freq,
                                            gain1, gain2,
                                            fb_buf, feedback_shift, add);
-                } else {
+                } else if (!outputSilent) {
                     // cout << op << " pure " << inbus << outbus << add << endl;
                     FmOpKernel::compute_pure(outptr, param.phase, param.freq,
                                              gain1, gain2, add);
                 }
-            } else {
+            } else if (!outputSilent) {
                 // cout << op << " normal " << inbus << outbus << " " << param.freq << add << endl;
                 FmOpKernel::compute(outptr, buf_[inbus - 1].get(),
                                     param.phase, param.freq, gain1, gain2, add);
