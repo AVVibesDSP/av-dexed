@@ -51,6 +51,17 @@ public:
     // worth it...
     void compute(int32_t *buf, int32_t lfo_val, int32_t lfo_delay,
                  const Controllers *ctrls);
+    /** compute in its two steps, so several voices' engine work can run
+        together (AVRenderVoiceBlock): prepare sets this block's operator
+        parameters (pitch, envelopes, amplitude modulation)... */
+    void prepare(int32_t lfo_val, int32_t lfo_delay, const Controllers *ctrls);
+    /** ...and render runs the engine on them, adding to `buf`. */
+    void render(int32_t *buf, FmCore *core);
+    // What the engine reads and keeps for this voice (EngineMkI::renderFour).
+    FmOpParams *operatorParams() { return params_; }
+    int32_t *feedbackMemory() { return fb_buf_; }
+    int algorithmIndex() const { return algorithm_; }
+    int32_t feedbackShift() const { return fb_shift_; }
     
     void keyup();
     

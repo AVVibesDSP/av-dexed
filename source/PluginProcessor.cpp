@@ -36,6 +36,7 @@
 #include "msfa/porta.h"
 #include "msfa/aligned_buf.h"
 #include "msfa/fm_op_kernel.h"
+#include "engine/AVDexedVoiceBlock.h"
 
 #include "midi/MidiCCHandler.h"
 #include "debugger/MemoryLogger.h"
@@ -349,7 +350,6 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
         processMidiMessages(it, end, numSamples);
     } else {
         for (; i < numSamples; i += N) {
-            AlignedBuf<int32_t, N> audiobuf;
             // Each voice gives a whole number of 1/32768ths (at most 2^15), so
             // the voices are summed as integers and converted once: the float
             // sum was exact anyway (16 of them stay below 2^19), so the bits
@@ -358,34 +358,29 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
 
             processMidiMessages(it, end, i);
 
-            for (int j = 0; j < N; ++j) {
-                audiobuf.get()[j] = 0;
+            for (int j = 0; j < N; ++j)
                 sumbuf[j] = 0;
-            }
             int32_t lfovalue = lfo.getsample();
             int32_t lfodelay = lfo.getdelay();
             
             bool checkMTSESPRetuning = synthTuningState->is_standard_tuning() &&
                                         MTS_HasMaster(mtsClient);
             
+            // Every voice's pitch and envelopes first, then the engine for
+            // all of them (several Mark I voices at a time).
+            Dx7Note* liveNotes[MAX_ACTIVE_NOTES];
+            int liveCount = 0;
             for (int note = 0; note < MAX_ACTIVE_NOTES; ++note) {
                 if (voices[note].live) {
                     
                     if (checkMTSESPRetuning)
                         voices[note].dx7_note->updateBasePitches();
                     
-                    voices[note].dx7_note->compute(audiobuf.get(), lfovalue, lfodelay, &controllers);
-                    
-                    for (int j=0; j < N; ++j) {
-                        int32_t val = audiobuf.get()[j];
-                        
-                        val = val >> 4;
-                        int clip_val = val < -(1 << 24) ? 0x8000 : val >= (1 << 24) ? 0x7fff : val >> 9;
-                        sumbuf[j] += clip_val;
-                        audiobuf.get()[j] = 0;
-                    }
+                    voices[note].dx7_note->prepare(lfovalue, lfodelay, &controllers);
+                    liveNotes[liveCount++] = voices[note].dx7_note;
                 }
             }
+            AVRenderVoiceBlock(liveNotes, liveCount, controllers.core, sumbuf);
             
             int jmax = numSamples - i;
             for (int j = 0; j < N; ++j) {

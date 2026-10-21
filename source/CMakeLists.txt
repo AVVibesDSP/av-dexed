@@ -166,6 +166,7 @@ target_sources(${BaseTargetName} PRIVATE
 	core/AVDexedPerformance.cpp
 	core/AVDexedMicroTuning.cpp
 	engine/AVDexedLayer.cpp
+	engine/AVDexedVoiceBlock.cpp
 	AVDexedLayers.cpp
 	core/AVDexedLibrary.cpp
 	core/Program.cpp

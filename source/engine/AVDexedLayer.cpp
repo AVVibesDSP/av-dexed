@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "AVDexedLayer.h"
+#include "AVDexedVoiceBlock.h"
 #include "../msfa/aligned_buf.h"
 #include "../parameter/Model.h"
 #include "libMTSClient.h"
@@ -380,11 +381,11 @@ void AVDexedLayer::panic() {
 void AVDexedLayer::renderBlock(float* out) {
     for (int j = 0; j < N; ++j) out[j] = 0;
     if (! prepared || controllers.core == nullptr) return;
-    AlignedBuf<int32_t, N> audiobuf;
-    for (int j = 0; j < N; ++j) audiobuf.get()[j] = 0;
     // Summed as integers (whole 1/32768ths) and converted once: the same bits
     // as the float sum, which was exact (see processBlock's simple path).
     int32_t sum[N] = {};
+    Dx7Note* liveNotes[voiceCount];
+    int liveCount = 0;
     const int32_t lfovalue = lfo.getsample();
     const int32_t lfodelay = lfo.getdelay();
     const bool checkMTSESPRetuning = tuningState != nullptr && tuningState->is_standard_tuning() && MTS_HasMaster(mtsClient);
@@ -395,18 +396,14 @@ void AVDexedLayer::renderBlock(float* out) {
         if (voice.pitchOffset != 0) {   // unison / random pitch: this voice's own tuning
             Controllers tuned = controllers;
             tuned.masterTune += voice.pitchOffset;
-            voice.dx7_note->compute(audiobuf.get(), lfovalue, lfodelay, &tuned);
+            voice.dx7_note->prepare(lfovalue, lfodelay, &tuned);
         } else {
-            voice.dx7_note->compute(audiobuf.get(), lfovalue, lfodelay, &controllers);
+            voice.dx7_note->prepare(lfovalue, lfodelay, &controllers);
         }
-        for (int j = 0; j < N; ++j) {
-            int32_t val = audiobuf.get()[j];
-            val = val >> 4;
-            const int clip_val = val < -(1 << 24) ? 0x8000 : val >= (1 << 24) ? 0x7fff : val >> 9;
-            sum[j] += clip_val;
-            audiobuf.get()[j] = 0;
-        }
+        liveNotes[liveCount++] = voice.dx7_note;
     }
+    // The engine for all of them, as the simple path does.
+    AVRenderVoiceBlock(liveNotes, liveCount, controllers.core, sum);
     for (int j = 0; j < N; ++j) out[j] = float(sum[j]) / float(0x8000);
 }
 

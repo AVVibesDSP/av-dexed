@@ -347,6 +347,15 @@ static uint32_t ampModPower(uint32_t sensamp) {
 }
 
 void Dx7Note::compute(int32_t *buf, int32_t lfo_val, int32_t lfo_delay, const Controllers *ctrls) {
+    prepare(lfo_val, lfo_delay, ctrls);
+    render(buf, ctrls->core);
+}
+
+void Dx7Note::render(int32_t *buf, FmCore *core) {
+    core->render(buf, params_, algorithm_, fb_buf_, fb_shift_);
+}
+
+void Dx7Note::prepare(int32_t lfo_val, int32_t lfo_delay, const Controllers *ctrls) {
     int32_t pitch_base;
     const int32_t pitch_mod = pitchOfBlock(lfo_val, lfo_delay, ctrls, pitch_base);
 
@@ -379,7 +388,6 @@ void Dx7Note::compute(int32_t *buf, int32_t lfo_val, int32_t lfo_delay, const Co
             params_[op].level_in = level;
         }
     }
-    ctrls->core->render(buf, params_, algorithm_, fb_buf_, fb_shift_);
 }
 
 void Dx7Note::keyup() {

@@ -5,8 +5,9 @@
 // 0.3.0 (only the tables are read from the engine): a change made to run
 // faster (the branch-free sine) must give the very same samples, bit for bit.
 // The same for each engine's render (which operators it computes, in which
-// order, into which bus). And the free phase donor: advancing only the phases
-// must leave them where computing whole blocks does.
+// order, into which bus), and for Mark I's four voices at a time against one
+// at a time (NEON and plain C++). And the free phase donor: advancing only the
+// phases must leave them where computing whole blocks does.
 
 #include "../source/engine/EngineMkI.h"
 #include "../source/engine/EngineOpl.h"
@@ -26,6 +27,8 @@
 #include <cstring>
 #include <iostream>
 #include <random>
+#include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -572,6 +575,74 @@ bool runAVDexedKernelTests() {
             }
         passed &= report("engine render (8 blocks)", mismatches, total);
     }
+
+    // Mark I, four and eight voices at a time (renderFour, renderEight) against
+    // each alone (render): one to eight voices, each with its own gains (some
+    // silent, some sounding), phases and feedback memory, eight blocks in a
+    // row; with NEON and in plain C++ (what x86 runs).
+    const auto voicesAtATime = [&](auto width, bool simd) {
+        constexpr int W = decltype(width)::value;
+        EngineMkI::useSimd = simd;
+        long mismatches = 0, total = 0;
+        for (int round = 0; round < 2000; ++round) {
+            int algorithm = int(random() % 32);
+            const int feedbackShift = int(random() % 17);
+            if (!EngineMkI::canRenderFour(algorithm, feedbackShift)) algorithm = 0;
+            const int lanes = 1 + int(random() % W);
+            FmOpParams alone[W][6], together[W][6];
+            int32_t fbAlone[W][2], fbTogether[W][2];
+            for (int l = 0; l < lanes; ++l) {
+                const int kind = int(random() % 3);   // sounding, every carrier silent, anything
+                for (int op = 0; op < 6; ++op) {
+                    const bool carrier = (FmCore::testAlgorithm(algorithm).ops[op] & 3) == 0;
+                    const bool silent = (kind == 1 && carrier) || (kind == 2 && random() % 3 == 0);
+                    auto& p = alone[l][op];
+                    p.freq = int32_t(random() >> (4 + random() % 8));
+                    p.phase = int32_t(random());
+                    p.level_in = silent ? int32_t(random() % (90u << 14)) : int32_t(random() % (1u << 28));
+                    p.gain_out = silent ? original::ENV_MAX - 50 : randomGain(original::ENV_MAX);
+                }
+                fbAlone[l][0] = int32_t(random()) >> 3;
+                fbAlone[l][1] = int32_t(random()) >> 3;
+            }
+            std::memcpy(together, alone, sizeof(FmOpParams) * 6 * size_t(lanes));
+            std::memcpy(fbTogether, fbAlone, sizeof(int32_t) * 2 * size_t(lanes));
+            bool same = true;
+            for (int block = 0; block < 8 && same; ++block) {
+                int32_t expected[W][N] = {}, actual[W][N] = {};
+                FmOpParams* params[W] = {};
+                int32_t* feedback[W] = {};
+                for (int l = 0; l < lanes; ++l) {
+                    params[l] = together[l];
+                    feedback[l] = fbTogether[l];
+                    mki.render(expected[l], alone[l], algorithm, fbAlone[l], feedbackShift);   // each alone, into zeros
+                }
+                alignas(16) int32_t output[N][W];
+                int wrote;
+                if constexpr (W == 4) wrote = mki.renderFour(output, params, feedback, lanes, algorithm, feedbackShift);
+                else wrote = mki.renderEight(output, params, feedback, lanes, algorithm, feedbackShift);
+                for (int l = 0; l < lanes; ++l) {
+                    for (int j = 0; j < N; ++j) actual[l][j] = output[j][l];
+                    // A lane said to have written nothing must hold zeros.
+                    if ((wrote & (1 << l)) == 0)
+                        for (int j = 0; j < N; ++j) same &= expected[l][j] == 0;
+                }
+                same = same && std::memcmp(expected, actual, sizeof(int32_t) * N * size_t(lanes)) == 0
+                    && std::memcmp(alone, together, sizeof(FmOpParams) * 6 * size_t(lanes)) == 0
+                    && std::memcmp(fbAlone, fbTogether, sizeof(int32_t) * 2 * size_t(lanes)) == 0;
+            }
+            mismatches += same ? 0 : 1;
+            ++total;
+        }
+        const std::string what = std::string("Mark I, ") + (W == 4 ? "four" : "eight") + " voices at a time ("
+                               + (simd ? "NEON where there is" : "plain C++") + ")";
+        passed &= report(what.c_str(), mismatches, total);
+    };
+    for (const bool simd : { true, false }) {
+        voicesAtATime(std::integral_constant<int, 4>(), simd);
+        voicesAtATime(std::integral_constant<int, 8>(), simd);
+    }
+    EngineMkI::useSimd = true;
 
     // The free phase donor (AVDexedLayer::startFreePhase): N whole blocks
     // against N blocks of advancePhases, as the layer tunes it, over varied

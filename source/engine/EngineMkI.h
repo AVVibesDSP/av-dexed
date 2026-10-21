@@ -44,7 +44,37 @@ public:
     
     void compute_fb3(int32_t *output, FmOpParams *params, int32_t gain01, int32_t gain02, int32_t *fb_buf, int fb_shift);
 
+    /** Four or eight voices' samples side by side: [sample][voice]. */
+    using FourVoices = int32_t[N][4];
+    using EightVoices = int32_t[N][8];
+    /** render for up to four voices (`lanes`) that share `algorithm` and
+        `feedback_shift`: each lane exactly as render computes it alone into
+        a buffer of zeros (its own gains, buses, branches and feedback
+        memory), the operator kernels four voices at a time (NEON on arm64;
+        elsewhere four voices interleaved in plain C++). `output` is written
+        in full; returns which lanes wrote anything (bit l for lane l). */
+    int renderFour(FourVoices &output, FmOpParams *const params[4], int32_t *const fb_bufs[4], int lanes,
+                   int algorithm, int32_t feedback_shift);
+    /** renderFour for up to eight voices: the operator kernels as two NEON
+        halves, the feedback chains eight side by side (a feedback operator is a
+        chain of samples; more chains at once keep the processor busier). */
+    int renderEight(EightVoices &output, FmOpParams *const params[8], int32_t *const fb_bufs[8], int lanes,
+                    int algorithm, int32_t feedback_shift);
+    /** What render will compute for a voice this block, by its thresholds:
+        nothing (it only keeps its gains and phases; it writes nothing), only
+        its feedback operator (nothing reaches the output), or its sound.
+        Voices are batched with ones that do the same work. */
+    enum class Work { nothing, feedbackOnly, sound };
+    static Work workFor(const FmOpParams *params, int algorithm);
+    /** Algorithms 4 and 6 with feedback run their 2- and 3-operator chains
+        one voice at a time (render). */
+    static bool canRenderFour(int algorithm, int32_t feedback_shift) {
+        return ! ((algorithm == 3 || algorithm == 5) && feedback_shift < 16);
+    }
+
 #if defined(AVDEXED_TESTING)
+    /** Off: renderFour's and renderEight's lanes go through plain C++ on arm64 too (as on x86). */
+    static inline bool useSimd = true;
     /** The sine tables, for the kernel tests' copy of the original code. */
     static const uint16_t* testSinLogTable();
     static const uint16_t* testSinExpTable();
