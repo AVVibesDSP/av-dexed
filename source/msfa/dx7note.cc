@@ -327,6 +327,25 @@ void Dx7Note::advancePhases(const Controllers *ctrls) {
         params_[op].phase += params_[op].freq << LG_N;
 }
 
+// The amplitude modulation's exp(), for the last four `sensamp` asked: every
+// voice of a layer asks for the same few each block (one LFO, at most a few
+// sensitivities). The same expression, so the same value; one cache per
+// thread, so two instances on two threads never share it.
+static uint32_t ampModPower(uint32_t sensamp) {
+    thread_local uint32_t keys[4], values[4];
+    thread_local int filled = 0, next = 0;
+    for (int i = 0; i < filled; ++i)
+        if (keys[i] == sensamp)
+            return values[i];
+    // TODO: mehhh.. this needs some real tuning.
+    uint32_t pt = exp(((float)sensamp)/262144 * 0.07 + 12.2);
+    keys[next] = sensamp;
+    values[next] = pt;
+    next = (next + 1) & 3;
+    if (filled < 4) ++filled;
+    return pt;
+}
+
 void Dx7Note::compute(int32_t *buf, int32_t lfo_val, int32_t lfo_delay, const Controllers *ctrls) {
     int32_t pitch_base;
     const int32_t pitch_mod = pitchOfBlock(lfo_val, lfo_delay, ctrls, pitch_base);
@@ -353,9 +372,7 @@ void Dx7Note::compute(int32_t *buf, int32_t lfo_val, int32_t lfo_delay, const Co
             int32_t level = env_[op].getsample();
             if (ampmodsens_[op] != 0) {
                 uint32_t sensamp = (uint32_t)(((uint64_t) amd_mod) * ((uint64_t) ampmodsens_[op]) >> 24);
-                
-                // TODO: mehhh.. this needs some real tuning.
-                uint32_t pt = exp(((float)sensamp)/262144 * 0.07 + 12.2);
+                uint32_t pt = ampModPower(sensamp);
                 uint32_t ldiff = (uint32_t)(((uint64_t)level) * (((uint64_t)pt<<4)) >> 28);
                 level -= ldiff;
             }
