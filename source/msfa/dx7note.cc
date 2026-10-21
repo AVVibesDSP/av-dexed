@@ -222,7 +222,7 @@ void Dx7Note::initPortamento(const Dx7Note &srcNote) {
     }
 }
 
-void Dx7Note::compute(int32_t *buf, int32_t lfo_val, int32_t lfo_delay, const Controllers *ctrls) {
+int32_t Dx7Note::pitchOfBlock(int32_t lfo_val, int32_t lfo_delay, const Controllers *ctrls, int32_t &pitch_base) {
     // ==== PITCH ====
     uint32_t pmd = pitchmoddepth_ * lfo_delay;  // Q32
     int32_t senslfo = pitchmodsens_ * (lfo_val - (1 << 23));
@@ -270,9 +270,67 @@ void Dx7Note::compute(int32_t *buf, int32_t lfo_val, int32_t lfo_delay, const Co
         pb = newpb;
     }
     
-    int32_t pitch_base = pb + ctrls->masterTune;
+    pitch_base = pb + ctrls->masterTune;
     pitch_mod += pitch_base;
     
+    return pitch_mod;
+}
+
+void Dx7Note::setFrequencies(int32_t pitch_base, int32_t pitch_mod, const Controllers *ctrls) {
+    int porta_rate;
+    if ( ctrls->portamento_enable_cc ) {
+        if ( ctrls->portamento_gliss_cc )
+            porta_rate = Porta::rates_glissando[ctrls->portamento_cc];
+        else
+            porta_rate = Porta::rates[ctrls->portamento_cc];
+    } else {
+        porta_rate = Porta::rates[0];
+    }
+
+    for (int op = 0; op < 6; op++) {
+        if ( ! (opSwitch_ & (1U << op) ) )
+            continue;
+        int32_t basepitch = basepitch_[op];
+
+        if ( opMode[op] ) { 
+            params_[op].freq = Freqlut::lookup(basepitch + pitch_base);
+        } else {
+            if (porta_curpitch_[op] != basepitch_[op]) {
+                basepitch = porta_curpitch_[op];
+                if (ctrls->portamento_gliss_cc)
+                    basepitch = logfreq_round2semi(basepitch);
+
+                int32_t cur = porta_curpitch_[op];
+                int32_t dst = basepitch_[op];
+
+                bool going_up = cur < dst;
+                int32_t newpitch = cur + (going_up ? +porta_rate : -porta_rate);
+
+                // Clamp to destination if we would overshoot/undershoot
+                if ((going_up && newpitch > dst) || (!going_up && newpitch < dst))
+                    newpitch = dst;
+
+                porta_curpitch_[op] = newpitch;
+            }
+            params_[op].freq = Freqlut::lookup(basepitch + pitch_mod);
+        }
+    }
+}
+
+void Dx7Note::advancePhases(const Controllers *ctrls) {
+    int32_t pitch_base;
+    const int32_t pitch_mod = pitchOfBlock(0, 0, ctrls, pitch_base);
+    setFrequencies(pitch_base, pitch_mod, ctrls);
+    // Every engine turns every phase by one block, switched on or not (one
+    // switched off keeps the frequency it had).
+    for (int op = 0; op < 6; op++)
+        params_[op].phase += params_[op].freq << LG_N;
+}
+
+void Dx7Note::compute(int32_t *buf, int32_t lfo_val, int32_t lfo_delay, const Controllers *ctrls) {
+    int32_t pitch_base;
+    const int32_t pitch_mod = pitchOfBlock(lfo_val, lfo_delay, ctrls, pitch_base);
+
     // ==== AMP MOD ====
     lfo_val = (1<<24) - lfo_val;
     uint32_t amod_1 = (uint32_t)(((int64_t) ampmoddepth_ * (int64_t) lfo_delay) >> 8); // Q24 :D
@@ -284,47 +342,14 @@ void Dx7Note::compute(int32_t *buf, int32_t lfo_val, int32_t lfo_delay, const Co
     uint32_t amod_3 = (ctrls->eg_mod+1) << 17;
     amd_mod = max((1<<24) - amod_3, amd_mod);
 
-    int porta_rate;
-    if ( ctrls->portamento_enable_cc ) {
-        if ( ctrls->portamento_gliss_cc )
-            porta_rate = Porta::rates_glissando[ctrls->portamento_cc];
-        else
-            porta_rate = Porta::rates[ctrls->portamento_cc];
-    } else {
-        porta_rate = Porta::rates[0];
-    }
-
     // ==== OP RENDER ====
+    // Frequencies first (each operator's alone), then the envelopes.
+    setFrequencies(pitch_base, pitch_mod, ctrls);
     for (int op = 0; op < 6; op++) {
         if ( ! (opSwitch_ & (1U << op) ) ) {
             env_[op].getsample(); // advance the envelop even if it is not playing
             params_[op].level_in = 0;
         } else {
-            int32_t basepitch = basepitch_[op];
-
-            if ( opMode[op] ) { 
-                params_[op].freq = Freqlut::lookup(basepitch + pitch_base);
-            } else {
-                if (porta_curpitch_[op] != basepitch_[op]) {
-                    basepitch = porta_curpitch_[op];
-                    if (ctrls->portamento_gliss_cc)
-                        basepitch = logfreq_round2semi(basepitch);
-
-                    int32_t cur = porta_curpitch_[op];
-                    int32_t dst = basepitch_[op];
-
-                    bool going_up = cur < dst;
-                    int32_t newpitch = cur + (going_up ? +porta_rate : -porta_rate);
-
-                    // Clamp to destination if we would overshoot/undershoot
-                    if ((going_up && newpitch > dst) || (!going_up && newpitch < dst))
-                        newpitch = dst;
-
-                    porta_curpitch_[op] = newpitch;
-                }
-                params_[op].freq = Freqlut::lookup(basepitch + pitch_mod);
-            }
-
             int32_t level = env_[op].getsample();
             if (ampmodsens_[op] != 0) {
                 uint32_t sensamp = (uint32_t)(((uint64_t) amd_mod) * ((uint64_t) ampmodsens_[op]) >> 24);

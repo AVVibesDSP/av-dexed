@@ -321,7 +321,9 @@ void AVDexedLayer::startFreePhase(Dx7Note& note, int channel, int pitch) {
     // frequency ones too, turns as its frequency, so it is a moment of the same
     // note. No bend, modulation or portamento on the way. As many blocks as
     // keep that tuning near the note (at most 16, for the lowest keys), so no
-    // operator goes past what the engine's frequency table holds.
+    // operator goes past what the engine's frequency table holds. Only its
+    // phases are taken, so only they are computed (advancePhases: what compute
+    // does to them), not its envelopes and operators.
     Controllers still = controllers;
     still.pitch_cc = 0x2000;
     still.modwheel_cc = 0;
@@ -339,11 +341,8 @@ void AVDexedLayer::startFreePhase(Dx7Note& note, int channel, int pitch) {
         const int blocks = std::clamp(int(std::lround(double(cycles) * rate / (double(N) * noteHz))), 1, 16);
         const double hz = double(cycles) * rate / (double(N) * double(blocks));
         still.masterTune = int32_t(std::lround(std::log2(hz) * double(1 << 24))) - noteLogfreq;
-        AlignedBuf<int32_t, N> scratch;
-        for (int block = 0; block < blocks; ++block) {
-            for (int j = 0; j < N; ++j) scratch.get()[j] = 0;
-            phaseDonor->compute(scratch.get(), 0, 0, &still);
-        }
+        for (int block = 0; block < blocks; ++block)
+            phaseDonor->advancePhases(&still);
     }
     note.transferPhase(*phaseDonor);
 }

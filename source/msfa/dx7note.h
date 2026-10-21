@@ -67,6 +67,15 @@ public:
     void transferSignal(Dx7Note &src);
     void transferPhase(Dx7Note &src);
     void oscSync();
+    /** What compute (with no LFO) does to the operators' phases, and nothing
+        else: the block's pitch (pitch envelope, bend, master tune), each
+        switched-on operator's frequency (portamento moving on) and one block's
+        turn of every phase, as each engine turns it. The free phase donor
+        (AVDexedLayer::startFreePhase) only needs its phases. */
+    void advancePhases(const Controllers *ctrls);
+#if defined(AVDEXED_TESTING)
+    int32_t testPhase(int op) const { return params_[op].phase; }
+#endif
 
     // We should put this as a function and not a DX7Note method
     //int32_t osc_freq(int midinote, int mode, int coarse, int fine, int detune);
@@ -108,6 +117,10 @@ private:
     static const int32_t mtsLogFreqToNoteLogFreq;
     MTSClient *mtsClient;
     int32_t osc_freq(int midinote, int mode, int coarse, int fine, int detune, int channel);
+    /** The block's pitch modulation (pitch_base included); `pitch_base` is the bend and master tune. */
+    int32_t pitchOfBlock(int32_t lfo_val, int32_t lfo_delay, const Controllers *ctrls, int32_t &pitch_base);
+    /** Each switched-on operator's frequency for the block (portamento moving on). */
+    void setFrequencies(int32_t pitch_base, int32_t pitch_mod, const Controllers *ctrls);
 };
 
 #endif  // SYNTH_DX7NOTE_H_

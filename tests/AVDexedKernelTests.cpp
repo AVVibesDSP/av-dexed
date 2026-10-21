@@ -4,9 +4,23 @@
 // The engine's kernels against their original code, kept here as it was in
 // 0.3.0 (only the tables are read from the engine): a change made to run
 // faster (the branch-free sine) must give the very same samples, bit for bit.
+// And the free phase donor: advancing only the phases must leave them where
+// computing whole blocks does.
 
 #include "../source/engine/EngineMkI.h"
 #include "../source/engine/EngineOpl.h"
+#include "../source/core/Program.h"
+#include "../source/msfa/dx7note.h"
+#include "../source/msfa/env.h"
+#include "../source/msfa/exp2.h"
+#include "../source/msfa/freqlut.h"
+#include "../source/msfa/lfo.h"
+#include "../source/msfa/pitchenv.h"
+#include "../source/msfa/porta.h"
+#include "../source/msfa/sin.h"
+#include "../source/msfa/tuning.h"
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <random>
@@ -367,6 +381,71 @@ bool runAVDexedKernelTests() {
     }
     passed &= report("Mark I, random kernels", mkiMismatches, kernels);
     passed &= report("OPL, random kernels", oplMismatches, kernels);
+
+    // The free phase donor (AVDexedLayer::startFreePhase): N whole blocks
+    // against N blocks of advancePhases, as the layer tunes it, over varied
+    // voices (fixed and ratio frequencies, pitch envelopes, switched-off
+    // operators), every engine, keys from A0 to C8 and four amounts of turn.
+    {
+        const double rate = 48000.0;
+        Exp2::init(); Tanh::init(); Sin::init();
+        Freqlut::init(rate); Lfo::init(rate); PitchEnv::init(rate); Env::init_sr(rate); Porta::init_sr(rate);
+        FmCore msfa;
+        FmCore* engines[] { &msfa, &mki, &opl };
+        auto tuning = createStandardTuning();
+        long mismatches = 0, compared = 0;
+        for (int voiceIndex = 0; voiceIndex < 48; ++voiceIndex) {
+            uint8_t patch[Program::PROGRAM_SIZE + 1];
+            std::memcpy(patch, Program::initialProgram().getRawData(), sizeof(patch));
+            for (int op = 0; op < 6; ++op) {
+                patch[op * 21 + 16] = uint8_t(random() % 100);   // output level
+                patch[op * 21 + 17] = uint8_t(random() % 4 == 0); // fixed frequency
+                patch[op * 21 + 18] = uint8_t(random() % 32);    // coarse
+                patch[op * 21 + 19] = uint8_t(random() % 100);   // fine
+                patch[op * 21 + 20] = uint8_t(random() % 15);    // detune
+            }
+            for (int i = 126; i < 134; ++i) patch[i] = uint8_t(random() % 100);   // pitch EG rates and levels
+            patch[134] = uint8_t(random() % 32);                                   // algorithm
+            patch[135] = uint8_t(random() % 8);                                    // feedback
+            patch[155] = uint8_t(random() % 4 == 0 ? random() % 64 : 63);          // operators on
+            for (auto* engine : engines) {
+                Controllers still;
+                still.pitch_cc = 0x2000; still.pitch_range_up = 3; still.pitch_range_dn = 3; still.pitch_step = 0;
+                still.aftertouch_cc = still.breath_cc = still.foot_cc = still.modwheel_cc = 0;
+                still.portamento_enable_cc = false; still.portamento_cc = 0; still.portamento_gliss_cc = false;
+                still.masterTune = 0; still.mpeEnabled = false; still.core = engine;
+                still.refresh();
+                for (int pitch = 21; pitch <= 108; pitch += 5)
+                    for (const float cycles : { 0.05f, 0.3f, 0.61f, 0.97f }) {
+                        Dx7Note whole(tuning, nullptr), phasesOnly(tuning, nullptr);
+                        whole.init(patch, pitch, 100, 1, &still);
+                        whole.oscSync();
+                        phasesOnly.init(patch, pitch, 100, 1, &still);
+                        phasesOnly.oscSync();
+                        // As startFreePhase tunes its donor.
+                        const int32_t noteLogfreq = tuning->midinote_to_logfreq(pitch);
+                        const double noteHz = std::exp2(double(noteLogfreq) / double(1 << 24));
+                        const int blocks = std::clamp(int(std::lround(double(cycles) * rate / (double(N) * noteHz))), 1, 16);
+                        const double hz = double(cycles) * rate / (double(N) * double(blocks));
+                        Controllers tuned = still;
+                        tuned.masterTune = int32_t(std::lround(std::log2(hz) * double(1 << 24))) - noteLogfreq;
+                        int32_t scratch[N];
+                        for (int block = 0; block < blocks; ++block) {
+                            std::fill(scratch, scratch + N, 0);
+                            whole.compute(scratch, 0, 0, &tuned);
+                            phasesOnly.advancePhases(&tuned);
+                        }
+                        for (int op = 0; op < 6; ++op) {
+                            mismatches += whole.testPhase(op) != phasesOnly.testPhase(op) ? 1 : 0;
+                            ++compared;
+                        }
+                    }
+            }
+        }
+        if (mismatches != 0)
+            std::cerr << "Free phase donor: " << mismatches << " of " << compared << " phases differ from whole blocks\n";
+        passed &= mismatches == 0;
+    }
 
     std::cout << (passed ? "Kernel checks passed.\n" : "Kernel checks FAILED.\n");
     return passed;
