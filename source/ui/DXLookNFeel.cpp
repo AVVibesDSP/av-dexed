@@ -133,12 +133,13 @@ void DXLookNFeel::drawLabel(Graphics& g, Label& label) {
         const auto textArea = label.getBorderSize().subtractedFrom(label.getLocalBounds());
         const auto colour = label.findColour(Label::textColourId);
         const float alpha = label.isEnabled() ? 1.0f : 0.42f;
+        bool gradient = false;
         if (colour == AVDexedTheme::textPrimary || colour == AVDexedTheme::textSecondary) {
             const float top = textArea.getCentreY() - font.getHeight() * 0.5f;
-            AVDexedTheme::textFill(g, font, AVDexedTheme::textPrimary.withAlpha(alpha),
-                                   AVDexedTheme::textSecondary.withAlpha(alpha), top, top + font.getHeight());
+            gradient = AVDexedTheme::textFill(g, font, AVDexedTheme::textPrimary.withAlpha(alpha),
+                                              AVDexedTheme::textSecondary.withAlpha(alpha), top, top + font.getHeight());
         } else g.setColour(colour.withMultipliedAlpha(alpha));
-        g.drawText(label.getText(), textArea, label.getJustificationType());
+        AVDexedTheme::drawTextLine(g, label.getText(), textArea.toFloat(), label.getJustificationType(), gradient);
     }
 }
 

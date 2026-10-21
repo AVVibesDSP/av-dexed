@@ -13,8 +13,8 @@
 // go up and everything settles. The window as the screen shows it then must
 // equal the same window after a full repaint: a region that was not redrawn
 // (or drawn black) after the resize would differ. Then the same window is
-// painted with no cached images (AVDexedPixelCache off): it must look the
-// same. The captures go to <folder>.
+// painted with no cached images or text (AVDexedPixelCache and
+// AVDexedTheme::TextCache off): it must look the same. The captures go to <folder>.
 
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
@@ -326,10 +326,12 @@ int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& output
                 after(600, [&] {
                     repaintedAgain = captureWindow(outputDirectory.getChildFile("resize-repainted-again.png"));
                     AVDexedPixelCache::enabled = false;
+                    AVDexedTheme::TextCache::enabled = false;
                     editor->repaint();
                     after(600, [&] {
                         direct = captureWindow(outputDirectory.getChildFile("resize-direct.png"));
                         AVDexedPixelCache::enabled = true;
+                        AVDexedTheme::TextCache::enabled = true;
                         finish();
                     });
                 });

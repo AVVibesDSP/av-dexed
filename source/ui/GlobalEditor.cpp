@@ -356,12 +356,15 @@ void GlobalEditor::paint(Graphics& g) {
     for (const auto& area : AVPanels) AVDexedTheme::fillBox(g, area, 0.0f);
     auto& language = AVDexedLanguageService::getInstance();
     for (const auto& label : AVLabels) {
+        // A meter's repaint reaches a few labels at most: the rest draw nothing.
+        if (!g.clipRegionIntersects(label.bounds)) continue;
         const auto font = AVDexedTheme::font(label.heading ? 12.0f : 11.0f, label.heading ? "SemiBold" : "Medium");
         g.setFont(font);
         const float inkHeight = jmin(float(label.bounds.getHeight()), font.getHeight());
         const float inkTop = float(label.bounds.getCentreY()) - inkHeight * 0.5f;
-        AVDexedTheme::textFill(g, font, AVDexedTheme::textPrimary, AVDexedTheme::textSecondary, inkTop, inkTop + inkHeight);
-        g.drawText(language.text(label.key), label.bounds, Justification::centred, true);
+        const bool gradient = AVDexedTheme::textFill(g, font, AVDexedTheme::textPrimary, AVDexedTheme::textSecondary,
+                                                     inkTop, inkTop + inkHeight);
+        AVDexedTheme::drawTextLine(g, language.text(label.key), label.bounds.toFloat(), Justification::centred, gradient);
     }
 }
 

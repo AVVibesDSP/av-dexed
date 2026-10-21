@@ -6,6 +6,8 @@
 #include <juce_graphics/juce_graphics.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <BinaryData.h>
+#include <map>
+#include <vector>
 
 namespace AVDexedTheme {
 inline const juce::Colour canvas { 0xff000000 };
@@ -86,14 +88,148 @@ struct FocusKeyListener final : public juce::KeyListener {
     gradient glyph run as one clipped outline per glyph, and on 1x displays thin
     stems such as "l" or "-" can drop out of small text. Below ~16 device pixels
     the text uses one solid tone between both stops, which CoreText rasterises
-    normally; larger text keeps the gradient. */
-inline void textFill(juce::Graphics& g, const juce::Font& textFont, juce::Colour top, juce::Colour bottom,
+    normally; larger text keeps the gradient. Returns whether it is a gradient. */
+inline bool textFill(juce::Graphics& g, const juce::Font& textFont, juce::Colour top, juce::Colour bottom,
                      float y1, float y2) {
     if (textFont.getHeight() * g.getInternalContext().getPhysicalPixelScaleFactor() < 16.0f) {
         g.setColour(top.interpolatedWith(bottom, 0.4f));
-        return;
+        return false;
     }
     g.setGradientFill(juce::ColourGradient(top, 0.0f, y1, bottom, 0.0f, y2, false));
+    return true;
+}
+/** Text measured and laid out between paints. Measuring a label (shaping) and,
+    for gradient text on CoreGraphics, taking each glyph's outline from the font
+    again cost more than filling it; both depend only on the text, the font and
+    the box. The 512 most recent are kept (then it starts again). */
+namespace TextCache {
+/** Off: gradient text is drawn by Graphics::drawText (the tools compare both on screen). */
+inline bool enabled = true;
+/** Everything of a font that changes its glyphs, at full precision. */
+inline juce::String key(const juce::Font& font, const juce::String& text) {
+    return font.getTypefaceName() + "\n" + font.getTypefaceStyle() + "\n" + juce::String(font.getHeight(), 6) + "\n"
+         + juce::String(font.getHorizontalScale(), 6) + "\n" + juce::String(font.getExtraKerningFactor(), 6) + "\n"
+         + (font.isUnderlined() ? "u" : "") + "\n" + text;
+}
+inline float width(const juce::Font& font, const juce::String& text) {
+    static std::map<juce::String, float> widths;
+    auto name = key(font, text);
+    if (const auto found = widths.find(name); found != widths.end()) return found->second;
+    if (widths.size() >= 512) widths.clear();
+    return widths[std::move(name)] = juce::GlyphArrangement::getStringWidth(font, text);
+}
+/** What GlyphArrangement::draw asks of a context, recorded: each run's font,
+    glyphs and positions. Nothing is drawn. */
+class GlyphRecorder final : public juce::LowLevelGraphicsContext {
+public:
+    struct Run {
+        juce::Font font;
+        std::vector<uint16_t> glyphs;
+        std::vector<juce::Point<float>> positions;
+    };
+    std::vector<Run> runs;
+
+    bool isVectorDevice() const override { return false; }
+    void setOrigin(juce::Point<int>) override {}
+    void addTransform(const juce::AffineTransform&) override {}
+    float getPhysicalPixelScaleFactor() const override { return 1.0f; }
+    bool clipToRectangle(const juce::Rectangle<int>&) override { return true; }
+    bool clipToRectangleList(const juce::RectangleList<int>&) override { return true; }
+    void excludeClipRectangle(const juce::Rectangle<int>&) override {}
+    void clipToPath(const juce::Path&, const juce::AffineTransform&) override {}
+    void clipToImageAlpha(const juce::Image&, const juce::AffineTransform&) override {}
+    bool clipRegionIntersects(const juce::Rectangle<int>&) override { return true; }
+    juce::Rectangle<int> getClipBounds() const override { return { -0x3fffffff, -0x3fffffff, 0x7ffffffe, 0x7ffffffe }; }
+    bool isClipEmpty() const override { return false; }
+    void saveState() override {}
+    void restoreState() override {}
+    void beginTransparencyLayer(float) override {}
+    void endTransparencyLayer() override {}
+    void setFill(const juce::FillType&) override {}
+    void setOpacity(float) override {}
+    void setInterpolationQuality(juce::Graphics::ResamplingQuality) override {}
+    void fillRect(const juce::Rectangle<int>&, bool) override {}
+    void fillRect(const juce::Rectangle<float>&) override {}
+    void fillRectList(const juce::RectangleList<float>&) override {}
+    void fillPath(const juce::Path&, const juce::AffineTransform&) override {}
+    void drawImage(const juce::Image&, const juce::AffineTransform&) override {}
+    void drawLine(const juce::Line<float>&) override {}
+    void setFont(const juce::Font& newFont) override { font = newFont; }
+    const juce::Font& getFont() override { return font; }
+    void drawGlyphs(juce::Span<const uint16_t> glyphs, juce::Span<const juce::Point<float>> positions,
+                    const juce::AffineTransform&) override {
+        runs.push_back({ font, { glyphs.begin(), glyphs.end() }, { positions.begin(), positions.end() } });
+    }
+    std::unique_ptr<juce::ImageType> getPreferredImageTypeForTemporaryImages() const override {
+        return std::make_unique<juce::SoftwareImageType>();
+    }
+    uint64_t getFrameId() const override { return 0; }
+
+private:
+    juce::Font font { juce::FontOptions {} };
+};
+/** A run of glyphs of one font, with each glyph's outline as the font gives it. */
+struct GlyphRun {
+    juce::Font font;
+    std::vector<juce::Path> outlines;
+    std::vector<juce::Point<float>> positions;
+};
+/** The glyphs Graphics::drawText (text, {0, 0, width, height}, ...) lays out
+    (the same arrangement), with their outlines taken once. */
+inline const std::vector<GlyphRun>& glyphRuns(const juce::Font& font, const juce::String& text, float width,
+                                              float height, juce::Justification justification, bool ellipsis) {
+    static std::map<juce::String, std::vector<GlyphRun>> layouts;
+    auto name = key(font, text) + "\n" + juce::String(width, 6) + "\n" + juce::String(height, 6) + "\n"
+              + juce::String(justification.getFlags()) + (ellipsis ? "e" : "");
+    if (const auto found = layouts.find(name); found != layouts.end()) return found->second;
+    if (layouts.size() >= 512) layouts.clear();
+    juce::GlyphArrangement arrangement;
+    arrangement.addCurtailedLineOfText(font, text, 0.0f, 0.0f, width, ellipsis);
+    arrangement.justifyGlyphs(0, arrangement.getNumGlyphs(), 0.0f, 0.0f, width, height, justification);
+    GlyphRecorder recorder;
+    {
+        juce::Graphics recording(recorder);
+        arrangement.draw(recording);
+    }
+    std::vector<GlyphRun> runs;
+    for (auto& recorded : recorder.runs) {
+        GlyphRun run { recorded.font, {}, std::move(recorded.positions) };
+        for (const auto glyph : recorded.glyphs) {
+            juce::Path outline;
+            recorded.font.getTypefacePtr()->getOutlineForGlyph(glyph, outline);
+            run.outlines.push_back(std::move(outline));
+        }
+        runs.push_back(std::move(run));
+    }
+    return layouts[std::move(name)] = std::move(runs);
+}
+}
+/** Graphics::drawText on one line: the same glyphs in the same places. With
+    a gradient (`gradient`, as textFill returns) on CoreGraphics, each glyph's
+    outline comes from TextCache and is filled with the very transform
+    CoreGraphicsContext::drawGlyphs computes; the software renderer and
+    Direct2D keep their own way. */
+inline void drawTextLine(juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area,
+                         juce::Justification justification, bool gradient, bool ellipsis = true) {
+   #if JUCE_MAC
+    if (gradient && TextCache::enabled
+        && dynamic_cast<juce::LowLevelGraphicsSoftwareRenderer*>(&g.getInternalContext()) == nullptr) {
+        if (text.isEmpty() || !g.clipRegionIntersects(area.getSmallestIntegerContainer())) return;
+        const auto place = juce::AffineTransform::translation(area.getX(), area.getY());
+        for (const auto& run : TextCache::glyphRuns(g.getCurrentFont(), text, area.getWidth(), area.getHeight(),
+                                                    justification, ellipsis)) {
+            const auto scale = run.font.getHeightInPoints();
+            for (size_t i = 0; i < run.outlines.size(); ++i)
+                if (!run.outlines[i].isEmpty())
+                    g.fillPath(run.outlines[i], juce::AffineTransform::scale(scale * run.font.getHorizontalScale(), scale)
+                                                    .translated(run.positions[i])
+                                                    .followedBy(place));
+        }
+        return;
+    }
+   #endif
+    juce::ignoreUnused(gradient);
+    g.drawText(text, area, justification, ellipsis);
 }
 /** Figma-style corner radius: never more than half the shorter side. */
 inline float cornerRadius(juce::Rectangle<float> area, float radius) {
@@ -117,13 +253,16 @@ inline void fillBox(juce::Graphics& g, juce::Rectangle<float> area, float radius
 inline void drawText(juce::Graphics& g, const juce::String& text, juce::Font textFont,
                      juce::Rectangle<float> area, juce::Colour top, juce::Colour bottom,
                      juce::Justification justification = juce::Justification::centred, float alpha = 1.0f) {
-    const auto width = juce::GlyphArrangement::getStringWidth(textFont, text);
+    // Outside the area being painted nothing would be drawn: no measuring either.
+    if (text.isEmpty() || !g.clipRegionIntersects(area.getSmallestIntegerContainer())) return;
+    const auto width = TextCache::width(textFont, text);
     if (width > area.getWidth() && width > 0.0f)
         textFont = textFont.withHeight(textFont.getHeight() * juce::jmax(0.55f, area.getWidth() / width));
     const auto band = area.withSizeKeepingCentre(area.getWidth(), juce::jmin(area.getHeight(), textFont.getHeight()));
     g.setFont(textFont);
-    textFill(g, textFont, top.withMultipliedAlpha(alpha), bottom.withMultipliedAlpha(alpha), band.getY(), band.getBottom());
-    g.drawText(text, area, justification, true);
+    const bool gradient = textFill(g, textFont, top.withMultipliedAlpha(alpha), bottom.withMultipliedAlpha(alpha),
+                                   band.getY(), band.getBottom());
+    drawTextLine(g, text, area, justification, gradient);
 }
 inline void drawGreyText(juce::Graphics& g, const juce::String& text, const juce::Font& textFont,
                          juce::Rectangle<float> area,
