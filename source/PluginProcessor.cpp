@@ -350,7 +350,11 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
     } else {
         for (; i < numSamples; i += N) {
             AlignedBuf<int32_t, N> audiobuf;
-            float sumbuf[N];
+            // Each voice gives a whole number of 1/32768ths (at most 2^15), so
+            // the voices are summed as integers and converted once: the float
+            // sum was exact anyway (16 of them stay below 2^19), so the bits
+            // are the same.
+            int32_t sumbuf[N];
 
             processMidiMessages(it, end, i);
 
@@ -377,10 +381,7 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
                         
                         val = val >> 4;
                         int clip_val = val < -(1 << 24) ? 0x8000 : val >= (1 << 24) ? 0x7fff : val >> 9;
-                        float f = ((float) clip_val) / (float) 0x8000;
-                        if( f > 1 ) f = 1;
-                        if( f < -1 ) f = -1;
-                        sumbuf[j] += f;
+                        sumbuf[j] += clip_val;
                         audiobuf.get()[j] = 0;
                     }
                 }
@@ -388,10 +389,11 @@ void DexedAudioProcessor::processBlock(AudioSampleBuffer& buffer, MidiBuffer& mi
             
             int jmax = numSamples - i;
             for (int j = 0; j < N; ++j) {
+                const float sum = ((float) sumbuf[j]) / (float) 0x8000;
                 if (j < jmax) {
-                    channelData[i + j] = sumbuf[j];
+                    channelData[i + j] = sum;
                 } else {
-                    extra_buf[j - jmax] = sumbuf[j];
+                    extra_buf[j - jmax] = sum;
                 }
             }
         }

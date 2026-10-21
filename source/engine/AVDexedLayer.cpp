@@ -382,6 +382,9 @@ void AVDexedLayer::renderBlock(float* out) {
     if (! prepared || controllers.core == nullptr) return;
     AlignedBuf<int32_t, N> audiobuf;
     for (int j = 0; j < N; ++j) audiobuf.get()[j] = 0;
+    // Summed as integers (whole 1/32768ths) and converted once: the same bits
+    // as the float sum, which was exact (see processBlock's simple path).
+    int32_t sum[N] = {};
     const int32_t lfovalue = lfo.getsample();
     const int32_t lfodelay = lfo.getdelay();
     const bool checkMTSESPRetuning = tuningState != nullptr && tuningState->is_standard_tuning() && MTS_HasMaster(mtsClient);
@@ -400,13 +403,11 @@ void AVDexedLayer::renderBlock(float* out) {
             int32_t val = audiobuf.get()[j];
             val = val >> 4;
             const int clip_val = val < -(1 << 24) ? 0x8000 : val >= (1 << 24) ? 0x7fff : val >> 9;
-            float f = float(clip_val) / float(0x8000);
-            if (f > 1) f = 1;
-            if (f < -1) f = -1;
-            out[j] += f;
+            sum[j] += clip_val;
             audiobuf.get()[j] = 0;
         }
     }
+    for (int j = 0; j < N; ++j) out[j] = float(sum[j]) / float(0x8000);
 }
 
 int AVDexedLayer::soundingVoices() const {
