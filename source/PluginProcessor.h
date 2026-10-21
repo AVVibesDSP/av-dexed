@@ -294,6 +294,10 @@ public :
     int getAVKeyboardPitch() const noexcept { return avKeyboardPitch.load(std::memory_order_relaxed); }
     int getAVKeyboardMod() const noexcept { return avKeyboardMod.load(std::memory_order_relaxed); }
     float getAVAudioCpuPercent() const noexcept { return avAudioCpuPercent.load(std::memory_order_relaxed); }
+    /** Whether either channel peaked at `level` or more since the last consume. */
+    bool hasAVOutputPeak(float level) const noexcept {
+        return avOutputPeakL.load(std::memory_order_relaxed) >= level || avOutputPeakR.load(std::memory_order_relaxed) >= level;
+    }
     std::pair<float, float> consumeAVOutputPeaks() noexcept {
         return { avOutputPeakL.exchange(0.0f, std::memory_order_relaxed),
                  avOutputPeakR.exchange(0.0f, std::memory_order_relaxed) };

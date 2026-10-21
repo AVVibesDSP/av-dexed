@@ -36,6 +36,7 @@
 #include "AVDexedPeakMeter.h"
 #include "AVDexedPromptOverlay.h"
 #include "AVDexedPixelCache.h"
+#include "AVDexedAnimationClock.h"
 #include "AVDexedDropOverlay.h"
 #include "window/AVDexedSettingsPanel.h"
 
@@ -54,10 +55,16 @@ private:
 /**
 */
 class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox::Listener, public Timer,
-                                   public FileDragAndDropTarget, public KeyListener,
+                                   public FileDragAndDropTarget, public KeyListener, public AVDexedAnimationHost,
                                    private ChangeListener, private FocusChangeListener {
     // Declared first so all child components/dialogs release their LAF before it dies.
     SharedResourcePointer<DXLookNFeel> lookAndFeel;
+    /** Every animation of the editor runs on this clock, in the screen's frames. */
+    AVDexedAnimationClock AVClock { *this };
+    /** The output meter (30 Hz), the operators' meters and envelope steps, and
+        Play's glow targets: from the first audible sound until all is still. */
+    bool AVUpdateLive(double now);
+    AVDexedAnimation AVLiveAnimation { *this, [this](double now) { return AVUpdateLive(now); } };
     /** Up / Down choose the previous / next sound anywhere in the editor. A
         focused knob or combo box would take them first (JUCE gives a key to the
         focused control before its parents), so this listener rides on the
@@ -166,11 +173,14 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
         the backdrop, queued notices follow, finished prompts are released. */
     void AVDeliverPromptCallback(const std::function<void()>& callback);
     // Footer notice ("Agregado a «Pianos» · 32 sonidos"): ~3 s with fades, then
-    // the normal help fades back. Its own ticker: the editor timer is stopped
-    // while the bank manager is open.
+    // the normal help fades back. On the animation clock: the editor timer is
+    // stopped while the bank manager is open.
     juce::String AVNoticeText;
     double AVNoticeStart = 0.0, AVHelpFadeStart = 0.0;
-    juce::TimedCallback AVNoticeTicker { [this] { AVUpdateHelpText(); } };
+    AVDexedAnimation AVNoticeAnimation { *this, [this](double) {
+        AVUpdateHelpText();
+        return AVNoticeText.isNotEmpty() || AVHelpFadeStart > 0.0;
+    } };
     // Copies 0.1.0's external banks into the library once per process.
     std::unique_ptr<juce::ThreadPool> AVAdoptionPool;
     void AVAdoptExternalSoundsOnce();
@@ -288,6 +298,7 @@ public:
     void AVOpenFilesFromSystem(const StringArray& paths);
     std::unique_ptr<ComponentTraverser> createFocusTraverser() override;
     std::unique_ptr<ComponentTraverser> createKeyboardFocusTraverser() override;
+    AVDexedAnimationClock& getAnimationClock() override { return AVClock; }
 
     bool keyPressed(const KeyPress& key, Component* originatingComponent) override;
 

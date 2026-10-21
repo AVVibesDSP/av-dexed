@@ -10,6 +10,7 @@
 #include "component/AlgoDisplay.h"
 #include "AVDexedPromptOverlay.h"
 #include "AVDexedPixelCache.h"
+#include "AVDexedAnimationClock.h"
 #include <array>
 #include <atomic>
 #include <map>
@@ -100,7 +101,7 @@ private:
 
 /** Glass value capsule shown above a knob while it is dragged (GOZO value tip):
     fades in over ~80 ms, stays 1.2 s after release, fades out over ~170 ms. */
-class AVDexedValueTip final : public juce::Component, private juce::Timer {
+class AVDexedValueTip final : public juce::Component {
 public:
     AVDexedValueTip();
     /** Shows the value above `target`; a click on the tip lets the user type one. */
@@ -110,15 +111,16 @@ public:
     void mouseUp(const juce::MouseEvent& event) override;
 
 private:
-    void timerCallback() override;
+    bool step(double now);
     void beginEditing();
     void finishEditing(bool commit, bool returnFocusToKnob = true);
     juce::String text;
     juce::Component::SafePointer<juce::Slider> slider;
     std::unique_ptr<juce::TextEditor> editor;
     float opacity = 0.0f;
-    int holdFrames = 0;
+    double holdUntil = 0.0, lastStep = 0.0;
     bool held = false;
+    AVDexedAnimation animation { *this, [this](double now) { return step(now); } };
 };
 
 /** Search field whose capsule (painted by the Play view) reacts to focus and

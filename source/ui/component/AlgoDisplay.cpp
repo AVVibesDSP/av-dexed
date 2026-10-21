@@ -494,16 +494,15 @@ void AlgoDisplay::setLevels(const std::array<float, 6>& newLevels) {
         levelTargets[i] = jlimit(0.0f, 1.0f, newLevels[i]);
         moving |= std::abs(levelTargets[i] - levels[i]) > 0.002f;
     }
-    if (moving && hero && !isTimerRunning()) {
+    if (moving && hero && !glowAnimation.isRunning()) {
         lastGlowTick = Time::getMillisecondCounterHiRes();
-        startTimerHz(60);
+        glowAnimation.start();
     }
 }
 
-void AlgoDisplay::timerCallback() {
+bool AlgoDisplay::stepGlow(double now) {
     // Exponential ease with time constants of 45 ms rising and 140 ms
     // falling: about 100 ms to fade in and 400 ms to fade out.
-    const double now = Time::getMillisecondCounterHiRes();
     const float elapsed = float(jlimit(1.0, 100.0, now - lastGlowTick));
     lastGlowTick = now;
     const float rise = 1.0f - std::exp(-elapsed / 45.0f);
@@ -521,7 +520,7 @@ void AlgoDisplay::timerCallback() {
             repaintGlow(i);
         }
     }
-    if (!moving) stopTimer();
+    return moving;
 }
 
 float AlgoDisplay::glowOf(size_t op) const {

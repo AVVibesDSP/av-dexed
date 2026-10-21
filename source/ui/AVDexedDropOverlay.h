@@ -7,6 +7,7 @@
 #include <BinaryData.h>
 #include <cmath>
 #include "AVDexedTheme.h"
+#include "AVDexedAnimationClock.h"
 
 /** Drag-over feedback for files dragged onto AV Dexed, as in GOZO: a static
     whole-window wash (oceanTop at 10%) with a 3 px oceanHighlight border, plus
@@ -14,11 +15,10 @@
     card is GOZO's loading-overlay panel, so the hint reads over any view).
 
     The only motion is the fade: 83 ms in, 117 ms out (GOZO's dialog timing).
-    The timer runs only while the alpha moves and stops when the fade ends, and
-    nothing repaints while the overlay stands still. It never takes the mouse,
-    so the drop still reaches the editor underneath. It owns its timer because
-    the editor's timer is stopped and restarted by other windows. */
-class AVDexedDropOverlay final : public juce::Component, private juce::Timer {
+    The fade runs on the editor's animation clock only while the alpha moves,
+    and nothing repaints while the overlay stands still. It never takes the
+    mouse, so the drop still reaches the editor underneath. */
+class AVDexedDropOverlay final : public juce::Component {
 public:
     AVDexedDropOverlay() {
         setInterceptsMouseClicks(false, false);
@@ -27,7 +27,6 @@ public:
                                                                        BinaryData::AVDexed_PlusIcon_svgSize)))
             plusIcon = juce::Drawable::createFromSVG(*svg);
     }
-    ~AVDexedDropOverlay() override { stopTimer(); }
 
     void setHint(const juce::String& text) {
         if (hint == text) return;
@@ -46,7 +45,7 @@ public:
     void hide(bool instantly) {
         target = 0.0f;
         if (instantly || ! isVisible()) {
-            stopTimer();
+            fade.stop();
             alpha = 0.0f;
             setVisible(false);
             return;
@@ -103,27 +102,27 @@ private:
 
     void startFade() {
         if (alpha == target) {
-            stopTimer();
+            fade.stop();
             // A hide() before the first fade-in step: nothing to fade out.
             if (target <= 0.0f) setVisible(false);
             return;
         }
-        if (isTimerRunning()) return;
+        if (fade.isRunning()) return;
         lastTick = juce::Time::getMillisecondCounterHiRes();
-        startTimerHz(60);
+        fade.start();
     }
 
     // Steps by elapsed time, so a busy message thread shortens the fade
     // instead of stretching it.
-    void timerCallback() override {
-        const double now = juce::Time::getMillisecondCounterHiRes();
+    bool stepFade(double now) {
         const bool fadingIn = target > alpha;
         const float step = float((now - lastTick) / (fadingIn ? fadeInMs : fadeOutMs));
         lastTick = now;
         const float next = fadingIn ? juce::jmin(target, alpha + step) : juce::jmax(target, alpha - step);
         if (next != alpha) { alpha = next; repaint(); }
-        if (alpha != target) return;
-        stopTimer();
+        if (alpha != target) return true;
         if (target <= 0.0f) setVisible(false);
+        return false;
     }
+    AVDexedAnimation fade { *this, [this](double now) { return stepFade(now); } };
 };

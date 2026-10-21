@@ -3,7 +3,9 @@
 
 #pragma once
 #include "AVDexedTheme.h"
+#include "AVDexedAnimationClock.h"
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <cmath>
 
 /** Pitch / mod wheel drawn like GOZO's: grey capsule track, ocean fill (mod
     from the bottom, pitch from the centre toward the thumb), twelve soft
@@ -11,7 +13,7 @@
     earlier SVG carried its own thumb and grooves, so they appeared twice.
     Dragging is relative (a click never makes the value jump) and the pitch
     wheel springs back to centre on release. */
-class AVDexedWheel final : public juce::Slider, private juce::Timer {
+class AVDexedWheel final : public juce::Slider {
 public:
     AVDexedWheel() {
         setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
@@ -84,7 +86,7 @@ public:
 
     void mouseDown(const juce::MouseEvent& event) override {
         if (!isEnabled() || event.mods.isPopupMenu()) return;
-        stopTimer();
+        AVSpring.stop();
         AVDragStart = float(valueToProportionOfLength(getValue()));
         AVDragging = true;
     }
@@ -95,29 +97,38 @@ public:
     }
     void mouseUp(const juce::MouseEvent&) override {
         AVDragging = false;
-        if (isPitch()) startTimerHz(60);
+        if (isPitch()) {
+            AVSpringTick = juce::Time::getMillisecondCounterHiRes();
+            AVSpring.start();
+        }
     }
     void mouseDoubleClick(const juce::MouseEvent&) override {
         if (isDoubleClickReturnEnabled()) setValue(getDoubleClickReturnValue(), juce::sendNotificationSync);
     }
-    bool isBeingDragged() const noexcept { return AVDragging || isTimerRunning(); }
+    bool isBeingDragged() const noexcept { return AVDragging || AVSpring.isRunning(); }
     /** The wheels answer only to the hand: a key step would leave the pitch bent
         (nothing springs it back). Up / Down go on to the editor (sounds). */
     bool keyPressed(const juce::KeyPress&) override { return false; }
 
 private:
     bool isPitch() const { return bool(getProperties()["AVPitch"]); }
-    void timerCallback() override {
-        // Spring back to centre: 35% of the remaining distance per frame.
+    bool AVStepSpring(double now) {
+        // Spring back to centre: 35% of the remaining distance every 16 ms
+        // (the frame of the timer it had), whatever the screen's rate.
+        const double elapsed = juce::jlimit(1.0, 100.0, now - AVSpringTick);
+        AVSpringTick = now;
+        const float pull = 1.0f - std::pow(0.65f, float(elapsed / 16.0));
         const float value = float(valueToProportionOfLength(getValue()));
-        const float next = value + (0.5f - value) * 0.35f;
+        const float next = value + (0.5f - value) * pull;
         if (std::abs(next - 0.5f) < 0.004f) {
             setValue(proportionOfLengthToValue(0.5), juce::sendNotificationSync);
-            stopTimer();
-            return;
+            return false;
         }
         setValue(proportionOfLengthToValue(next), juce::sendNotificationSync);
+        return true;
     }
     float AVDragStart = 0.0f;
     bool AVDragging = false;
+    double AVSpringTick = 0.0;
+    AVDexedAnimation AVSpring { *this, [this](double now) { return AVStepSpring(now); } };
 };

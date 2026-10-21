@@ -739,7 +739,6 @@ void AVDexedValueTip::show(Slider& target, const String& newText) {
     slider = &target;
     text = newText;
     held = true;
-    holdFrames = 72;
     const auto font = AVDexedTheme::font(15.0f, "Medium");
     const int width = jmax(jmax(59, getWidth()), roundToInt(GlyphArrangement::getStringWidth(font, text)) + 26);
     const int height = 24;
@@ -749,13 +748,16 @@ void AVDexedValueTip::show(Slider& target, const String& newText) {
     setBounds(knob.getCentreX() - width / 2, y, width, height);
     setVisible(true);
     toFront(false);
-    startTimerHz(60);
+    if (!animation.isRunning()) {
+        lastStep = Time::getMillisecondCounterHiRes();
+        animation.start();
+    }
     repaint();
 }
 
 void AVDexedValueTip::release() {
     held = false;
-    holdFrames = 72;
+    holdUntil = Time::getMillisecondCounterHiRes() + 1152.0;   // 72 frames of 16 ms
 }
 
 void AVDexedValueTip::mouseUp(const MouseEvent& event) {
@@ -804,21 +806,26 @@ void AVDexedValueTip::finishEditing(bool commit, bool returnFocusToKnob) {
     repaint();
 }
 
-void AVDexedValueTip::timerCallback() {
-    if (held || holdFrames > 0) {
-        opacity = jmin(1.0f, opacity + 1.0f / 5.0f);
-        if (!held) --holdFrames;
+bool AVDexedValueTip::step(double now) {
+    // In over 80 ms, out over 160 ms (5 and 10 frames of 16 ms), by elapsed time.
+    const float elapsed = float(jlimit(1.0, 100.0, now - lastStep));
+    lastStep = now;
+    const float before = opacity;
+    if (held || now < holdUntil) {
+        opacity = jmin(1.0f, opacity + elapsed / 80.0f);
     } else {
-        opacity -= 1.0f / 10.0f;
+        opacity -= elapsed / 160.0f;
         if (opacity <= 0.0f) {
             opacity = 0.0f;
-            stopTimer();
             setVisible(false);
             setSize(0, 0);
             slider = nullptr;
+            return false;
         }
     }
-    repaint();
+    // Held at full opacity nothing changes: no repaint (show() repaints new text).
+    if (opacity != before) repaint();
+    return true;
 }
 
 void AVDexedValueTip::paint(Graphics& g) {

@@ -27,10 +27,11 @@
 #include "parameter/Model.h"
 #include "../util/CachedParameter.h"
 #include "../AVDexedPixelCache.h"
+#include "../AVDexedAnimationClock.h"
 
 #include "../../debugger/Logger.h"
 
-class AlgoDisplay : public juce::Component, public juce::SettableTooltipClient, private juce::Timer {
+class AlgoDisplay : public juce::Component, public juce::SettableTooltipClient {
     DexedApvts& state;
     CachedParameter<int> algoValue;
     CachedParameter<bool> opSwitch[6];
@@ -42,7 +43,9 @@ class AlgoDisplay : public juce::Component, public juce::SettableTooltipClient, 
     std::array<float, 6> levels {};
     std::array<float, 6> levelTargets {};
     double lastGlowTick = 0.0;
-    void timerCallback() override;
+    /** One step of the glow's ease; false once every level is still. */
+    bool stepGlow(double now);
+    AVDexedAnimation glowAnimation { *this, [this](double now) { return stepGlow(now); } };
     /** Repaints only the node `op` and its glow: the rest of the diagram is
         unchanged by a level (paint skips what lies outside that area). */
     void repaintGlow(size_t op);

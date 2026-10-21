@@ -1500,7 +1500,7 @@ void DexedAudioProcessorEditor::showAVFooterNotice(const String& text) {
     AVNoticeText = text;
     AVNoticeStart = Time::getMillisecondCounterHiRes();
     AVHelpFadeStart = 0.0;
-    AVNoticeTicker.startTimerHz(60);
+    AVNoticeAnimation.start();
     AVUpdateHelpText();
 }
 
@@ -1558,10 +1558,6 @@ void DexedAudioProcessorEditor::comboBoxChanged (ComboBox* comboBoxThatHasChange
 }
 
 void DexedAudioProcessorEditor::timerCallback() {
-    const auto now = Time::getMillisecondCounterHiRes();
-    const auto peaks = processor->consumeAVOutputPeaks();
-    AVOutputMeter.AVUpdate(peaks.first, peaks.second, AVLastMeterUpdate > 0.0 ? float((now - AVLastMeterUpdate) / 1000.0) : 0.02f);
-    AVLastMeterUpdate = now;
     AVUpdateFooter();
     if (!AVPitchWheel.isBeingDragged()) AVPitchWheel.setValue(processor->getAVKeyboardPitch(), dontSendNotification);
     if (!AVModWheel.isBeingDragged()) AVModWheel.setValue(processor->getAVKeyboardMod(), dontSendNotification);
@@ -1580,6 +1576,21 @@ void DexedAudioProcessorEditor::timerCallback() {
         refreshPresetHeader();
     }
 
+    // The meters, the operators' levels and Play's glow move on the animation
+    // clock, in the screen's frames, from the moment something can be seen
+    // (the meter's floor is -60 dBFS) until all of it is still again.
+    if (!AVLiveAnimation.isRunning() && (processor->hasAVOutputPeak(0.001f) || processor->peekVoiceStatus()))
+        AVLiveAnimation.start();
+}
+
+bool DexedAudioProcessorEditor::AVUpdateLive(double now) {
+    // The output meter at 30 Hz, as a DAW's; the levels below at the frame rate.
+    if (now - AVLastMeterUpdate >= 1000.0 / 30.0 - 2.0) {
+        const auto peaks = processor->consumeAVOutputPeaks();
+        AVOutputMeter.AVUpdate(peaks.first, peaks.second, AVLastMeterUpdate > 0.0 ? float((now - AVLastMeterUpdate) / 1000.0) : 0.02f);
+        AVLastMeterUpdate = now;
+    }
+
     if ( ! processor->peekVoiceStatus() ) {
         // Nothing sounds: let the Play glow fade and zero the operator meters once.
         playView.setOperatorLevels({});
@@ -1591,10 +1602,11 @@ void DexedAudioProcessorEditor::timerCallback() {
             AVLastGlobalVu = AVOutputMeter.AVDisplayedGain();
             global.updateVu(AVLastGlobalVu);
         }
-        return;
+        // A tail may still sound with no voice playing (effects): until the
+        // meter reaches its floor.
+        return AVOutputMeter.AVDisplayedGain() > 0.0f;
     }
     AVOperatorsSilent = false;
-
     std::array<float, 6> heroLevels {};
     for(int i=0;i<6;i++) {
         //operators[i].updateGain(sqrt(processor->voiceStatus.amp[5 - i]) / 8196);        // TODO: FUGLY !!!! change this sqrt nonsense
@@ -1619,6 +1631,7 @@ void DexedAudioProcessorEditor::timerCallback() {
     global.updatePitchPos(processor->voiceStatus.pitchStep);
     AVLastGlobalVu = AVOutputMeter.AVDisplayedGain();
     global.updateVu(AVLastGlobalVu);
+    return true;
 }
 
 void DexedAudioProcessorEditor::updateUI() {
@@ -2407,8 +2420,6 @@ void DexedAudioProcessorEditor::AVUpdateHelpText() {
         else AVHelpFadeStart = 0.0;
     }
     AVHelpLabel.setAlpha(alpha);
-    if (AVHelpFadeStart <= 0.0 && AVNoticeTicker.isTimerRunning())
-        AVNoticeTicker.stopTimer();
 }
 
 void DexedAudioProcessorEditor::AVUpdateKeyboardRange() {

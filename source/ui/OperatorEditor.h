@@ -5,8 +5,9 @@
 #include "component/VUMeter.h"
 #include "component/EnvDisplay.h"
 #include "util/AudioComponentContainer.h"
+#include "AVDexedAnimationClock.h"
 
-class OperatorEditor : public Component, private juce::Timer {
+class OperatorEditor : public Component {
 public:
     OperatorEditor (DexedAudioProcessor &processor, int num);
     ~OperatorEditor() override;
@@ -33,8 +34,10 @@ private:
     struct AVLabel { String key; Rectangle<int> bounds; bool heading = false; };
     std::vector<AVLabel> AVLabels;
     void AVPlace(const String& id, Rectangle<int> bounds);
-    void timerCallback() override;
     float AVFlash = 0.0f;
+    double AVFlashStart = 0.0;
+    bool AVStepFlash(double now);
+    AVDexedAnimation AVFlashAnimation { *this, [this](double now) { return AVStepFlash(now); } };
 
     std::unique_ptr<EnvDisplay> envDisplay;
     std::unique_ptr<ToggleButton> opSwitch;

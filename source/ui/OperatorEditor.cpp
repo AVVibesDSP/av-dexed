@@ -233,18 +233,16 @@ void OperatorEditor::mouseDown(const MouseEvent &event) {
 
 void OperatorEditor::flashHighlight() {
     AVFlash = 1.0f;
-    startTimerHz(60);
+    AVFlashStart = Time::getMillisecondCounterHiRes();
+    AVFlashAnimation.start();
     repaint();
 }
 
-void OperatorEditor::timerCallback() {
-    // Hold briefly, then fade over about a second.
-    AVFlash -= 1.0f / 60.0f;
-    if (AVFlash <= 0.0f) {
-        AVFlash = 0.0f;
-        stopTimer();
-    }
+bool OperatorEditor::AVStepFlash(double now) {
+    // Fades over about a second (what 60 steps of a 16 ms timer took).
+    AVFlash = jmax(0.0f, 1.0f - float((now - AVFlashStart) / 960.0));
     repaint();
+    return AVFlash > 0.0f;
 }
 
 void OperatorEditor::toggleOpSwitch() {
