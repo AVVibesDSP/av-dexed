@@ -287,16 +287,56 @@ inline void fillRowHighlight(juce::Graphics& g, juce::Rectangle<float> row, floa
     g.setGradientFill(gradient);
     g.fillRoundedRectangle(row, cornerRadius(row, 6.0f));
 }
+/** What JUCE's ImageConvolutionKernel (9) with createGaussianBlur (2) does
+    to `source` (each tap weighted exp(-(x²+y²)/8) over the kernel's sum, taps
+    outside the image dropped, rounded once), done as two passes of 9 taps
+    instead of one of 81: the weights are the products of two 9-tap rows. Only
+    the order of the float sums differs (±1 level in an odd pixel). */
+inline juce::Image gaussianBlur9(const juce::Image& source) {
+    using namespace juce;
+    if (! source.isValid()) return {};
+    constexpr int taps = 9, half = taps / 2;
+    float row[taps];
+    double total = 0.0;
+    for (int i = 0; i < taps; ++i) {
+        row[i] = (float) std::exp(-1.0 / 8.0 * double((i - half) * (i - half)));
+        total += row[i];
+    }
+    for (auto& w : row) w = float(double(w) / total);
+    auto result = source.createCopy();
+    const Image::BitmapData in(source, Image::BitmapData::readOnly);
+    const Image::BitmapData out(result, Image::BitmapData::writeOnly);
+    const int width = in.width, height = in.height, channels = in.pixelStride;
+    std::vector<float> across((size_t) width * (size_t) height * (size_t) channels, 0.0f);
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x) {
+            float* sum = &across[((size_t) y * (size_t) width + (size_t) x) * (size_t) channels];
+            for (int t = 0; t < taps; ++t) {
+                const int sx = x + t - half;
+                if (sx < 0 || sx >= width) continue;
+                const uint8* pixel = in.getPixelPointer(sx, y);
+                for (int c = 0; c < channels; ++c) sum[c] += row[t] * pixel[c];
+            }
+        }
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x) {
+            float sum[4] {};
+            for (int t = 0; t < taps; ++t) {
+                const int sy = y + t - half;
+                if (sy < 0 || sy >= height) continue;
+                const float* line = &across[((size_t) sy * (size_t) width + (size_t) x) * (size_t) channels];
+                for (int c = 0; c < channels; ++c) sum[c] += row[t] * line[c];
+            }
+            uint8* pixel = out.getPixelPointer(x, y);
+            for (int c = 0; c < channels; ++c) pixel[c] = (uint8) jmin(0xff, roundToInt(sum[c]));
+        }
+    return result;
+}
 /** Blurred backdrop for in-editor modals (Settings, effects, prompts): a 1/3
     copy of a snapshot with a 9-tap gaussian. Drawn stretched, under a 54% veil. */
 inline juce::Image blurredBackdrop(const juce::Image& snapshot) {
     if (! snapshot.isValid()) return {};
-    const auto small = snapshot.rescaled(juce::jmax(1, snapshot.getWidth() / 3), juce::jmax(1, snapshot.getHeight() / 3));
-    auto blurred = small.createCopy();
-    juce::ImageConvolutionKernel kernel(9);
-    kernel.createGaussianBlur(2.0f);
-    kernel.applyToImage(blurred, small, small.getBounds());
-    return blurred;
+    return gaussianBlur9(snapshot.rescaled(juce::jmax(1, snapshot.getWidth() / 3), juce::jmax(1, snapshot.getHeight() / 3)));
 }
 /** Card/side-panel/modal surface: the vertical panel gradient, no outline. */
 inline void panel(juce::Graphics& g, juce::Rectangle<float> area, float radius = 9.0f) {

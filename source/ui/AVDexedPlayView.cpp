@@ -431,10 +431,7 @@ public:
                     const Image& source, std::function<void()> close)
         : AVParent(&parent), AVClose(std::move(close)), AVPanel(parameters, kind),
           AVCloseButton("AVCloseEffect", DrawableButton::ImageFitted) {
-        const auto small = source.rescaled(jmax(1, source.getWidth() / 3), jmax(1, source.getHeight() / 3));
-        AVBackdrop = small.createCopy();
-        ImageConvolutionKernel kernel(9); kernel.createGaussianBlur(2.0f);
-        kernel.applyToImage(AVBackdrop, small, small.getBounds());
+        AVBackdrop = AVDexedTheme::blurredBackdrop(source);
         addAndMakeVisible(AVPanel);
         AVPanel.addAndMakeVisible(AVCloseButton);
         if (auto icon = avDrawableFromSvg(BinaryData::AVDexed_CloseIcon_svg, BinaryData::AVDexed_CloseIcon_svgSize)) {

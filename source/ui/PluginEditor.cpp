@@ -1254,11 +1254,7 @@ public:
     AVDexedSettingsOverlay(Image backdrop, std::unique_ptr<AVDexedSettingsPanel> panel, std::function<void()> close)
         : AVPanel(std::move(panel)), AVClose(std::move(close)) {
         // A transient in-memory blur of vector-rendered content, never a PNG UI asset.
-        const auto small = backdrop.rescaled(backdrop.getWidth() / 3, backdrop.getHeight() / 3);
-        AVBlurredBackdrop = small.createCopy();
-        ImageConvolutionKernel kernel(9);
-        kernel.createGaussianBlur(2.0f);
-        kernel.applyToImage(AVBlurredBackdrop, small, small.getBounds());
+        AVBlurredBackdrop = AVDexedTheme::blurredBackdrop(backdrop);
         addAndMakeVisible(*AVPanel);
         setWantsKeyboardFocus(true);
         setFocusContainerType(FocusContainerType::focusContainer);

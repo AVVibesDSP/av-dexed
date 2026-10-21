@@ -9,6 +9,7 @@
 // at a time (NEON and plain C++). And the free phase donor: advancing only the
 // phases must leave them where computing whole blocks does.
 
+#include "../source/ui/AVDexedTheme.h"
 #include "../source/engine/EngineMkI.h"
 #include "../source/engine/EngineOpl.h"
 #include "../source/core/Program.h"
@@ -707,6 +708,47 @@ bool runAVDexedKernelTests() {
         if (mismatches != 0)
             std::cerr << "Free phase donor: " << mismatches << " of " << compared << " phases differ from whole blocks\n";
         passed &= mismatches == 0;
+    }
+
+    // The dialogs' backdrop blur (AVDexedTheme::gaussianBlur9) against JUCE's
+    // ImageConvolutionKernel it replaces: within one level everywhere,
+    // including the edges, for 24- and 32-bit pictures; and its time.
+    {
+        juce::Random random(7);
+        int over = 0, off = 0, total = 0;
+        double ours = 0.0, juces = 0.0;
+        for (const auto format : { juce::Image::RGB, juce::Image::ARGB })
+            for (const auto size : { juce::Point<int>(480, 313), juce::Point<int>(7, 5), juce::Point<int>(1, 12) }) {
+                juce::Image picture(format, size.x, size.y, true, juce::SoftwareImageType());
+                for (int y = 0; y < size.y; ++y)
+                    for (int x = 0; x < size.x; ++x) {
+                        const auto noise = (juce::uint8) random.nextInt(256);
+                        const auto ramp = (juce::uint8) ((x * 255) / juce::jmax(1, size.x - 1));
+                        picture.setPixelAt(x, y, juce::Colour::fromRGBA(noise, ramp, (juce::uint8) (noise ^ ramp), (juce::uint8) random.nextInt(256)));
+                    }
+                auto reference = picture.createCopy();
+                const double t0 = juce::Time::getMillisecondCounterHiRes();
+                juce::ImageConvolutionKernel kernel(9);
+                kernel.createGaussianBlur(2.0f);
+                kernel.applyToImage(reference, picture, picture.getBounds());
+                const double t1 = juce::Time::getMillisecondCounterHiRes();
+                const auto fast = AVDexedTheme::gaussianBlur9(picture);
+                const double t2 = juce::Time::getMillisecondCounterHiRes();
+                juces += t1 - t0;
+                ours += t2 - t1;
+                const juce::Image::BitmapData a(reference, juce::Image::BitmapData::readOnly), b(fast, juce::Image::BitmapData::readOnly);
+                for (int y = 0; y < size.y; ++y)
+                    for (int x = 0; x < size.x; ++x)
+                        for (int c = 0; c < a.pixelStride; ++c) {
+                            const int d = std::abs(int(a.getPixelPointer(x, y)[c]) - int(b.getPixelPointer(x, y)[c]));
+                            over += d > 1 ? 1 : 0;
+                            off += d == 1 ? 1 : 0;
+                            ++total;
+                        }
+            }
+        std::cout << "Backdrop blur: " << off << " of " << total << " values one level off, " << over
+                  << " more (two passes " << juce::String(ours, 1) << " ms, JUCE's kernel " << juce::String(juces, 1) << " ms)\n";
+        passed &= over == 0 && off * 1000 < total;
     }
 
     std::cout << (passed ? "Kernel checks passed.\n" : "Kernel checks FAILED.\n");
