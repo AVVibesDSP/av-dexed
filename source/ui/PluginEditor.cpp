@@ -603,11 +603,11 @@ DexedAudioProcessorEditor::~DexedAudioProcessorEditor() {
     AVPresetStepPoll.stopTimer();
     if (AVStepLearn >= 0) processor->cancelAVPresetStepLearn();
     processor->midiCCMapper->cancelMapping();
-    if (AVSettingsOverlay) Desktop::getInstance().getAnimator().cancelAnimation(AVSettingsOverlay.get(), false);
-    // Closed dialogs may still be fading out: their proxy images live in the
-    // frame and must go with it.
+    if (AVSettingsOverlay) AVDexedComponentFade::forget(*AVSettingsOverlay);
+    // Closed dialogs may still be fading out: their pictures live in the
+    // frame and go with it.
     for (auto& prompt : AVPrompts)
-        Desktop::getInstance().getAnimator().cancelAnimation(prompt.get(), false);
+        AVDexedComponentFade::forget(*prompt);
     AVPrompts.clear();
     // Waits for a running adoption (it only copies a few small files); one
     // still queued is dropped and the next editor tries again.
@@ -615,8 +615,7 @@ DexedAudioProcessorEditor::~DexedAudioProcessorEditor() {
     int queued = avAdoptionQueued;
     avAdoptionState.compare_exchange_strong(queued, avAdoptionIdle);
     midiKeyboard.releaseAVUINotes();
-    Desktop::getInstance().getAnimator().cancelAnimation(&classicView, false);
-    Desktop::getInstance().getAnimator().cancelAnimation(&playView, false);
+    AVPageFade.finish();
     AVDexedLanguageService::getInstance().removeChangeListener(this);
     setLookAndFeel(nullptr);
 }
@@ -766,7 +765,6 @@ void DexedAudioProcessorEditor::showAVView(AVView view, bool animate) {
     // so it takes the focus and clicks at once).
     for (auto other : { AVView::play, AVView::advanced, AVView::layers }) {
         auto& page = AVViewComponent(other);
-        Desktop::getInstance().getAnimator().cancelAnimation(&page, false);
         page.setAlpha(1.0f);
         page.setInterceptsMouseClicks(true, true);
         if (other != view) page.setVisible(false);
@@ -1317,7 +1315,7 @@ void DexedAudioProcessorEditor::parmShow() {
     // visible and opaque, which left only the fade-out working.
     frameComponent.addChildComponent(*AVSettingsOverlay);
     AVSettingsOverlay->setBounds(frameComponent.getLocalBounds());
-    Desktop::getInstance().getAnimator().fadeIn(AVSettingsOverlay.get(), 100);
+    AVDexedComponentFade::fadeIn(*AVSettingsOverlay, 100);
     AVSettingsOverlay->enterModalState(true);
 }
 
@@ -1478,12 +1476,11 @@ void DexedAudioProcessorEditor::AVDeliverPromptCallback(const std::function<void
 }
 
 void DexedAudioProcessorEditor::AVReleaseFinishedPrompts() {
-    // A closed prompt fades out as a proxy image the animator owns. The prompt
-    // is kept until that fade ends: released earlier, its fade could no longer
-    // be found (and cancelled) when the editor closes.
-    auto& animator = Desktop::getInstance().getAnimator();
-    AVPrompts.erase(std::remove_if(AVPrompts.begin(), AVPrompts.end(), [&animator](const auto& prompt) {
-                        return prompt->isFinishing() && ! animator.isAnimating(prompt.get());
+    // A closed prompt fades out as a picture over the frame. The prompt is
+    // kept until that fade ends: a dialog opened meanwhile reuses its
+    // backdrop instead of photographing the picture.
+    AVPrompts.erase(std::remove_if(AVPrompts.begin(), AVPrompts.end(), [](const auto& prompt) {
+                        return prompt->isFinishing() && ! AVDexedComponentFade::isFading(*prompt);
                     }), AVPrompts.end());
     const bool fading = std::any_of(AVPrompts.begin(), AVPrompts.end(), [](const auto& prompt) { return prompt->isFinishing(); });
     if (! fading || AVPromptSweepPending)
@@ -1527,13 +1524,13 @@ void DexedAudioProcessorEditor::AVCloseSettings(bool instantly) {
     if (! AVSettingsOverlay || ! AVSettingsOverlay->isVisible())
         return;
     // Hide now; destroy after the button callback (or the drop) has unwound.
-    Desktop::getInstance().getAnimator().cancelAnimation(AVSettingsOverlay.get(), false);
+    AVDexedComponentFade::cancel(*AVSettingsOverlay);
     if (AVSettingsOverlay->isCurrentlyModal())
         AVSettingsOverlay->exitModalState(0);
     if (instantly)
         AVSettingsOverlay->setVisible(false);
     else
-        Desktop::getInstance().getAnimator().fadeOut(AVSettingsOverlay.get(), 133);   // GOZO settings timing: in ~6 frames, out ~8 frames
+        AVDexedComponentFade::fadeOut(*AVSettingsOverlay, 133);   // GOZO settings timing: in ~6 frames, out ~8 frames
     Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
     Timer::callAfterDelay(1, [safeThis] {
         if (safeThis && safeThis->AVSettingsOverlay && !safeThis->AVSettingsOverlay->isVisible())

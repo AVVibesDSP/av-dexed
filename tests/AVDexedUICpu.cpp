@@ -760,7 +760,9 @@ int AVRunUIFadesCheck(const juce::File& bankFile, int slot, const juce::File& ou
             const float pixelsPerPoint = float(a.getWidth()) / float(editor->getWidth());
             const int titleBar = a.getHeight() - roundToInt(editor->getHeight() * pixelsPerPoint);
             const float footerTop = float(editor->getHeight() - 30.0f * processor.getZoomFactor()) * pixelsPerPoint + float(titleBar);
-            auto checked = Rectangle<int>(0, 0, a.getWidth(), roundToInt(footerTop));
+            // Below the title bar (its look follows the window's focus, which a
+            // modal dialog takes) and above the footer.
+            auto checked = Rectangle<int>(0, titleBar, a.getWidth(), roundToInt(footerTop) - titleBar);
             if (pagesOnly) {
                 const auto pages = editor->getLocalArea(&editor->frameComponent, editor->AVPageArea().toFloat()) * pixelsPerPoint;
                 checked = pages.translated(0.0f, float(titleBar)).getSmallestIntegerContainer().getIntersection(checked);
@@ -800,58 +802,127 @@ int AVRunUIFadesCheck(const juce::File& bankFile, int slot, const juce::File& ou
             AVDexedNativeFade::enabled = true;
         };
 
-        const float zooms[] { 1.0f, 0.83f };
-        size_t zoomIndex = 0;
-        Image before, startNative, startPainted, halfNative, halfPainted, after, repainted;
-        std::function<void()> run;
-        const auto after_ = [&](int ms, std::function<void()> then) { Timer::callAfterDelay(ms, [then] { then(); }); };
-        run = [&] {
-            processor.setZoomFactor(zooms[zoomIndex]);
-            editor->resetSize();
-            editor->showAVView(View::play, false);
-            after_(1200, [&] {
-                before = captureWindow(file("before"));
-                still(0.0f, true);
-                after_(500, [&] {
-                    startNative = captureWindow(file("start-native"));
-                    still(0.0f, false);
-                    after_(500, [&] {
-                        startPainted = captureWindow(file("start-painted"));
-                        still(0.5f, true);
-                        after_(500, [&] {
-                            halfNative = captureWindow(file("half-native"));
-                            still(0.5f, false);
-                            after_(500, [&] {
-                                halfPainted = captureWindow(file("half-painted"));
-                                end();
-                                editor->showAVView(View::play, false);
-                                after_(400, [&] {
-                                    editor->showAVView(View::advanced, true);   // a real fade, to its end
-                                    after_(900, [&] {
-                                        after = captureWindow(file("after"));
-                                        editor->repaint();
-                                        after_(600, [&] {
-                                            repainted = captureWindow(file("after-repaint"));
-                                            // Up to 2 levels: CoreGraphics dithers gradients, so two paints differ.
-                                            compare("first frame (Core Animation) = page before", startNative, before, 2, true);
-                                            compare("first frame (painted) = page before", startPainted, before, 2, true);
-                                            // The compositor mixes the pictures in linear light, CoreGraphics
-                                            // in sRGB values: half way, high-contrast edges come out up to
-                                            // ~13 levels lighter. The ends are exact (above and below).
-                                            compare("half way, Core Animation ~ painted", halfNative, halfPainted, 16, true);
-                                            compare("after the fade = full repaint", after, repainted, 0, false);
-                                            if (++zoomIndex < std::size(zooms)) run();
-                                            else MessageManager::getInstance()->stopDispatchLoop();
-                                        });
-                                    });
-                                });
-                            });
-                        });
-                    });
-                });
-            });
+        // The checks run as stages, each after its delay (ms).
+        std::map<String, Image> shots;
+        const auto shoot = [&](const String& name) { shots[name] = captureWindow(file(name)); };
+        std::vector<std::pair<int, std::function<void()>>> stages;
+        const auto add = [&](int ms, std::function<void()> stage) { stages.emplace_back(ms, std::move(stage)); };
+
+        // In-editor dialogs: Settings and a prompt, faded in and out by AVDexedComponentFade.
+        struct Overlay {
+            String name;
+            std::function<void()> open, close, reset;
+            std::function<Component*()> target;
         };
-        after_(500, run);
+        AVDexedPromptOverlay* prompt = nullptr;
+        const Overlay overlays[] {
+            { "settings",
+              [&] { editor->showAVSettingsPage(AVDexedSettingsPanel::AVPage::instrument); },
+              [&] { editor->AVCloseSettings(false); },
+              [&] {
+                  AVDexedComponentFade::testFreeze = -1.0f;
+                  if (editor->AVSettingsOverlay) AVDexedComponentFade::cancel(*editor->AVSettingsOverlay);
+                  editor->AVCloseSettings(true);
+              },
+              [&]() -> Component* { return editor->AVSettingsOverlay.get(); } },
+            { "dialog",
+              [&] {
+                  AVDexedPromptOverlay::Options options;
+                  options.title = "Fade check";
+                  options.message = "A dialog over a blurred copy of the editor.";
+                  options.confirmText = "OK";
+                  prompt = editor->showAVPrompt(std::move(options), {});
+              },
+              [&] { if (prompt != nullptr) prompt->dismiss(); },
+              [&] {
+                  AVDexedComponentFade::testFreeze = -1.0f;
+                  if (prompt != nullptr) {
+                      AVDexedComponentFade::cancel(*prompt);
+                      prompt->dismiss();
+                      AVDexedComponentFade::cancel(*prompt);
+                  }
+                  prompt = nullptr;
+              },
+              [&]() -> Component* { return prompt; } },
+        };
+        const auto held = [&](const Overlay& overlay, float at, bool native, bool opening) {
+            AVDexedNativeFade::enabled = native;
+            AVDexedComponentFade::testFreeze = at;
+            if (opening) overlay.open(); else overlay.close();
+        };
+
+        for (float zoom : { 1.0f, 0.83f }) {
+            add(0, [&, zoom] {
+                processor.setZoomFactor(zoom);
+                editor->resetSize();
+                editor->showAVView(View::play, false);
+            });
+            add(1200, [&] { shoot("before"); still(0.0f, true); });
+            add(500, [&] { shoot("start-native"); still(0.0f, false); });
+            add(500, [&] { shoot("start-painted"); still(0.5f, true); });
+            add(500, [&] { shoot("half-native"); still(0.5f, false); });
+            add(500, [&] {
+                shoot("half-painted");
+                end();
+                editor->showAVView(View::play, false);
+            });
+            add(400, [&] { editor->showAVView(View::advanced, true); });   // a real fade, to its end
+            add(900, [&] { shoot("after"); editor->repaint(); });
+            add(600, [&] {
+                shoot("after-repaint");
+                // Up to 3 levels: CoreGraphics dithers gradients, so two paints differ.
+                compare("tabs, first frame (Core Animation) = page before", shots["start-native"], shots["before"], 3, true);
+                compare("tabs, first frame (painted) = page before", shots["start-painted"], shots["before"], 3, true);
+                // The compositor mixes the pictures in linear light, CoreGraphics
+                // in sRGB values: half way, high-contrast edges come out up to
+                // ~13 levels lighter. The ends are exact (above and below).
+                compare("tabs, half way, Core Animation ~ painted", shots["half-native"], shots["half-painted"], 16, true);
+                compare("tabs, after the fade = full repaint", shots["after"], shots["after-repaint"], 0, false);
+                editor->showAVView(View::play, false);
+            });
+            for (const auto& overlay : overlays) {
+                const auto n = [&overlay](const char* what) { return overlay.name + "-" + what; };
+                add(700, [&, n] { overlay.reset(); });
+                add(700, [&, n] { shoot(n("closed")); held(overlay, 0.0f, true, true); });
+                add(500, [&, n] { shoot(n("in-start")); overlay.reset(); });
+                add(700, [&, n] { held(overlay, 1.0f, true, true); });
+                add(500, [&, n] {
+                    shoot(n("in-end"));
+                    AVDexedComponentFade::testFreeze = -1.0f;
+                    if (auto* target = overlay.target()) AVDexedComponentFade::cancel(*target);   // shown, live
+                });
+                add(500, [&, n] { shoot(n("open")); overlay.reset(); });
+                add(700, [&, n] { held(overlay, 0.5f, true, true); });
+                add(500, [&, n] { shoot(n("half-native")); overlay.reset(); });
+                add(700, [&, n] { held(overlay, 0.5f, false, true); });
+                add(500, [&, n] { shoot(n("half-painted")); overlay.reset(); });
+                add(700, [&, n] { AVDexedNativeFade::enabled = true; overlay.open(); });
+                add(700, [&, n] { held(overlay, 0.0f, true, false); });
+                add(500, [&, n] {
+                    shoot(n("out-start"));
+                    AVDexedComponentFade::testFreeze = -1.0f;
+                    if (auto* target = overlay.target()) AVDexedComponentFade::cancel(*target);   // the picture goes
+                });
+                add(600, [&, n] {
+                    shoot(n("gone"));
+                    const auto what = [&](const char* text) { return overlay.name + ", " + text; };
+                    compare(what("fade-in's first frame = before"), shots[n("in-start")], shots[n("closed")], 3, false);
+                    compare(what("fade-in's last frame = open"), shots[n("in-end")], shots[n("open")], 3, false);
+                    compare(what("half way, Core Animation ~ painted"), shots[n("half-native")], shots[n("half-painted")], 16, false);
+                    compare(what("fade-out's first frame = open"), shots[n("out-start")], shots[n("open")], 3, false);
+                    compare(what("after the fade-out = before"), shots[n("gone")], shots[n("closed")], 3, false);
+                    overlay.reset();
+                });
+            }
+        }
+        add(300, [] { MessageManager::getInstance()->stopDispatchLoop(); });
+        size_t stage = 0;
+        std::function<void()> next;
+        next = [&] {
+            stages[stage].second();
+            if (++stage < stages.size()) Timer::callAfterDelay(stages[stage].first, next);
+        };
+        Timer::callAfterDelay(500, next);
         MessageManager::getInstance()->runDispatchLoop();
         end();
         window.setVisible(false);

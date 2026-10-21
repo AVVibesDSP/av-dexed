@@ -288,3 +288,181 @@ private:
     std::function<void()> onFinished;
     AVDexedAnimation animation { *this, [this](double now) { return tick(now); } };
 };
+
+/** ComponentAnimator::fadeIn(), fadeOut() and cancelAnimation() for a
+    component over the editor (a dialog, Settings), on the editor's clock and
+    from a picture of the component: at 50 Hz, ComponentAnimator painted the
+    whole dialog (its blurred backdrop, panel and controls) into a
+    transparency layer every frame, 10-19 ms a frame on an M4.
+
+    The picture (made on the first frame, so the component can still be set up
+    after fadeIn()) is shown by a cover above the component: on a Mac by the
+    window's compositor, over the live window (no painting at all per frame);
+    elsewhere painted with its alpha. The component itself is not painted while
+    it fades (alpha 0 in, hidden out), as with ComponentAnimator's proxy. */
+class AVDexedComponentFade final : public juce::Component, private juce::ComponentListener {
+public:
+    /** As ComponentAnimator::fadeIn(): unless already shown at alpha 1, shown
+        from alpha 0 to 1. */
+    static void fadeIn(juce::Component& target, double durationMs) {
+        if (target.isVisible() && target.getAlpha() >= 1.0f) return;
+        cancel(target);
+        target.setAlpha(0.0f);
+        target.setVisible(true);
+        start(target, true, durationMs);
+    }
+
+    /** As ComponentAnimator::fadeOut(): hidden at once, a picture of it fading
+        from its alpha to 0 (when it is on screen). */
+    static void fadeOut(juce::Component& target, double durationMs) {
+        cancel(target);
+        if (target.isShowing() && durationMs > 0.0) start(target, false, durationMs);
+        target.setVisible(false);
+    }
+
+    /** As ComponentAnimator::cancelAnimation(target, false): a fade-in stops
+        where it is (the component then shows at that alpha); a fade-out's
+        picture goes. */
+    static void cancel(juce::Component& target) {
+        if (auto* fade = find(target)) fade->end(false);
+    }
+
+    /** For the tools: at 0…1, fades hold at that point (once their picture
+        is made) until cancel(). */
+    static inline float testFreeze = -1.0f;
+
+    /** True while a fade of the component (or of its picture) is on screen. */
+    static bool isFading(juce::Component& target) { return find(target) != nullptr; }
+
+    /** A component that goes away while it fades in: the fade forgets it. */
+    static void forget(juce::Component& target) {
+        if (auto* fade = find(target)) {
+            fade->target = nullptr;
+            fade->end(false);
+        }
+    }
+
+    ~AVDexedComponentFade() override {
+        compositor.stop();
+        if (auto* p = parent.getComponent()) p->removeComponentListener(this);
+    }
+
+private:
+    AVDexedComponentFade(juce::Component& component, bool in, double durationMs)
+        : target(&component), parent(component.getParentComponent()), fadingIn(in), duration(juce::jmax(1.0, durationMs)) {
+        setInterceptsMouseClicks(false, false);
+        setWantsKeyboardFocus(false);
+        setAccessible(false);
+    }
+
+    static AVDexedComponentFade* find(juce::Component& target) {
+        if (auto* p = target.getParentComponent())
+            for (auto* child : p->getChildren())
+                if (auto* fade = dynamic_cast<AVDexedComponentFade*>(child); fade != nullptr && fade->target == &target)
+                    return fade;
+        return nullptr;
+    }
+
+    static void start(juce::Component& target, bool in, double durationMs) {
+        auto* p = target.getParentComponent();
+        if (p == nullptr) return;
+        auto* fade = new AVDexedComponentFade(target, in, durationMs);
+        fade->setBounds(target.getBounds());
+        // Just above the component: what was above it stays above its picture.
+        p->addChildComponent(*fade, p->getIndexOfChildComponent(&target) + 1);
+        p->addComponentListener(fade);
+        fade->fromAlpha = in ? 0.0f : target.getAlpha();
+        fade->toAlpha = in ? 1.0f : 0.0f;
+        if (! in) fade->takePicture();   // it is hidden right after this
+        fade->startMs = juce::Time::getMillisecondCounterHiRes();
+        fade->animation.start();
+    }
+
+    void takePicture() {
+        if (target == nullptr || parent == nullptr) return;
+        if (testFreeze >= 0.0f) progress = juce::jlimit(0.0f, 1.0f, testFreeze);
+        auto& component = *target;
+        pictured = picture.make(*parent, component.getBounds().toFloat(), false, [&component](juce::Graphics& g) {
+            juce::Graphics::ScopedSaveState state(g);
+            g.addTransform(juce::AffineTransform::translation(component.getPosition().toFloat()));
+            component.paintEntireComponent(g, true);
+        });
+        if (! pictured) return;
+        auto* peer = parent->getPeer();
+        const float held = alphaAt(progress);
+        native = peer != nullptr && compositor.start(*peer, AVDexedPixelCache::screenBacking(*parent),
+                                                     { picture.toNative(held, testFreeze >= 0.0f ? held : toAlpha) },
+                                                     duration * double(1.0f - progress));
+        setVisible(! native);
+        repaint();
+    }
+
+    float alphaAt(float t) const noexcept { return fromAlpha + (toAlpha - fromAlpha) * t; }
+
+    void paint(juce::Graphics& g) override {
+        if (! pictured || native || parent == nullptr) return;
+        g.addTransform(juce::AffineTransform::translation(-getPosition().toFloat()));   // the picture is in the parent's coordinates
+        picture.draw(g, alphaAt(progress));
+    }
+
+    bool tick(double now) {
+        if (testFreeze < 0.0f) progress = juce::jlimit(0.0f, 1.0f, float((now - startMs) / duration));
+        if (! pictured && ! failed) {
+            takePicture();
+            if (! pictured) {   // not on screen: nothing to see, so no fade
+                failed = true;
+                end(true);
+                return false;
+            }
+        }
+        if (progress < 1.0f || testFreeze >= 0.0f) {
+            if (! native) repaint();
+            return true;
+        }
+        if (endingFrames++ == 0) {
+            // The component shows itself now; the compositor's picture, which
+            // looks the same, goes a few frames later.
+            if (fadingIn && target != nullptr) target->setAlpha(1.0f);
+            if (! native) {
+                end(true);
+                return false;
+            }
+            return true;
+        }
+        if (endingFrames < 3) return true;
+        end(true);
+        return false;
+    }
+
+    /** Ends the fade: complete (the component at its final alpha) or cut
+        short (a fade-in then leaves the component at the alpha shown now). */
+    void end(bool complete) {
+        animation.stop();
+        compositor.stop();
+        if (target != nullptr && fadingIn) target->setAlpha(complete ? 1.0f : alphaAt(progress));
+        target = nullptr;
+        setVisible(false);
+        if (auto* p = parent.getComponent()) {
+            p->removeComponentListener(this);
+            p->removeChildComponent(this);
+        }
+        juce::MessageManager::callAsync([self = this] { delete self; });
+    }
+
+    void componentBeingDeleted(juce::Component&) override {
+        animation.stop();
+        compositor.stop();
+        target = nullptr;
+        parent = nullptr;
+        juce::MessageManager::callAsync([self = this] { delete self; });
+    }
+
+    juce::Component::SafePointer<juce::Component> target, parent;
+    AVDexedScreenImage picture;
+    AVDexedNativeFade compositor;
+    bool fadingIn, pictured = false, native = false, failed = false;
+    float fromAlpha = 0.0f, toAlpha = 1.0f, progress = 0.0f;
+    double duration, startMs = 0.0;
+    int endingFrames = 0;
+    AVDexedAnimation animation { *this, [this](double now) { return tick(now); } };
+};

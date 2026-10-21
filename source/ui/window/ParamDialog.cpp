@@ -724,6 +724,10 @@ void ParamDialog::setDialogValues(Controllers &c, SysexComm &mgr, bool showKey, 
         scalingFactor->addItem(exactScale, selectedId);
     }
     scalingFactor->setSelectedId(selectedId, dontSendNotification);
+    // The toggles were set silently: the pills show them now, not a poll later
+    // (Settings fades in from a picture taken on its first frame).
+    for (auto* pills : { AVGlissandoPills.get(), AVShowKeyboardPills.get(), AVTransposePills.get(), AVMpePills.get(), AVLowPowerPills.get() })
+        if (pills != nullptr) pills->sync();
 }
 
 bool ParamDialog::getDialogValues(Controllers &c, SysexComm &mgr, bool *showKey, float *dpiScaleFactor, bool *lowPowerOn) {

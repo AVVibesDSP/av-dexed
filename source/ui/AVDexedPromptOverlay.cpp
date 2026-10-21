@@ -3,6 +3,7 @@
 
 #include "AVDexedPromptOverlay.h"
 #include "AVDexedTheme.h"
+#include "AVDexedFade.h"
 #include "AVDexedLanguage.h"
 #include "../JuceLibraryCode/BinaryData.h"
 
@@ -116,11 +117,9 @@ AVDexedPromptOverlay::AVDexedPromptOverlay(Component& frame, const Image& editor
 }
 
 AVDexedPromptOverlay::~AVDexedPromptOverlay() {
-    // Only a fade-in still running is stopped. The fade-out animates a proxy
-    // image the animator owns and deletes when it ends; cancelling it here
-    // would make every closed dialog vanish at once instead of fading. The
-    // editor cancels the fades left when it closes itself.
-    if (! AVFinished) Desktop::getInstance().getAnimator().cancelAnimation(this, false);
+    // A fade-in still running forgets this; a fade-out runs on from its
+    // picture (gone with the frame when the editor closes).
+    if (! AVFinished) AVDexedComponentFade::forget(*this);
     if (AVFrame != nullptr) AVFrame->removeComponentListener(this);
 }
 
@@ -132,7 +131,7 @@ void AVDexedPromptOverlay::present() {
     AVFrame->addChildComponent(*this);
     setBounds(AVFrame->getLocalBounds());
     toFront(false);
-    Desktop::getInstance().getAnimator().fadeIn(this, 83);
+    AVDexedComponentFade::fadeIn(*this, 83);
     enterModalState(true);
     Component::SafePointer<AVDexedPromptOverlay> safeThis(this);
     MessageManager::callAsync([safeThis] {
@@ -289,9 +288,7 @@ void AVDexedPromptOverlay::finish(bool confirmed, bool alternative) {
     }
     AVFinished = true;
     exitModalState(0);
-    auto& animator = Desktop::getInstance().getAnimator();
-    animator.cancelAnimation(this, false);
-    animator.fadeOut(this, 117);   // GOZO dialog timing: in ~5 frames, out ~7 frames
+    AVDexedComponentFade::fadeOut(*this, 117);   // GOZO dialog timing: in ~5 frames, out ~7 frames
     // Report after the click/key handler has unwound: the result may open
     // another prompt or delete this one.
     auto result = AVResult;

@@ -1243,10 +1243,10 @@ void AVDexedPlayView::showEffectSettings(int kind, Button& anchor) {
     auto close = [safeThis] {
         if (!safeThis || !safeThis->effectSettingsWindow) return;
         auto* overlay = safeThis->effectSettingsWindow.get();
-        Desktop::getInstance().getAnimator().cancelAnimation(overlay, false);
+        AVDexedComponentFade::cancel(*overlay);
         overlay->exitModalState(0);
         // GOZO dialog timing: in ~5 frames, out ~7 frames.
-        Desktop::getInstance().getAnimator().fadeOut(overlay, 117);
+        AVDexedComponentFade::fadeOut(*overlay, 117);
         Timer::callAfterDelay(1, [safeThis] {
             if (safeThis && safeThis->effectSettingsWindow && !safeThis->effectSettingsWindow->isVisible())
                 safeThis->effectSettingsWindow.reset();
@@ -1265,7 +1265,7 @@ void AVDexedPlayView::showEffectSettings(int kind, Button& anchor) {
     // Fade first: enterModalState() makes the overlay visible, and fadeIn() does
     // nothing to a component that is already visible and opaque.
     parent->addChildComponent(*effectSettingsWindow);
-    Desktop::getInstance().getAnimator().fadeIn(effectSettingsWindow.get(), 83);
+    AVDexedComponentFade::fadeIn(*effectSettingsWindow, 83);
     effectSettingsWindow->enterModalState(true);
 }
 

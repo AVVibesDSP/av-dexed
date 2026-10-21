@@ -133,6 +133,9 @@ public:
         AVOff.setTitle(AVTarget.getTitle() + ": " + off);
         resized();
     }
+    /** Follows the toggle now (the poll would, within 125 ms): for code that
+        has just set it silently and is about to show it. */
+    void sync() { AVSync(); }
     /** What the footer shows over either pill (it reads a tooltip before a title). */
     void setHelp(const juce::String& help) {
         AVOn.setTooltip(help);

@@ -23,6 +23,7 @@
 
 #include "../JuceLibraryCode/JuceHeader.h"
 #include "AVDexedTheme.h"
+#include "AVDexedFade.h"
 
 class LightedToggleButton : public ToggleButton {
 public:
@@ -110,12 +111,12 @@ public:
             editor = parent->findParentComponentOfClass<juce::AudioProcessorEditor>();
         if (editor != nullptr) {
             AVVeil = std::make_unique<Veil>(*editor);
-            juce::Desktop::getInstance().getAnimator().fadeIn(AVVeil.get(), 83);
+            AVDexedComponentFade::fadeIn(*AVVeil, 83);
         }
     }
     ~AVAlertWindow() override {
         if (AVVeil != nullptr)
-            juce::Desktop::getInstance().getAnimator().cancelAnimation(AVVeil.get(), false);
+            AVDexedComponentFade::forget(*AVVeil);
         setLookAndFeel(nullptr);
     }
     bool keyPressed(const juce::KeyPress& key) override {
