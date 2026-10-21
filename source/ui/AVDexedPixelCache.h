@@ -36,8 +36,12 @@ public:
         const auto pixels = (area * placement.pixelsPerUnit + placement.origin).getSmallestIntegerContainer();
         const auto offset = placement.origin - pixels.getPosition().toFloat();
         if (image.isNull() || pixels.getWidth() != image.getWidth() || pixels.getHeight() != image.getHeight()
-            || placement.pixelsPerUnit != madeScale || offset != madeOffset) {
+            || placement.pixelsPerUnit != madeScale || offset != madeOffset || isLost(image)) {
             image = Image(Image::ARGB, jmax(1, pixels.getWidth()), jmax(1, pixels.getHeight()), true);
+            // Only ever drawn, and made again when needed: on Windows (Direct2D)
+            // it then stays on the GPU instead of being copied back to memory
+            // after it is painted (several ms for a big one).
+            image.setBackupEnabled(false);
             Graphics imageGraphics(image);
             imageGraphics.addTransform(AffineTransform::scale(placement.pixelsPerUnit).translated(offset));
             imageGraphics.reduceClipRegion(area.getSmallestIntegerContainer());
@@ -53,6 +57,16 @@ public:
     }
 
     void invalidate() { image = {}; }
+
+    /** True when an image kept only on the GPU (setBackupEnabled (false)) has
+        lost its pixels (the GPU was reset or replaced): it must be made again.
+        As JUCE's own cached component images check. */
+    static bool isLost(const juce::Image& picture) {
+        if (auto data = picture.getPixelData())
+            if (auto* backup = data->getBackupExtensions())
+                return backup->needsBackup() && ! backup->canBackup();
+        return false;
+    }
 
     /** Off: everything is painted directly (the tools compare both ways on screen). */
     static inline bool enabled = true;
@@ -101,13 +115,14 @@ private:
         const auto right = top.getLocalPoint(&owner, juce::Point<float>(1.0f, 0.0f)) - origin;
         const float scale = right.x;
         if (scale <= 0.0f) return {};
-        // The window's pixels per point: 1 or 2 (Retina) on a Mac. Any other
-        // value means another target (a snapshot at its own scale).
+        // The window's pixels per point: 1 or 2 (Retina) on a Mac, also 1.25,
+        // 1.5... on Windows. A context at another scale is another target (a
+        // snapshot at its own scale): it is painted directly.
         const float physical = g.getInternalContext().getPhysicalPixelScaleFactor();
         const float backing = physical / scale;
-        const float wholeBacking = std::round(backing);
-        if (wholeBacking < 1.0f || std::abs(backing - wholeBacking) > 0.01f) return {};
-        return placementOf(owner, wholeBacking);
+        const float screen = screenBacking(owner);
+        if (screen <= 0.0f || std::abs(backing - screen) > 0.01f * screen) return {};
+        return placementOf(owner, screen);
     }
 
     juce::Image image;

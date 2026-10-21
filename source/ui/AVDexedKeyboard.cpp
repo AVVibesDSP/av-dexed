@@ -3,6 +3,7 @@
 
 #include "AVDexedKeyboard.h"
 #include "AVDexedTheme.h"
+#include "AVDexedPixelCache.h"
 
 using namespace juce;
 
@@ -74,9 +75,10 @@ void AVDexedKeyboardComponent::AVDrawBlackKeyShadow(Graphics& g, const Path& sha
     if (area.getWidth() <= 2 || area.getHeight() <= 2 || !g.clipRegionIntersects(area))
         return;
     auto& shadow = AVBlackKeyShadows[{ bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight() }];
-    if (!shadow.isValid()) {
+    if (!shadow.isValid() || AVDexedPixelCache::isLost(shadow)) {
         const auto imageType = g.getInternalContext().getPreferredImageTypeForTemporaryImages();
         shadow = Image(Image::SingleChannel, area.getWidth(), area.getHeight(), true, *imageType);
+        shadow.setBackupEnabled(false);   // kept on the GPU on Windows: never read back
         {
             Graphics shadowGraphics(shadow);
             shadowGraphics.setColour(Colours::white);
