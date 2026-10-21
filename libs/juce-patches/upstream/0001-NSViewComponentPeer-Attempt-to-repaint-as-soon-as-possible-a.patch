@@ -1,0 +1,92 @@
+From e9656aae500e66c7eda9a6d9db47619c76fd5224 Mon Sep 17 00:00:00 2001
+From: reuk <reuk@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 17:10:01 +0100
+Subject: [PATCH] NSViewComponentPeer: Attempt to repaint as soon as possible
+ after vblank
+
+---
+ .../native/juce_NSViewComponentPeer_mac.mm    | 30 ++++++++++---------
+ 1 file changed, 16 insertions(+), 14 deletions(-)
+
+diff --git a/modules/juce_gui_basics/native/juce_NSViewComponentPeer_mac.mm b/modules/juce_gui_basics/native/juce_NSViewComponentPeer_mac.mm
+index 91275af13b..3593c81e4d 100644
+--- a/modules/juce_gui_basics/native/juce_NSViewComponentPeer_mac.mm
++++ b/modules/juce_gui_basics/native/juce_NSViewComponentPeer_mac.mm
+@@ -832,7 +832,7 @@ void setCurrentRenderingEngine ([[maybe_unused]] int index) override
+         if (usingCoreGraphics != (index > 0))
+         {
+             usingCoreGraphics = index > 0;
+-            [view setNeedsDisplay: true];
++            component.repaint();
+         }
+        #endif
+     }
+@@ -1078,13 +1078,16 @@ void redirectModKeyChange (NSEvent* ev)
+     }
+ 
+     //==============================================================================
+-    void drawRect (NSRect r)
++    void drawRect (NSRect dirty)
+     {
+-        if (r.size.width < 1.0f || r.size.height < 1.0f)
+-            return;
+-
+         auto* cg = (CGContextRef) [[NSGraphicsContext currentContext] CGContext];
+-        drawRectWithContext (cg, r);
++
++        deferredRepaints.subtract (Rectangle { dirty.origin.x,
++                                               dirty.origin.y,
++                                               dirty.size.width,
++                                               dirty.size.height }.toFloat());
++
++        drawRectWithContext (cg, dirty);
+     }
+ 
+     void drawRectWithContext (CGContextRef cg, NSRect r)
+@@ -1141,6 +1144,9 @@ void drawRectWithContext (CGContextRef cg, NSRect r)
+ 
+     void renderRect (CGContextRef cg, NSRect r, float displayScale)
+     {
++        CGContextSaveGState (cg);
++        const ScopeGuard pop { [&] { CGContextRestoreGState (cg); } };
++
+        #if USE_COREGRAPHICS_RENDERING
+         if (usingCoreGraphics)
+         {
+@@ -1159,6 +1165,9 @@ void renderRect (CGContextRef cg, NSRect r, float displayScale)
+             RectangleList<int> clip;
+             getClipRects (clip, offset, clipW, clipH);
+ 
++            if (clip.isEmpty())
++                clip.add (Rectangle { r.size.width, r.size.height }.getSmallestIntegerContainer());
++
+             if (! clip.isEmpty())
+             {
+                 Image temp (component.isOpaque() ? Image::RGB : Image::ARGB,
+@@ -1198,6 +1207,7 @@ void repaint (const Rectangle<int>& area) override
+         // As a workaround for this, we use a RectangleList to do our own coalescing of regions before
+         // asynchronously asking the OS to repaint them.
+         deferredRepaints.add (area.toFloat());
++        setNeedsDisplayRectangles();
+     }
+ 
+     static bool shouldThrottleRepaint()
+@@ -1228,18 +1238,10 @@ void setNeedsDisplayRectangles()
+         if (msSinceLastRepaint < minimumRepaintInterval && shouldThrottleRepaint())
+             return;
+ 
+-        const auto frameSize = view.frame.size;
+-        const Rectangle currentBounds { (float) frameSize.width, (float) frameSize.height };
+-
+         for (auto& i : deferredRepaints)
+             [view setNeedsDisplayInRect: makeCGRect (i)];
+ 
+         lastRepaintTime = Time::getMillisecondCounter();
+-
+-       #if JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS
+-        if (metalRenderer == nullptr)
+-       #endif
+-            deferredRepaints.clear();
+     }
+ 
+     void performAnyPendingRepaintsNow() override

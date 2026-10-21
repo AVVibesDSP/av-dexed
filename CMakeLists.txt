@@ -34,6 +34,28 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # include JUCE *AFTER* the MSVC runtime and so on is set up
 set(DEXED_JUCE_PATH "${CMAKE_SOURCE_DIR}/libs/JUCE" CACHE STRING "Path to JUCE library source tree")
+
+# Fixes from JUCE's develop branch not yet in the release used here, as patches
+# (libs/juce-patches, see its README). Applied in order, once, to the JUCE
+# files; configuring stops if they neither apply nor are applied already.
+option(AVDEXED_JUCE_PATCHES "Apply libs/juce-patches to the JUCE sources" ON)
+file(GLOB AVDEXED_JUCE_PATCH_FILES "${CMAKE_SOURCE_DIR}/libs/juce-patches/*.patch")
+list(SORT AVDEXED_JUCE_PATCH_FILES)
+if(AVDEXED_JUCE_PATCHES AND AVDEXED_JUCE_PATCH_FILES)
+    find_package(Git REQUIRED)
+    set(AVDEXED_JUCE_PATCHES_REVERSED ${AVDEXED_JUCE_PATCH_FILES})
+    list(REVERSE AVDEXED_JUCE_PATCHES_REVERSED)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace --reverse --check ${AVDEXED_JUCE_PATCHES_REVERSED}
+                    WORKING_DIRECTORY "${DEXED_JUCE_PATH}" RESULT_VARIABLE AVDEXED_JUCE_PATCHED OUTPUT_QUIET ERROR_QUIET)
+    if(NOT AVDEXED_JUCE_PATCHED EQUAL 0)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace ${AVDEXED_JUCE_PATCH_FILES}
+                        WORKING_DIRECTORY "${DEXED_JUCE_PATH}" RESULT_VARIABLE AVDEXED_JUCE_APPLIED ERROR_VARIABLE AVDEXED_JUCE_WHY)
+        if(NOT AVDEXED_JUCE_APPLIED EQUAL 0)
+            message(FATAL_ERROR "libs/juce-patches do not apply to ${DEXED_JUCE_PATH}: ${AVDEXED_JUCE_WHY}")
+        endif()
+        message(STATUS "Applied libs/juce-patches to JUCE")
+    endif()
+endif()
 add_subdirectory(${DEXED_JUCE_PATH} ${CMAKE_BINARY_DIR}/JUCE EXCLUDE_FROM_ALL)
 add_subdirectory(libs/clap-juce-extensions EXCLUDE_FROM_ALL)
 

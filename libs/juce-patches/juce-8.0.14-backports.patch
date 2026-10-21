@@ -1,0 +1,628 @@
+diff --git a/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp b/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp
+index 344e93c81d..f1b3543f18 100644
+--- a/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp
++++ b/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp
+@@ -35,27 +35,7 @@
+ namespace juce
+ {
+ 
+-class WindowsScopedEvent
+-{
+-public:
+-    explicit WindowsScopedEvent (HANDLE handleIn)
+-        : handle (handleIn)
+-    {
+-    }
+-
+-    WindowsScopedEvent()
+-        : WindowsScopedEvent (CreateEvent (nullptr, FALSE, FALSE, nullptr))
+-    {
+-    }
+-
+-    HANDLE getHandle() const noexcept
+-    {
+-        return handle.get();
+-    }
+-
+-private:
+-    std::unique_ptr<std::remove_pointer_t<HANDLE>, FunctionPointerDestructor<CloseHandle>> handle;
+-};
++using WindowsScopedEvent = std::unique_ptr<std::remove_pointer_t<HANDLE>, FunctionPointerDestructor<CloseHandle>>;
+ 
+ //==============================================================================
+ class SwapChain
+@@ -100,7 +80,6 @@ public:
+             return hr;
+         }
+ 
+-        // Get the waitable swap chain presentation event and set the maximum frame latency
+         ComSmartPtr<IDXGISwapChain2> chain2;
+         if (const auto hr = chain.QueryInterface (chain2); FAILED (hr))
+             return hr;
+@@ -109,6 +88,7 @@ public:
+             return E_FAIL;
+ 
+         chain2->SetMaximumFrameLatency (1);
++        event.reset (chain2->GetFrameLatencyWaitableObject());
+ 
+         createBuffer (adapter);
+         return buffer != nullptr ? S_OK : E_FAIL;
+@@ -176,6 +156,17 @@ public:
+         return buffer;
+     }
+ 
++    bool canPresent()
++    {
++        didWait = didWait || event == nullptr || (WaitForSingleObjectEx (event.get(), 0, true) == WAIT_OBJECT_0);
++        return didWait;
++    }
++
++    void didPresent()
++    {
++        didWait = false;
++    }
++
+     static constexpr uint32 swapChainFlags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+     static constexpr uint32 presentSyncInterval = 1;
+     static constexpr uint32 presentFlags = 0;
+@@ -236,6 +227,8 @@ private:
+     AssignableDirectX directX;
+     ComSmartPtr<IDXGISwapChain1> chain;
+     ComSmartPtr<ID2D1Bitmap1> buffer;
++    WindowsScopedEvent event;
++    bool didWait = false;
+ };
+ 
+ //==============================================================================
+@@ -300,7 +293,7 @@ private:
+     std::optional<CompositionTree> compositionTree;
+ 
+     // Areas that must be repainted during the next paint call, between startFrame/endFrame
+-    RectangleList<int> deferredRepaints;
++    RectangleList<int> deferredRepaintsCurrent, deferredRepaintsNext;
+ 
+     std::vector<RECT> dirtyRectangles;
+     int64 lastFinishFrameTicks = 0;
+@@ -350,7 +343,7 @@ private:
+ 
+     RectangleList<int> getPaintAreas() const override
+     {
+-        return deferredRepaints;
++        return deferredRepaintsNext;
+     }
+ 
+     bool checkPaintReady() override
+@@ -363,11 +356,55 @@ private:
+ 
+         bool ready = Pimpl::checkPaintReady();
+         ready &= swap.canPaint();
++        ready &= swap.canPresent();
+         ready &= compositionTree.has_value();
+ 
+         return ready;
+     }
+ 
++    void present()
++    {
++        JUCE_D2DMETRICS_SCOPED_ELAPSED_TIME (getMetrics(), present1Duration);
++
++        if (swap.getBuffer() == nullptr || deferredRepaintsCurrent.isEmpty())
++            return;
++
++        auto const swapChainSize = swap.getSize();
++        DXGI_PRESENT_PARAMETERS params{};
++
++        if (! deferredRepaintsCurrent.containsRectangle (swapChainSize))
++        {
++            // Allocate enough memory for the array of dirty rectangles
++            dirtyRectangles.resize ((size_t) deferredRepaintsCurrent.getNumRectangles());
++
++            // Fill the array of dirty rectangles, intersecting each paint area with the swap chain buffer
++            params.pDirtyRects = dirtyRectangles.data();
++            params.DirtyRectsCount = 0;
++
++            for (const auto& area : deferredRepaintsCurrent)
++            {
++                const auto intersection = area.getIntersection (swapChainSize);
++
++                if (! intersection.isEmpty())
++                    params.pDirtyRects[params.DirtyRectsCount++] = D2DUtilities::toRECT (intersection);
++            }
++        }
++
++        // Present the freshly painted buffer
++        const auto hr = swap.getChain()->Present1 (swap.presentSyncInterval,
++                                                   swap.presentFlags,
++                                                   &params);
++        if (FAILED (hr))
++        {
++            jassertfalse;
++            return;
++        }
++
++        swap.didPresent();
++
++        JUCE_TRACE_LOG_D2D_PAINT_CALL (etw::direct2dHwndPaintEnd, getFrameId());
++    }
++
+     JUCE_DECLARE_WEAK_REFERENCEABLE (HwndPimpl)
+ 
+ public:
+@@ -385,7 +422,7 @@ public:
+         // that's not really spelled out in the documentation.
+         // This method is called when the component peer receives WM_SHOWWINDOW
+         prepare();
+-        deferredRepaints = getClientRect();
++        deferredRepaintsNext = getClientRect();
+     }
+ 
+     Rectangle<int> getClientRect() const
+@@ -420,7 +457,7 @@ public:
+             return;
+ 
+         // Require the entire window to be repainted
+-        deferredRepaints = size;
++        deferredRepaintsNext = size;
+ 
+         InvalidateRect (hwnd, nullptr, TRUE);
+ 
+@@ -435,7 +472,7 @@ public:
+ 
+     void addDeferredRepaint (Rectangle<int> deferredRepaint)
+     {
+-        deferredRepaints.add (deferredRepaint);
++        deferredRepaintsNext.add (deferredRepaint);
+ 
+         JUCE_TRACE_EVENT_INT_RECT (etw::repaint, etw::paintKeyword, deferredRepaint);
+     }
+@@ -444,11 +481,17 @@ public:
+     {
+         setSize (getClientRect());
+ 
++        if (deferredRepaintsNext.isEmpty())
++            return nullptr;
++
+         auto* savedState = Pimpl::startFrame();
+ 
+         if (savedState == nullptr)
+             return nullptr;
+ 
++        std::swap (deferredRepaintsNext, deferredRepaintsCurrent);
++        deferredRepaintsNext.clear();
++
+         JUCE_TRACE_LOG_D2D_PAINT_CALL (etw::direct2dHwndPaintStart, getFrameId());
+ 
+         return savedState;
+@@ -462,49 +505,6 @@ public:
+         return result;
+     }
+ 
+-    void present()
+-    {
+-        JUCE_D2DMETRICS_SCOPED_ELAPSED_TIME (getMetrics(), present1Duration);
+-
+-        if (swap.getBuffer() == nullptr || deferredRepaints.isEmpty())
+-            return;
+-
+-        auto const swapChainSize = swap.getSize();
+-        DXGI_PRESENT_PARAMETERS params{};
+-
+-        if (! deferredRepaints.containsRectangle (swapChainSize))
+-        {
+-            // Allocate enough memory for the array of dirty rectangles
+-            dirtyRectangles.resize ((size_t) deferredRepaints.getNumRectangles());
+-
+-            // Fill the array of dirty rectangles, intersecting each paint area with the swap chain buffer
+-            params.pDirtyRects = dirtyRectangles.data();
+-            params.DirtyRectsCount = 0;
+-
+-            for (const auto& area : deferredRepaints)
+-            {
+-                const auto intersection = area.getIntersection (swapChainSize);
+-
+-                if (! intersection.isEmpty())
+-                    params.pDirtyRects[params.DirtyRectsCount++] = D2DUtilities::toRECT (intersection);
+-            }
+-        }
+-
+-        // Present the freshly painted buffer
+-        const auto hr = swap.getChain()->Present1 (swap.presentSyncInterval,
+-                                                   swap.presentFlags,
+-                                                   &params);
+-        jassertquiet (SUCCEEDED (hr));
+-
+-        if (FAILED (hr))
+-            return;
+-
+-        // There's nothing waiting to be displayed in the backbuffer.
+-        deferredRepaints.clear();
+-
+-        JUCE_TRACE_LOG_D2D_PAINT_CALL (etw::direct2dHwndPaintEnd, getFrameId());
+-    }
+-
+     Image createSnapshot() const
+     {
+         JUCE_ASSERT_MESSAGE_MANAGER_IS_LOCKED
+diff --git a/modules/juce_gui_basics/native/juce_NSViewComponentPeer_mac.mm b/modules/juce_gui_basics/native/juce_NSViewComponentPeer_mac.mm
+index 4eb8addb95..5bf7f2b3c7 100644
+--- a/modules/juce_gui_basics/native/juce_NSViewComponentPeer_mac.mm
++++ b/modules/juce_gui_basics/native/juce_NSViewComponentPeer_mac.mm
+@@ -721,7 +721,7 @@ void setCurrentRenderingEngine ([[maybe_unused]] int index) override
+         if (usingCoreGraphics != (index > 0))
+         {
+             usingCoreGraphics = index > 0;
+-            [view setNeedsDisplay: true];
++            component.repaint();
+         }
+        #endif
+     }
+@@ -967,13 +967,16 @@ void redirectModKeyChange (NSEvent* ev)
+     }
+ 
+     //==============================================================================
+-    void drawRect (NSRect r)
++    void drawRect (NSRect dirty)
+     {
+-        if (r.size.width < 1.0f || r.size.height < 1.0f)
+-            return;
+-
+         auto* cg = (CGContextRef) [[NSGraphicsContext currentContext] CGContext];
+-        drawRectWithContext (cg, r);
++
++        deferredRepaints.subtract (Rectangle { dirty.origin.x,
++                                               dirty.origin.y,
++                                               dirty.size.width,
++                                               dirty.size.height }.toFloat());
++
++        drawRectWithContext (cg, dirty);
+     }
+ 
+     void drawRectWithContext (CGContextRef cg, NSRect r)
+@@ -1030,6 +1033,9 @@ void drawRectWithContext (CGContextRef cg, NSRect r)
+ 
+     void renderRect (CGContextRef cg, NSRect r, float displayScale)
+     {
++        CGContextSaveGState (cg);
++        const ScopeGuard pop { [&] { CGContextRestoreGState (cg); } };
++
+        #if USE_COREGRAPHICS_RENDERING
+         if (usingCoreGraphics)
+         {
+@@ -1048,6 +1054,9 @@ void renderRect (CGContextRef cg, NSRect r, float displayScale)
+             RectangleList<int> clip;
+             getClipRects (clip, offset, clipW, clipH);
+ 
++            if (clip.isEmpty())
++                clip.add (Rectangle { r.size.width, r.size.height }.getSmallestIntegerContainer());
++
+             if (! clip.isEmpty())
+             {
+                 Image temp (component.isOpaque() ? Image::RGB : Image::ARGB,
+@@ -1087,6 +1096,7 @@ void repaint (const Rectangle<int>& area) override
+         // As a workaround for this, we use a RectangleList to do our own coalescing of regions before
+         // asynchronously asking the OS to repaint them.
+         deferredRepaints.add (area.toFloat());
++        setNeedsDisplayRectangles();
+     }
+ 
+     static bool shouldThrottleRepaint()
+@@ -1117,18 +1127,10 @@ void setNeedsDisplayRectangles()
+         if (msSinceLastRepaint < minimumRepaintInterval && shouldThrottleRepaint())
+             return;
+ 
+-        const auto frameSize = view.frame.size;
+-        const Rectangle currentBounds { (float) frameSize.width, (float) frameSize.height };
+-
+         for (auto& i : deferredRepaints)
+             [view setNeedsDisplayInRect: makeCGRect (i)];
+ 
+         lastRepaintTime = Time::getMillisecondCounter();
+-
+-       #if JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS
+-        if (metalRenderer == nullptr)
+-       #endif
+-            deferredRepaints.clear();
+     }
+ 
+     void performAnyPendingRepaintsNow() override
+diff --git a/modules/juce_gui_basics/native/juce_Windowing_windows.cpp b/modules/juce_gui_basics/native/juce_Windowing_windows.cpp
+index a5d39ecd19..c48375ed1e 100644
+--- a/modules/juce_gui_basics/native/juce_Windowing_windows.cpp
++++ b/modules/juce_gui_basics/native/juce_Windowing_windows.cpp
+@@ -4700,37 +4700,20 @@ public:
+ 
+     void handlePaintMessage() override
+     {
+-        HRGN rgn = CreateRectRgn (0, 0, 0, 0);
+-        const int regionType = GetUpdateRgn (peer.getHWND(), rgn, false);
+-
+-        PAINTSTRUCT paintStruct;
+-        HDC dc = BeginPaint (peer.getHWND(), &paintStruct); // Note this can immediately generate a WM_NCPAINT
+-                                                            // message and become re-entrant, but that's OK
+-
+-        // If something in a paint handler calls, e.g. a message box, this can become reentrant and
+-        // corrupt the image it's using to paint into, so do a check here.
+-        if (! reentrant)
+-        {
+-            const ScopedValueSetter setter (reentrant, true, false);
+-
+-            if (peer.dontRepaint)
+-                peer.getComponent().handleCommandMessage (0); // (this triggers a repaint in the openGL context)
+-            else
+-                performPaint (dc, rgn, regionType, paintStruct);
+-        }
++        updateRegion.findRECTAndValidate (peer.getHWND());
+ 
+-        DeleteObject (rgn);
+-        EndPaint (peer.getHWND(), &paintStruct);
++        for (const auto& rect : updateRegion.getRects())
++            deferredRepaintsNext.add (D2DUtilities::toRectangle (rect));
+ 
+-       #if JUCE_MSVC
+-        _fpreset(); // because some graphics cards can unmask FP exceptions
+-       #endif
++        schedulePaintOnVblank = true;
+     }
+ 
+     void repaint (const Rectangle<int>& area) override
+     {
+         JUCE_TRACE_EVENT_INT_RECT (etw::repaint, etw::paintKeyword, area);
+-        deferredRepaints.add (area);
++        deferredRepaintsNext.add (area);
++        auto r = D2DUtilities::toRECT (area);
++        InvalidateRect (peer.getHWND(), &r, FALSE);
+     }
+ 
+     void performAnyPendingRepaintsNow() override
+@@ -4738,8 +4721,6 @@ public:
+         if (! peer.getComponent().isVisible())
+             return;
+ 
+-        onVBlank();
+-
+         WeakReference localRef (&peer.getComponent());
+         MSG m;
+ 
+@@ -4749,6 +4730,9 @@ public:
+             if (localRef != nullptr) // (the PeekMessage call can dispatch messages, which may delete this comp)
+                 handlePaintMessage();
+         }
++
++        if (localRef != nullptr)
++            onVBlank();
+     }
+ 
+     Image createSnapshot() override
+@@ -4760,13 +4744,26 @@ public:
+ 
+     void onVBlank() override
+     {
+-        for (auto deferredRect : deferredRepaints)
++        if (! std::exchange (schedulePaintOnVblank, false))
++            return;
++
++        auto dc = GetDC (peer.getHWND());
++
++        if (! reentrant)
+         {
+-            auto r = D2DUtilities::toRECT (deferredRect);
+-            InvalidateRect (peer.getHWND(), &r, FALSE);
++            const ScopedValueSetter setter (reentrant, true, false);
++
++            if (peer.dontRepaint)
++                peer.getComponent().handleCommandMessage (0); // (this triggers a repaint in the openGL context)
++            else
++                performPaint (dc);
+         }
+ 
+-        deferredRepaints.clear();
++        ReleaseDC (peer.getHWND(), dc);
++
++       #if JUCE_MSVC
++        _fpreset(); // because some graphics cards can unmask FP exceptions
++       #endif
+     }
+ 
+     void handleShowWindow() override {}
+@@ -4830,12 +4827,10 @@ private:
+         return SoftwareImageType().convert (bitmap);
+     }
+ 
+-    void performPaint (HDC dc, HRGN rgn, int regionType, PAINTSTRUCT& paintStruct)
++    void performPaint (HDC dc)
+     {
+-        int x = paintStruct.rcPaint.left;
+-        int y = paintStruct.rcPaint.top;
+-        int w = paintStruct.rcPaint.right - x;
+-        int h = paintStruct.rcPaint.bottom - y;
++        std::swap (deferredRepaintsNext, deferredRepaintsCurrent);
++        deferredRepaintsNext.clear();
+ 
+         const auto perPixelTransparent = peer.getTransparencyKind() == HWNDComponentPeer::TransparencyKind::perPixel;
+ 
+@@ -4844,105 +4839,78 @@ private:
+             // it's not possible to have a transparent window with a title bar at the moment!
+             jassert (! peer.hasTitleBar());
+ 
+-            auto r = getWindowScreenRect (peer.getHWND());
+-            x = y = 0;
+-            w = r.right - r.left;
+-            h = r.bottom - r.top;
++            deferredRepaintsCurrent.add (D2DUtilities::toRectangle (getWindowScreenRect (peer.getHWND())).withZeroOrigin());
+         }
+ 
+-        if (w > 0 && h > 0)
+-        {
+-            Image& offscreenImage = offscreenImageGenerator.getImage (perPixelTransparent, w, h);
+-
+-            RectangleList<int> contextClip;
+-            const Rectangle<int> clipBounds (w, h);
++        const auto uniformlyTransparent = peer.getTransparencyKind() == HWNDComponentPeer::TransparencyKind::constant;
+ 
+-            bool needToPaintAll = true;
+-
+-            if (regionType == COMPLEXREGION && ! perPixelTransparent)
++        if (uniformlyTransparent)
++        {
++            const auto prevAlpha = std::invoke ([&]() -> std::optional<BYTE>
+             {
+-                HRGN clipRgn = CreateRectRgnIndirect (&paintStruct.rcPaint);
+-                CombineRgn (rgn, rgn, clipRgn, RGN_AND);
+-                DeleteObject (clipRgn);
++                BYTE alpha{};
+ 
+-                alignas (RGNDATA) std::byte rgnData[8192];
+-                const DWORD res = GetRegionData (rgn, sizeof (rgnData), (RGNDATA*) &rgnData);
++                if (GetLayeredWindowAttributes (peer.getHWND(), nullptr, &alpha, nullptr))
++                    return alpha;
+ 
+-                if (res > 0 && res <= sizeof (rgnData))
+-                {
+-                    const RGNDATAHEADER* const hdr = &(((const RGNDATA*) &rgnData)->rdh);
++                return {};
++            });
+ 
+-                    if (hdr->iType == RDH_RECTANGLES
+-                        && hdr->rcBound.right - hdr->rcBound.left >= w
+-                        && hdr->rcBound.bottom - hdr->rcBound.top >= h)
+-                    {
+-                        needToPaintAll = false;
++            const auto nextAlpha = (BYTE) (255.0f * peer.getComponent().getAlpha());
+ 
+-                        auto rects = unalignedPointerCast<const RECT*> ((char*) &rgnData + sizeof (RGNDATAHEADER));
++            if (nextAlpha != prevAlpha)
++                SetLayeredWindowAttributes (peer.getHWND(), {}, nextAlpha, LWA_ALPHA);
++        }
+ 
+-                        for (int i = (int) ((RGNDATA*) &rgnData)->rdh.nCount; --i >= 0;)
+-                        {
+-                            if (rects->right <= x + w && rects->bottom <= y + h)
+-                            {
+-                                const int cx = jmax (x, (int) rects->left);
+-                                contextClip.addWithoutMerging (Rectangle<int> (cx - x, rects->top - y,
+-                                                                               rects->right - cx, rects->bottom - rects->top)
+-                                                                       .getIntersection (clipBounds));
+-                            }
+-                            else
+-                            {
+-                                needToPaintAll = true;
+-                                break;
+-                            }
++        auto clipBounds = deferredRepaintsCurrent.getBounds();
++        deferredRepaintsCurrent.transformAll (AffineTransform::translation (-clipBounds.getTopLeft()));
+ 
+-                            ++rects;
+-                        }
+-                    }
+-                }
+-            }
++        if (clipBounds.isEmpty())
++            return;
+ 
+-            if (needToPaintAll)
+-            {
+-                contextClip.clear();
+-                contextClip.addWithoutMerging (Rectangle<int> (w, h));
+-            }
++        Image& offscreenImage = offscreenImageGenerator.getImage (perPixelTransparent, clipBounds.getWidth(), clipBounds.getHeight());
+ 
+-            ChildWindowClippingInfo childClipInfo = { dc, &peer, &contextClip, Point<int> (x, y), 0 };
+-            EnumChildWindows (peer.getHWND(), clipChildWindowCallback, (LPARAM) &childClipInfo);
++        ChildWindowClippingInfo childClipInfo = { dc, &peer, &deferredRepaintsCurrent, clipBounds.getTopLeft(), 0 };
++        EnumChildWindows (peer.getHWND(), clipChildWindowCallback, (LPARAM) &childClipInfo);
+ 
+-            if (! contextClip.isEmpty())
+-            {
+-                if (perPixelTransparent)
+-                    for (auto& i : contextClip)
+-                        offscreenImage.clear (i);
++        if (perPixelTransparent)
++            for (auto& i : deferredRepaintsCurrent)
++                offscreenImage.clear (i);
+ 
+-                {
+-                    auto context = peer.getComponent()
+-                                       .getLookAndFeel()
+-                                       .createGraphicsContext (offscreenImage, { -x, -y }, contextClip);
++        {
++            auto context = peer.getComponent()
++                               .getLookAndFeel()
++                               .createGraphicsContext (offscreenImage, -clipBounds.getTopLeft(), deferredRepaintsCurrent);
+ 
+-                    context->addTransform (AffineTransform::scale ((float) peer.getPlatformScaleFactor()));
+-                    peer.handlePaint (*context);
+-                }
++            context->addTransform (AffineTransform::scale ((float) peer.getPlatformScaleFactor()));
++            peer.handlePaint (*context);
++        }
+ 
+-                auto* image = static_cast<WindowsBitmapImage*> (offscreenImage.getPixelData().get());
++        auto* image = static_cast<WindowsBitmapImage*> (offscreenImage.getPixelData().get());
+ 
+-                if (perPixelTransparent)
+-                {
+-                    image->updateLayeredWindow (peer.getHWND(), { x, y }, peer.getComponent().getAlpha());
+-                }
+-                else
+-                {
+-                    image->blitToDC (dc, x, y);
++        if (perPixelTransparent)
++        {
++            image->updateLayeredWindow (peer.getHWND(), clipBounds.getTopLeft(), peer.getComponent().getAlpha());
++        }
++        else
++        {
++            auto* clip = CreateRectRgn (0, 0, 0, 0);
++            const ScopeGuard deleteClip { [&] { DeleteObject (clip); } };
+ 
+-                    if (peer.getTransparencyKind() == HWNDComponentPeer::TransparencyKind::constant)
+-                        SetLayeredWindowAttributes (peer.getHWND(), {}, (BYTE) (255.0f * peer.getComponent().getAlpha()), LWA_ALPHA);
+-                }
++            for (auto& r : deferredRepaintsCurrent)
++            {
++                auto rect = D2DUtilities::toRECT (r + clipBounds.getTopLeft());
++                auto* subregion = CreateRectRgnIndirect (&rect);
++                const ScopeGuard deleteSubregion { [&] { DeleteObject (subregion); } };
++                CombineRgn (clip, clip, subregion, RGN_OR);
+             }
+ 
+-            if (childClipInfo.savedDC != 0)
+-                RestoreDC (dc, childClipInfo.savedDC);
++            SelectClipRgn (dc, clip);
++            image->blitToDC (dc, clipBounds.getX(), clipBounds.getY());
+         }
++
++        if (childClipInfo.savedDC != 0)
++            RestoreDC (dc, childClipInfo.savedDC);
+     }
+ 
+     struct ChildWindowClippingInfo
+@@ -5006,8 +4974,10 @@ private:
+ 
+     HWNDComponentPeer& peer;
+     TemporaryImage offscreenImageGenerator;
+-    RectangleList<int> deferredRepaints;
++    RectangleList<int> deferredRepaintsNext, deferredRepaintsCurrent;
++    UpdateRegion updateRegion;
+     bool reentrant = false;
++    bool schedulePaintOnVblank = false;
+ };
+ 
+ class D2DRenderContext : public RenderContext
+@@ -5048,6 +5018,7 @@ public:
+ 
+     void repaint (const Rectangle<int>& area) override
+     {
++        direct2DContext->addDeferredRepaint (area);
+         auto r = D2DUtilities::toRECT (area);
+         InvalidateRect (peer.getHWND(), &r, FALSE);
+     }
+@@ -5490,7 +5461,7 @@ void HWNDComponentPeer::setCurrentRenderingEngine (int e)
+         // can only be created once per window.
+         renderContext.reset();
+         renderContext = contextDescriptors[e].construct (*this);
+-        InvalidateRect (hwnd, nullptr, TRUE);
++        component.repaint();
+     }
+ }
+ 

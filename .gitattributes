@@ -19,3 +19,7 @@ CMakeLists.txt text eol=lf
 *.zip binary
 *.skin binary
 *.knob binary
+
+# JUCE patches keep their bytes (JUCE's Windows sources use CRLF).
+libs/juce-patches/**/*.patch -text
+libs/juce-patches/*.patch -text

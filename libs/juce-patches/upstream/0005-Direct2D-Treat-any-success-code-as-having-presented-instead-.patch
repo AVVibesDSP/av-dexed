@@ -1,0 +1,24 @@
+From 5aa5e635ebe91bb28176567fe73d558b43f9fbf3 Mon Sep 17 00:00:00 2001
+From: reuk <reuk@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 17:22:55 +0100
+Subject: [PATCH] Direct2D: Treat any success code as having presented, instead
+ of just S_OK
+
+---
+ .../native/juce_Direct2DHwndContext_windows.cpp                | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp b/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp
+index 2b2387818d..fcd91dd1bc 100644
+--- a/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp
++++ b/modules/juce_gui_basics/native/juce_Direct2DHwndContext_windows.cpp
+@@ -400,8 +400,7 @@ private:
+             return;
+         }
+ 
+-        if (hr == S_OK)
+-            swap.didPresent();
++        swap.didPresent();
+ 
+         JUCE_TRACE_LOG_D2D_PAINT_CALL (etw::direct2dHwndPaintEnd, getFrameId());
+     }
