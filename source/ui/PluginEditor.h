@@ -64,6 +64,10 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     /** The output meter (30 Hz), the operators' meters and envelope steps, and
         Play's glow targets: from the first audible sound until all is still. */
     bool AVUpdateLive(double now);
+    /** Nothing the live updates draw can be seen: the window is minimised or
+        hidden, or an in-editor page covers the editor (Settings, an effect's
+        panel, a dialog: all modal, all over a blurred copy of the editor). */
+    bool AVLiveIsHidden() const;
     AVDexedAnimation AVLiveAnimation { *this, [this](double now) { return AVUpdateLive(now); } };
     /** Up / Down choose the previous / next sound anywhere in the editor. A
         focused knob or combo box would take them first (JUCE gives a key to the

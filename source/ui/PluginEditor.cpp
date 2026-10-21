@@ -1558,9 +1558,13 @@ void DexedAudioProcessorEditor::comboBoxChanged (ComboBox* comboBoxThatHasChange
 }
 
 void DexedAudioProcessorEditor::timerCallback() {
-    AVUpdateFooter();
-    if (!AVPitchWheel.isBeingDragged()) AVPitchWheel.setValue(processor->getAVKeyboardPitch(), dontSendNotification);
-    if (!AVModWheel.isBeingDragged()) AVModWheel.setValue(processor->getAVKeyboardMod(), dontSendNotification);
+    // Minimised or hidden: only what is not drawn (the size, a program change).
+    const bool visible = isShowing() && !(getPeer() != nullptr && getPeer()->isMinimised());
+    if (visible) {
+        AVUpdateFooter();
+        if (!AVPitchWheel.isBeingDragged()) AVPitchWheel.setValue(processor->getAVKeyboardPitch(), dontSendNotification);
+        if (!AVModWheel.isBeingDragged()) AVModWheel.setValue(processor->getAVKeyboardMod(), dontSendNotification);
+    }
     if (resizeSaveCountdown > 0) {
         resizeSaveCountdown -= 20;
         if (resizeSaveCountdown <= 0)
@@ -1579,11 +1583,23 @@ void DexedAudioProcessorEditor::timerCallback() {
     // The meters, the operators' levels and Play's glow move on the animation
     // clock, in the screen's frames, from the moment something can be seen
     // (the meter's floor is -60 dBFS) until all of it is still again.
-    if (!AVLiveAnimation.isRunning() && (processor->hasAVOutputPeak(0.001f) || processor->peekVoiceStatus()))
+    if (!AVLiveAnimation.isRunning() && !AVLiveIsHidden() && (processor->hasAVOutputPeak(0.001f) || processor->peekVoiceStatus()))
         AVLiveAnimation.start();
 }
 
+bool DexedAudioProcessorEditor::AVLiveIsHidden() const {
+    if (!isShowing() || (getPeer() != nullptr && getPeer()->isMinimised()))
+        return true;
+    for (int i = 0; i < Component::getNumCurrentlyModalComponents(); ++i)
+        if (isParentOf(Component::getCurrentlyModalComponent(i)))
+            return true;
+    return false;
+}
+
 bool DexedAudioProcessorEditor::AVUpdateLive(double now) {
+    // Out of sight it stops; the timer starts it again once it can be seen.
+    if (AVLiveIsHidden())
+        return false;
     // The output meter at 30 Hz, as a DAW's; the levels below at the frame rate.
     if (now - AVLastMeterUpdate >= 1000.0 / 30.0 - 2.0) {
         const auto peaks = processor->consumeAVOutputPeaks();

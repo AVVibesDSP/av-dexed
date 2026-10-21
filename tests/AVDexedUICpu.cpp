@@ -201,7 +201,16 @@ int AVRunUICpu(const juce::File& bankFile, int slot) {
             { "Advanced page, 8 layers, 16 keys", [&] { editor->showAVView(DexedAudioProcessorEditor::AVView::advanced, false); } },
             { "Layers page, 8 layers, 16 keys", [&] { editor->showAVView(DexedAudioProcessorEditor::AVView::layers, false); } },
             { "Layers page, 8 layers, 16 keys, effects", [&] { effects(true); } },
-            { "window hidden, 8 layers, 16 keys, effects", [&] { window.setVisible(false); } },
+            // Covered: nothing of what moves underneath can be seen. (A minimised
+            // window cannot be had here: a console app's windows do not minimise.)
+            { "Play page, 8 layers, effects, Settings open", [&] {
+                editor->showAVView(DexedAudioProcessorEditor::AVView::play, false);
+                editor->showAVSettingsPage(AVDexedSettingsPanel::AVPage::instrument);
+            } },
+            { "window hidden, 8 layers, 16 keys, effects", [&] {
+                editor->AVCloseSettings(true);
+                window.setVisible(false);
+            } },
         };
         constexpr double settle = 1.5, measure = 5.0;
         size_t index = 0;
