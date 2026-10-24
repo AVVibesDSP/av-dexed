@@ -437,6 +437,10 @@ juce::ValueTree DexedAudioProcessor::createAVLayersState() const {
     juce::ValueTree layers("avLayers");
     layers.setProperty("mode", avLayerMode.load(std::memory_order_acquire), nullptr);
     layers.setProperty("selected", avSelectedLayer.load(std::memory_order_acquire), nullptr);
+    if (avLayerSetFile != juce::File()) {
+        layers.setProperty("setPath", avLayerSetFile.getFullPathName(), nullptr);
+        layers.setProperty("setId", avLayerSetId, nullptr);
+    }
     for (int index = 0; index < AVLayerCount; ++index) {
         const auto& settings = avLayerSettings[size_t(index)];
         juce::ValueTree layer("layer");
@@ -524,21 +528,15 @@ void DexedAudioProcessor::restoreAVLayersState(const juce::ValueTree& layers) {
     }
     const int selected = juce::jlimit(0, AVLayerCount - 1, layers.isValid() ? int(layers.getProperty("selected", 0)) : 0);
     avSelectedLayer.store(selected, std::memory_order_release);
+    // A path from another OS ("/Users/..." on Windows) is no file here.
+    const auto setPath = layers.getProperty("setPath").toString();
+    avLayerSetFile = juce::File::isAbsolutePath(setPath) ? juce::File(setPath) : juce::File();
+    avLayerSetId = avLayerSetFile != juce::File() ? layers.getProperty("setId").toString() : juce::String();
     // The session's sound is the selected layer's voice.
     avLayers[size_t(selected)].setProgram(activeProgram);
     avLayerMode.store(layers.isValid() && bool(layers.getProperty("mode", false)), std::memory_order_release);
     avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
     avLayerReleaseMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
-}
-
-juce::String DexedAudioProcessor::createAVLayersFile(const juce::String& name) const {
-    juce::ValueTree file("avDexedLayers");
-    file.setProperty("formatVersion", 1, nullptr);
-    file.setProperty("name", name, nullptr);
-    auto layers = createAVLayersState();
-    layers.setProperty("mode", true, nullptr);   // a layers file is always played as layers
-    file.addChild(layers, -1, nullptr);
-    return file.toXmlString();
 }
 
 bool DexedAudioProcessor::loadAVLayersFile(const juce::String& text) {
@@ -547,12 +545,32 @@ bool DexedAudioProcessor::loadAVLayersFile(const juce::String& text) {
     const auto file = juce::ValueTree::fromXml(*xml);
     const auto layers = file.getChildWithName("avLayers");
     if (int(file.getProperty("formatVersion", 0)) != 1 || ! layers.isValid()) return false;
+    applyAVLayersTree(layers);
+    return true;
+}
+
+void DexedAudioProcessor::applyAVLayersTree(const juce::ValueTree& layers) {
     std::array<AVDexedPerformance::ResolvedLayer, AVLayerCount> read {};
     for (int index = 0; index < AVLayerCount; ++index)
         read[size_t(index)] = readLayerTree(layers.getChild(index), index);
     applyAVLayerSetup(read);
     selectAVLayer(juce::jlimit(0, AVLayerCount - 1, int(layers.getProperty("selected", 0))));
-    return true;
+}
+
+juce::File DexedAudioProcessor::getAVLayerSetFile() const {
+    const juce::ScopedLock lock(getCallbackLock());
+    return avLayerSetFile;
+}
+
+juce::String DexedAudioProcessor::getAVLayerSetId() const {
+    const juce::ScopedLock lock(getCallbackLock());
+    return avLayerSetId;
+}
+
+void DexedAudioProcessor::setAVLayerSetContext(const juce::File& file, const juce::String& id) {
+    const juce::ScopedLock lock(getCallbackLock());
+    avLayerSetFile = file;
+    avLayerSetId = id;
 }
 
 void DexedAudioProcessor::applyAVLayerSetup(const std::array<AVDexedPerformance::ResolvedLayer, AVLayerCount>& layers) {
@@ -587,6 +605,9 @@ void DexedAudioProcessor::applyAVLayerSetup(const std::array<AVDexedPerformance:
             setAVLayerMicroTuning(index, plan.used ? plan.microTable : -1, plan.microKey);
         }
         avSelectedLayer.store(first, std::memory_order_release);
+        // Another set of layers: "Guardar capas" no longer writes to the last one's file.
+        avLayerSetFile = juce::File();
+        avLayerSetId = {};
         refreshVoice.set(false);
         activeProgram = selectedVoice;
         avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);

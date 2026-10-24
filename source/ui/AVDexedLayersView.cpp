@@ -419,7 +419,7 @@ AVDexedLayersView::AVDexedLayersView(DexedAudioProcessor& owner) : processor(own
         if (onNotice) onNotice(AVDexedLanguageService::getInstance().text("layerResetDone"));
     };
     openButton.onClick = [this] { openPerformanceFile(); };
-    saveButton.onClick = [this] { saveLayersFile(); };
+    saveButton.onClick = [this] { showSaveMenu(); };
     performanceList.onChange = [this] {
         if (performanceList.getSelectedId() > 0) applyPerformance(performanceList.getSelectedId() - 1);
     };
@@ -506,14 +506,18 @@ void AVDexedLayersView::openPerformanceFile() {
     if (! start.isDirectory()) start = File::getSpecialLocation(File::userHomeDirectory).getChildFile("Downloads");
     if (! start.isDirectory()) start = File::getSpecialLocation(File::userDocumentsDirectory);
     chooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("layerOpenPerformance"), start,
-                                            String("*.syx;*.SYX;*") + DexedAudioProcessor::AVLayersExtension, true);
+                                            String("*.syx;*.SYX;") + AVDexedLibrary::presetWildcards + ";*"
+                                                + DexedAudioProcessor::AVLegacyLayersExtension, true);
     Component::SafePointer<AVDexedLayersView> safeThis(this);
     chooser->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [safeThis](const FileChooser& result) {
-        if (safeThis == nullptr || ! result.getResult().existsAsFile()) return;
-        if (result.getResult().getFileExtension().equalsIgnoreCase(DexedAudioProcessor::AVLayersExtension))
-            safeThis->loadLayersFile(result.getResult());
-        else
-            safeThis->loadPerformanceFile(result.getResult());
+        const auto file = result.getResult();
+        if (safeThis == nullptr || ! file.existsAsFile()) return;
+        if (file.getFileExtension().equalsIgnoreCase(DexedAudioProcessor::AVLegacyLayersExtension))
+            safeThis->loadLayersFile(file);
+        else if (AVDexedLibrary::isPresetFile(file)) {
+            if (safeThis->onOpenSoundFile) safeThis->onOpenSoundFile(file);
+        } else
+            safeThis->loadPerformanceFile(file);
     });
 }
 
@@ -538,7 +542,11 @@ void AVDexedLayersView::installLayersFile(const File& file, const String& text) 
         if (onNotice) onNotice(language.format("layerOpenFailed", {{"file", file.getFileName()}}));
         return;
     }
-    // A layers file is its own set: the list of the last performance file goes.
+    showLayerSet(file);
+    if (onNotice) onNotice(language.format("layerOpened", {{"file", file.getFileName()}}));
+}
+
+void AVDexedLayersView::showLayerSet(const File& file) {
     performanceList.setVisible(false);
     performances.clear();
     voicePool.reset();
@@ -547,32 +555,20 @@ void AVDexedLayersView::installLayersFile(const File& file, const String& text) 
     resized();
     refresh();
     repaint();
-    if (onNotice) onNotice(language.format("layerOpened", {{"file", file.getFileName()}}));
 }
 
-void AVDexedLayersView::saveLayersFile() {
+void AVDexedLayersView::showSaveMenu() {
+    // As the Save button above: "Guardar" writes the layers' own preset again,
+    // "Guardar como" a new one in "User Presets" (the editor does both).
     auto& language = AVDexedLanguageService::getInstance();
-    auto folder = performanceFile.getParentDirectory();
-    if (! performanceFile.getFileExtension().equalsIgnoreCase(DexedAudioProcessor::AVLayersExtension) || ! folder.isDirectory())
-        folder = File::getSpecialLocation(File::userDocumentsDirectory);
-    const auto name = File::createLegalFileName(lastSetName.isNotEmpty() ? lastSetName : language.text("layers"));
-    chooser = std::make_unique<FileChooser>(language.text("layerSave"), folder.getChildFile(name + DexedAudioProcessor::AVLayersExtension),
-                                            String("*") + DexedAudioProcessor::AVLayersExtension, true);
+    PopupMenu menu;
+    menu.addItem(1, language.text("save"));
+    menu.addItem(2, language.text("saveAs"));
+    menu.setLookAndFeel(&getLookAndFeel());
     Component::SafePointer<AVDexedLayersView> safeThis(this);
-    chooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles
-                             | FileBrowserComponent::warnAboutOverwriting,
-                         [safeThis](const FileChooser& result) {
-        if (safeThis == nullptr || result.getResult() == File()) return;
-        auto& lang = AVDexedLanguageService::getInstance();
-        const auto target = result.getResult().withFileExtension(DexedAudioProcessor::AVLayersExtension);
-        const auto text = safeThis->processor.createAVLayersFile(target.getFileNameWithoutExtension());
-        const bool saved = AVDexedLibrary::writeAtomically(target, MemoryBlock(text.toRawUTF8(), text.getNumBytesAsUTF8()));
-        if (saved) {
-            safeThis->performanceFile = target;
-            safeThis->lastSetName = target.getFileNameWithoutExtension();
-        }
-        if (safeThis->onNotice)
-            safeThis->onNotice(lang.format(saved ? "layerSaved" : "layerSaveFailed", {{"file", target.getFileName()}}));
+    menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&saveButton), [safeThis](int result) {
+        if (safeThis != nullptr && result > 0 && safeThis->onSaveLayers)
+            safeThis->onSaveLayers(result == 2, safeThis->lastSetName);
     });
 }
 

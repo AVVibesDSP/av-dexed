@@ -250,11 +250,19 @@ public :
     /** Message thread: a whole set of layers at once (a DX7II or TX802
         performance). The first layer that sounds becomes the selected one. */
     void applyAVLayerSetup(const std::array<AVDexedPerformance::ResolvedLayer, AVLayerCount>& layers);
-    /** A layers file (.avdexlayers): every layer with its voice, as XML. */
-    juce::String createAVLayersFile(const juce::String& name) const;
-    /** Message thread: plays a layers file; false when it is not one. */
+    /** The layers files of 0.3.2 and before (.avdexlayers) still open. The
+        layers are saved now as a sound file that carries them
+        (createAVNativePresetState). */
+    static constexpr const char* AVLegacyLayersExtension = ".avdexlayers";
+    /** Message thread: plays an old layers file; false when it is not one. */
     bool loadAVLayersFile(const juce::String& text);
-    static constexpr const char* AVLayersExtension = ".avdexlayers";
+    /** The sound file the layers were opened from or last saved to (where
+        "Guardar capas" writes), or none. Opening another set of layers (a
+        performance, an old layers file) forgets it; edits, a stack or a
+        reset of the layers do not. The session keeps it. */
+    juce::File getAVLayerSetFile() const;
+    juce::String getAVLayerSetId() const;
+    void setAVLayerSetContext(const juce::File& file, const juce::String& id);
     /** Message thread: every layer back to its defaults (off, every channel,
         whole keyboard, no transposition or detune, full volume, centre). */
     void resetAVLayers();
@@ -283,11 +291,14 @@ public :
     void setAVPresetContext(const juce::String& name, const juce::String& id, const juce::File& file);
     void captureAVPresetBaseline() noexcept;
     bool isAVPresetModified() const noexcept;
-    juce::MemoryBlock createAVNativePresetState(const juce::String& name, const juce::String& id);
+    /** A sound file (.avdexpreset). `withLayers`: it also carries every layer
+        (a layers preset, saved by "Guardar capas"). */
+    juce::MemoryBlock createAVNativePresetState(const juce::String& name, const juce::String& id, bool withLayers = false);
     bool loadAVStateInformation(const void* data, int sizeInBytes);
     /** Loads a .dexedpreset. Unlike a host session, a sound file never changes
         the instrument-wide settings: "Volumen general" and the local tempo keep
-        their live values. */
+        their live values. One that carries layers plays all of them, in layer
+        mode; any other goes into the selected layer. */
     bool loadAVNativePreset(const void* data, int sizeInBytes);
     void setAVKeyboardPitch(int value) noexcept { avKeyboardPitchPending.store(juce::jlimit(0, 16383, value), std::memory_order_relaxed); }
     void setAVKeyboardMod(int value) noexcept { avKeyboardModPending.store(juce::jlimit(0, 127, value), std::memory_order_relaxed); }
@@ -568,6 +579,11 @@ private:
     std::array<AVLayerSettings, AVLayerCount> avLayerSettings;
     std::atomic<bool> avLayerMode { false };
     std::atomic<int> avSelectedLayer { 0 };
+    juce::File avLayerSetFile;     // getAVLayerSetFile(), under the callback lock
+    juce::String avLayerSetId;
+    /** Message thread: plays the layers of a sound file or an old layers file
+        and selects the layer it had selected. */
+    void applyAVLayersTree(const juce::ValueTree& layers);
     std::atomic<uint32_t> avLayerPanicMask { 0 };
     std::atomic<uint32_t> avLayerReleaseMask { 0 };   // layers whose pedal, bend and wheels go back to rest (a new channel)
     std::atomic<uint32_t> avLayerFadeStopMask { 0 };  // layers turned off: their notes stop once the volume has faded
@@ -596,8 +612,9 @@ private:
     float avLayerExtraLeft[N] {}, avLayerExtraRight[N] {};
     int avLayerExtraSize = 0;
     void loadSelectedLayerIntoEditor(const Program& voice);
-    /** The layers in a host session: mode, selected layer, and each layer's
-        settings and voice. A sound file (.avdexpreset) never carries them. */
+    /** The layers in a host session: mode, selected layer, each layer's
+        settings and voice, and the layers' own sound file. A sound file
+        (.avdexpreset) carries them only when saved by "Guardar capas". */
     juce::ValueTree createAVLayersState() const;
     /** From a session; an older session (no layers) restores one layer. */
     void restoreAVLayersState(const juce::ValueTree& layers);

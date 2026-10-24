@@ -31,14 +31,22 @@ public:
     void loadPerformanceFile(const juce::File& file);
     /** True for a file with performances and no banks (what a drop opens here). */
     static bool isPerformanceOnlyFile(const juce::File& file);
-    /** Plays a layers file (.avdexlayers) saved by "Guardar capas…". */
+    /** Plays an old layers file (.avdexlayers, 0.3.2 and before). */
     void loadLayersFile(const juce::File& file);
+    /** The layers now are `file`'s (a layers preset, or an old layers file):
+        the list of the last performance file goes. */
+    void showLayerSet(const juce::File& file);
 
     /** A short line for the footer (what a button did). */
     std::function<void(const juce::String&)> onNotice;
     /** Runs what replaces the sound being edited (a performance, a layers
         file) once the editor has asked about unsaved changes. */
     std::function<void(std::function<void()>)> onReplaceSound;
+    /** "Guardar capas": `saveAs` false is "Guardar", true "Guardar como";
+        `name` is the name to suggest (the last performance's), if any. */
+    std::function<void(bool saveAs, const juce::String& name)> onSaveLayers;
+    /** "Abrir…" chose a sound file (.avdexpreset): opened as any other. */
+    std::function<void(const juce::File&)> onOpenSoundFile;
 
     class Strip;
 
@@ -50,7 +58,7 @@ private:
     juce::TextButton openButton, saveButton, stackButton, resetButton;
     juce::String lastSetName;   // the performance or layers file last opened: the name a save suggests
     int installedPerformanceId = 0;   // the list item that plays (the list goes back to it on a Cancel)
-    void saveLayersFile();
+    void showSaveMenu();
     // The performance file last opened: its performances fill the list.
     juce::ComboBox performanceList;
     std::unique_ptr<juce::FileChooser> chooser;

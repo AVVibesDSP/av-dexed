@@ -303,10 +303,32 @@ bool testStackAndSession() {
     restored->setStateInformation(old.getData(), int(old.getSize()));
     passed &= expect(! restored->isAVLayerModeOn(), "a session without layers turns the layer mode off");
 
-    // A sound file is one sound: it never carries the layers.
+    // A sound file is one sound: it carries the layers only when saved with them.
     const auto sound = p.createAVNativePresetState("Stack", "id");
     auto xml = juce::AudioProcessor::getXmlFromBinary(sound.getData(), int(sound.getSize()));
     passed &= expect(xml != nullptr && xml->getChildByName("avLayers") == nullptr, "a sound file does not carry the layers");
+
+    // The layers' own sound file comes back with the session; opening
+    // another set of layers forgets it.
+    const juce::File setFile = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("Set.avdexpreset");
+    p.setAVLayerSetContext(setFile, "set-id");
+    juce::MemoryBlock withSet;
+    p.getStateInformation(withSet);
+    restored->setStateInformation(withSet.getData(), int(withSet.getSize()));
+    passed &= expect(restored->getAVLayerSetFile() == setFile && restored->getAVLayerSetId() == "set-id",
+                     "a session keeps the layers' own sound file");
+    const auto layered = p.createAVNativePresetState("Stack", "id", true);
+    auto layeredXml = juce::AudioProcessor::getXmlFromBinary(layered.getData(), int(layered.getSize()));
+    const auto* layeredLayers = layeredXml != nullptr ? layeredXml->getChildByName("avLayers") : nullptr;
+    passed &= expect(layeredLayers != nullptr && ! layeredLayers->hasAttribute("setPath") && ! layeredLayers->hasAttribute("setId"),
+                     "a layers preset carries the layers, not a path to itself");
+    std::array<AVDexedPerformance::ResolvedLayer, DexedAudioProcessor::AVLayerCount> other {};
+    other[0].plan.used = other[0].plan.enabled = true;
+    other[0].voice = bank.unpackProgram(3);
+    restored->applyAVLayerSetup(other);
+    passed &= expect(restored->getAVLayerSetFile() == juce::File() && restored->getAVLayerSetId().isEmpty(),
+                     "another set of layers forgets it");
+    p.setAVLayerSetContext({}, {});
 
     // Leaving the layer mode plays the selected voice the single way.
     render(p, { { 0.0, 1, 60, 0 } }, 2.0);
@@ -319,6 +341,20 @@ bool testStackAndSession() {
     return passed;
 }
 
+/** Every layer of `a` and `b` alike: settings and voice. */
+bool sameLayers(DexedAudioProcessor& a, DexedAudioProcessor& b) {
+    bool same = true;
+    for (int layer = 0; layer < DexedAudioProcessor::AVLayerCount; ++layer) {
+        const auto& x = a.getAVLayerSettings(layer);
+        const auto& y = b.getAVLayerSettings(layer);
+        same &= x.enabled.load() == y.enabled.load() && x.channel.load() == y.channel.load()
+             && std::abs(x.detune.load() - y.detune.load()) < 1.0e-4f && std::abs(x.pan.load() - y.pan.load()) < 1.0e-4f
+             && std::abs(x.unison.load() - y.unison.load()) < 1.0e-4f && std::abs(x.phase.load() - y.phase.load()) < 1.0e-4f
+             && std::memcmp(a.getAVLayerProgram(layer).getRawData(), b.getAVLayerProgram(layer).getRawData(), 155) == 0;
+    }
+    return same;
+}
+
 bool testLayersFile() {
     bool passed = true;
     auto bank = varietyBank();
@@ -329,22 +365,38 @@ bool testLayersFile() {
     p.getAVLayerSettings(3).unison = 3.0f;
     p.setAVLayerProgram(4, bank.unpackProgram(20));
     p.selectAVLayer(3);
-    const auto text = p.createAVLayersFile("Mi stack");
+
+    // "Guardar capas": a sound file (.avdexpreset) that carries every layer.
+    const auto preset = p.createAVNativePresetState("Mi stack", "id-capas", true);
     auto opened = makeProcessor(bank, 0);
     opened->setAVLayerMode(false);
-    passed &= expect(opened->loadAVLayersFile(text), "a layers file opens");
-    bool same = opened->isAVLayerModeOn() && opened->getAVSelectedLayer() == 3;
-    for (int layer = 0; layer < 8; ++layer) {
-        const auto& a = p.getAVLayerSettings(layer);
-        const auto& b = opened->getAVLayerSettings(layer);
-        same &= a.enabled.load() == b.enabled.load() && a.channel.load() == b.channel.load()
-             && std::abs(a.detune.load() - b.detune.load()) < 1.0e-4f && std::abs(a.pan.load() - b.pan.load()) < 1.0e-4f
-             && std::abs(a.unison.load() - b.unison.load()) < 1.0e-4f && std::abs(a.phase.load() - b.phase.load()) < 1.0e-4f
-             && std::memcmp(p.getAVLayerProgram(layer).getRawData(), opened->getAVLayerProgram(layer).getRawData(), 155) == 0;
-    }
-    passed &= expect(same, "every layer, its voice and the selected layer come back");
+    passed &= expect(opened->loadAVNativePreset(preset.getData(), int(preset.getSize())), "a layers preset opens");
+    passed &= expect(opened->isAVLayerModeOn() && opened->getAVSelectedLayer() == 3 && sameLayers(p, *opened),
+                     "every layer, its voice and the selected layer come back");
     passed &= expect(opened->activeProgram.getName() == p.activeProgram.getName(), "the editor shows the selected layer's voice");
-    passed &= expect(! opened->loadAVLayersFile("<notLayers/>") && ! opened->loadAVLayersFile("garbage"), "other files are refused");
+    passed &= expect(opened->getAVPresetName() == "Mi stack" && opened->getAVPresetId() == "id-capas",
+                     "and the sound keeps the preset's name");
+
+    // In layer mode a single sound goes into the selected layer only.
+    const auto single = makeProcessor(bank, 11)->createAVNativePresetState("Uno", "id-uno");
+    passed &= expect(opened->loadAVNativePreset(single.getData(), int(single.getSize())), "a single sound opens");
+    bool othersKept = opened->isAVLayerModeOn() && opened->getAVSelectedLayer() == 3
+                      && opened->getAVLayerProgram(3).getName() == bank.unpackProgram(11).getName();
+    for (int layer = 0; layer < DexedAudioProcessor::AVLayerCount; ++layer)
+        if (layer != 3)
+            othersKept &= std::memcmp(p.getAVLayerProgram(layer).getRawData(), opened->getAVLayerProgram(layer).getRawData(), 155) == 0;
+    passed &= expect(othersKept, "a single sound goes into the selected layer, the others play on");
+
+    // The layers files of 0.3.2 (.avdexlayers) still open.
+    auto presetXml = juce::AudioProcessor::getXmlFromBinary(preset.getData(), int(preset.getSize()));
+    juce::XmlElement legacy("avDexedLayers");
+    legacy.setAttribute("formatVersion", 1);
+    legacy.setAttribute("name", "Mi stack");
+    legacy.addChildElement(new juce::XmlElement(*presetXml->getChildByName("avLayers")));
+    auto old = makeProcessor(bank, 0);
+    passed &= expect(old->loadAVLayersFile(legacy.toString()) && old->getAVSelectedLayer() == 3 && sameLayers(p, *old),
+                     "an old layers file opens");
+    passed &= expect(! old->loadAVLayersFile("<notLayers/>") && ! old->loadAVLayersFile("garbage"), "other files are refused");
     return passed;
 }
 
@@ -616,11 +668,11 @@ bool testMicroTuning() {
     passed &= expect(render(*toggled, notes, 0.5) == render(*untouched, notes, 0.5), "with it off again it plays as before");
 
     tuned->setAVLayerMicroTuning(0, 6, 4);
-    const auto text = tuned->createAVLayersFile("Kirnberger");
+    const auto preset = tuned->createAVNativePresetState("Kirnberger", "id-kirnberger", true);
     auto opened = makeProcessor(bank, 0);
-    opened->loadAVLayersFile(text);
+    opened->loadAVNativePreset(preset.getData(), int(preset.getSize()));
     passed &= expect(opened->getAVLayerSettings(0).microTable.load() == 6 && opened->getAVLayerSettings(0).microKey.load() == 4,
-                     "a layers file keeps the layer's tuning");
+                     "a layers preset keeps the layer's tuning");
     juce::MemoryBlock state;
     tuned->getStateInformation(state);
     auto restored = makeProcessor(bank, 0);

@@ -133,6 +133,12 @@ void DexedAudioProcessor::setStateInformation(const void* source, int sizeInByte
 }
 
 bool DexedAudioProcessor::loadAVNativePreset(const void* source, int sizeInBytes) {
+    // Saved by "Guardar capas": the file's own layers replace all of them.
+    juce::ValueTree layers;
+    if (source != nullptr && sizeInBytes > 0 && sizeInBytes <= 32 * 1024 * 1024)
+        if (const auto xml = getXmlFromBinary(source, sizeInBytes))
+            if (const auto* child = xml->getChildByName("avLayers"))
+                layers = juce::ValueTree::fromXml(*child);
     const float output = avOutputParameter != nullptr ? avOutputParameter->getValue() : 0.0f;
     const float tempo = avDelayTempoParameter != nullptr ? avDelayTempoParameter->getValue() : 0.0f;
     {
@@ -149,6 +155,15 @@ bool DexedAudioProcessor::loadAVNativePreset(const void* source, int sizeInBytes
     for (const auto& [parameter, kept] : { std::pair { avOutputParameter, output }, std::pair { avDelayTempoParameter, tempo } })
         if (parameter != nullptr && std::abs(parameter->getValue() - kept) > 1.0e-6f)
             parameter->setValueNotifyingHost(kept);
+    if (layers.isValid()) {
+        // The file's sound is its selected layer's, and its name stays the
+        // sound's name (selecting a layer forgets it, as it does any other time).
+        const auto name = avPresetName, id = avPresetId;
+        const auto path = avPresetPath;
+        applyAVLayersTree(layers);
+        setAVPresetContext(name, id, path);
+        captureAVPresetBaseline();
+    }
     return true;
 }
 
@@ -445,7 +460,7 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
 }
 
 
-juce::MemoryBlock DexedAudioProcessor::createAVNativePresetState(const juce::String& name, const juce::String& id) {
+juce::MemoryBlock DexedAudioProcessor::createAVNativePresetState(const juce::String& name, const juce::String& id, bool withLayers) {
     const juce::ScopedLock avStateLock(getCallbackLock());
     juce::MemoryBlock bytes;
     getStateInformation(bytes);
@@ -470,7 +485,13 @@ juce::MemoryBlock DexedAudioProcessor::createAVNativePresetState(const juce::Str
     auto mappings = tree.getChildWithName(IDs::profile).getChildWithName(IDs::midiCCMappings);
     mappings.removeProperty(IDs::avPresetPreviousCC, nullptr);
     mappings.removeProperty(IDs::avPresetNextCC, nullptr);
-    tree.removeChild(tree.getChildWithName("avLayers"), nullptr);   // a sound, not a set of layers
+    if (auto layers = tree.getChildWithName("avLayers"); ! withLayers)
+        tree.removeChild(layers, nullptr);   // a sound, not a set of layers
+    else {
+        layers.setProperty("mode", true, nullptr);   // played as layers, whatever the mode now
+        layers.removeProperty("setPath", nullptr);   // the file itself
+        layers.removeProperty("setId", nullptr);
+    }
     auto session = tree.getChildWithName(sessionNode);
     session.setProperty("avPresetName", name, nullptr);
     session.setProperty("avPresetId", id, nullptr);

@@ -442,9 +442,16 @@ bool runAVDexedDropTests()
                                  "a dropped performance plays in the Layers page with the voices next to it");
                 passed &= expect(AVDexedLibrary::findSoundFiles(root).size() == libraryFiles, "nothing is copied into the library");
 
+                // An old layers file (.avdexlayers, 0.3.2): the layers in an XML of their own.
                 const auto layersFile = outside.getChildFile("Mis capas.avdexlayers");
                 processor.getAVLayerSettings(2).transpose = 5;
-                layersFile.replaceWithText(processor.createAVLayersFile("Mis capas"));
+                const auto layered = processor.createAVNativePresetState("Mis capas", Uuid().toString(), true);
+                const auto layeredXml = AudioProcessor::getXmlFromBinary(layered.getData(), int(layered.getSize()));
+                XmlElement legacy("avDexedLayers");
+                legacy.setAttribute("formatVersion", 1);
+                if (layeredXml != nullptr && layeredXml->getChildByName("avLayers") != nullptr)
+                    legacy.addChildElement(new XmlElement(*layeredXml->getChildByName("avLayers")));
+                layersFile.replaceWithText(legacy.toString());
                 processor.getAVLayerSettings(2).transpose = 0;
                 passed &= expect(editor->isInterestedInFileDrag({ path(layersFile) }), "a layers file is accepted");
                 editor->filesDropped({ path(layersFile) }, 10, 10);
@@ -452,6 +459,50 @@ bool runAVDexedDropTests()
                 passed &= expect(processor.getAVLayerSettings(2).transpose.load() == 5 && editor->AVNoticeText.contains("Mis capas"),
                                  "a dropped layers file plays its layers");
                 passed &= expect(openPrompt() == nullptr, "no dialog is left open after the layers");
+
+                // "Guardar capas › Guardar como": the layers as a sound file
+                // (.avdexpreset) in "User Presets", asked only for a name.
+                const int presetsBefore = presetsIn(userPresets);
+                editor->layersView.onSaveLayers(true, "Mis capas");
+                prompt = openPrompt();
+                passed &= expect(prompt != nullptr && promptText(*prompt) == "Mis capas", "saving the layers asks only for a name");
+                if (prompt != nullptr) answerPrompt(*prompt, true, "Capas guardadas");
+                const auto layersPreset = userPresets.getChildFile("Capas guardadas.avdexpreset");
+                MemoryBlock savedLayers;
+                const auto savedXml = layersPreset.loadFileAsData(savedLayers)
+                    ? AudioProcessor::getXmlFromBinary(savedLayers.getData(), int(savedLayers.getSize())) : nullptr;
+                passed &= expect(savedXml != nullptr && savedXml->getChildByName("avLayers") != nullptr
+                                     && presetsIn(userPresets) == presetsBefore + 1 && processor.getAVLayerSetFile() == layersPreset,
+                                 "the layers go into \"User Presets\" as an .avdexpreset that carries them");
+                // "Guardar" writes the same file again, asking nothing.
+                processor.getAVLayerSettings(2).transpose = 7;
+                processor.selectAVLayer(4);   // another layer in Play: still the same layers preset
+                editor->layersView.onSaveLayers(false, {});
+                pump(50);
+                passed &= expect(openPrompt() == nullptr && presetsIn(userPresets) == presetsBefore + 1
+                                     && processor.getAVPresetPath() == layersPreset,
+                                 "\"Guardar\" of the layers asks nothing and writes no other file");
+                // Opened as any sound, it plays all its layers and keeps its name.
+                processor.getAVLayerSettings(2).transpose = 0;
+                processor.setAVLayerMode(false);
+                editor->loadNativePreset(layersPreset);
+                pump(100);
+                if (auto* question = openPrompt()) answerPrompt(*question, false);   // not expected
+                passed &= expect(processor.isAVLayerModeOn() && processor.getAVLayerSettings(2).transpose.load() == 7
+                                     && processor.getAVSelectedLayer() == 4 && processor.getAVPresetName() == "Capas guardadas"
+                                     && processor.getAVLayerSetFile() == layersPreset,
+                                 "an opened layers preset plays its layers and keeps its name");
+                // "Guardar" in Play keeps it a layers preset.
+                processor.getAVLayerSettings(2).transpose = 3;
+                editor->AVSaveSound();
+                pump(50);
+                MemoryBlock resaved;
+                const auto resavedXml = layersPreset.loadFileAsData(resaved)
+                    ? AudioProcessor::getXmlFromBinary(resaved.getData(), int(resaved.getSize())) : nullptr;
+                const auto* resavedLayers = resavedXml != nullptr ? resavedXml->getChildByName("avLayers") : nullptr;
+                passed &= expect(resavedLayers != nullptr && resavedLayers->getChildElement(2) != nullptr
+                                     && resavedLayers->getChildElement(2)->getIntAttribute("transpose") == 3,
+                                 "\"Guardar\" in Play writes a layers preset with its layers");
                 processor.setAVLayerMode(false);
             }
         }

@@ -236,14 +236,31 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     void applyCart(Cartridge cart, File file);
     void storeProgramShowDialog(Cartridge destSysex, File externalFile);
     void storeProgramResponse(AlertWindow *dialog, int response, Cartridge destSysex, File externalFile, bool hasExternalFile);
-    /** "Guardar": overwrites the active .dexedpreset of the library, or writes a
-        bank voice into its own slot; anything else goes to "Guardar como". The
-        completion says whether the sound was saved. */
+    /** "Guardar": overwrites the active .avdexpreset of the library (with its
+        layers when it carries them), or writes a bank voice into its own slot;
+        anything else goes to "Guardar como". The completion says whether the
+        sound was saved. */
     void AVSaveSound(std::function<void(bool)> completion = {});
-    /** "Guardar como": a name prompt, then a new .dexedpreset in the selected
-        library folder (or "User Presets"). Never overwrites. `reason`, when
-        given, opens the message (why "Guardar" could not save in place). */
+    /** "Guardar como": a name prompt, then a new .avdexpreset in the selected
+        library folder (or "User Presets"), with every layer when the sound is
+        a layers preset. Never overwrites. `reason`, when given, opens the
+        message (why "Guardar" could not save in place). */
     void AVSaveSoundAs(std::function<void(bool)> completion = {}, const juce::String& reason = {});
+    /** "Guardar" of the Capas page: the layers' own sound file again, while it
+        is still theirs; else "Guardar como" of the Capas page. */
+    void AVSaveLayers(const juce::String& suggestedName);
+    /** "Guardar como" of the Capas page: every layer in a new .avdexpreset. */
+    void AVSaveLayersAs(const juce::String& suggestedName);
+    /** Both "Guardar como"; `layers`: the file carries every layer. `folder`:
+        where it goes (none: the folder being browsed, as "Guardar como"). */
+    void AVSavePresetAs(bool layers, const juce::String& suggestedName, File folder,
+                        std::function<void(bool)> completion, const juce::String& reason);
+    enum class AVOverwrite { saved, failed, holdsOtherSound };
+    /** Writes the sound (and every layer, when `layers`) over `file`, a sound
+        file of the library, which then is the active one; never over a file
+        that now holds a sound other than `expectedId` (renamed or deleted
+        elsewhere, and a new one saved under that name). */
+    AVOverwrite AVOverwritePreset(const File& file, const juce::String& expectedId, const juce::String& name, bool layers);
     /** Shows a notice and returns true when `destination` is inside a read-only pack. */
     bool AVRefuseReadOnlyDestination(const File& destination);
     /** After an import: shows `folder` (or the first sound's folder), loads the

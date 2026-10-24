@@ -48,9 +48,29 @@ juce::String readNativePresetId(const juce::File& file) {
     return {};
 }
 
+/** Whether a sound file was saved with its layers ("Guardar capas"). */
+bool nativePresetHasLayers(const juce::File& file) {
+    juce::MemoryBlock data;
+    if (file.getSize() > 32 * 1024 * 1024 || !file.loadFileAsData(data))
+        return false;
+    const auto xml = juce::AudioProcessor::getXmlFromBinary(data.getData(), static_cast<int>(data.getSize()));
+    return xml != nullptr && xml->getChildByName("avLayers") != nullptr;
+}
+
+/** The name a sound file shows in the browser (inside it, else its file name). */
+juce::String readNativePresetName(const juce::File& file) {
+    juce::MemoryBlock data;
+    juce::String name;
+    if (file.getSize() <= 32 * 1024 * 1024 && file.loadFileAsData(data))
+        if (const auto xml = juce::AudioProcessor::getXmlFromBinary(data.getData(), static_cast<int>(data.getSize())))
+            if (const auto* session = xml->getChildByName("session"))
+                name = session->getStringAttribute("avPresetName").trim();
+    return name.isNotEmpty() ? name : file.getFileNameWithoutExtension();
+}
+
 juce::MemoryBlock createNativePresetState(DexedAudioProcessor& processor, const juce::String& presetId,
-                                         const juce::String& name = {}) {
-    return processor.createAVNativePresetState(name.isEmpty() ? processor.getAVPresetName() : name, presetId);
+                                         const juce::String& name = {}, bool withLayers = false) {
+    return processor.createAVNativePresetState(name.isEmpty() ? processor.getAVPresetName() : name, presetId, withLayers);
 }
 
 /** A sound name as a file name ("" when nothing usable is left). */
@@ -111,7 +131,7 @@ bool avIsPresetPath(const juce::String& path) {
     return path.endsWithIgnoreCase(AVDexedLibrary::presetExtension) || path.endsWithIgnoreCase(AVDexedLibrary::legacyPresetExtension);
 }
 bool avIsTuningPath(const juce::String& path) { return path.endsWithIgnoreCase(".scl") || path.endsWithIgnoreCase(".kbm"); }
-bool avIsLayersPath(const juce::String& path) { return path.endsWithIgnoreCase(DexedAudioProcessor::AVLayersExtension); }
+bool avIsLayersPath(const juce::String& path) { return path.endsWithIgnoreCase(DexedAudioProcessor::AVLegacyLayersExtension); }
 
 /** Every dragged item is a single sound (.avdexpreset), not a bank or folder. */
 bool avAllSounds(const juce::StringArray& files) {
@@ -464,6 +484,11 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     classicView.setBounds(24, 70, WINDOW_SIZE_X - 48, 750);
     layersView.onNotice = [this](const String& text) { showAVFooterNotice(text); };
     layersView.onReplaceSound = [this](std::function<void()> replacement) { requestPresetReplacement(std::move(replacement)); };
+    layersView.onSaveLayers = [this](bool saveAs, const String& name) {
+        if (saveAs) AVSaveLayersAs(name);
+        else AVSaveLayers(name);
+    };
+    layersView.onOpenSoundFile = [this](const File& file) { importBanks(Array<File> { file }); };
     frameComponent.addChildComponent(layersView);
     frameComponent.addChildComponent(AVPageFade);   // above the pages, under every overlay
 
@@ -1769,48 +1794,14 @@ void DexedAudioProcessorEditor::AVSaveSound(std::function<void(bool)> completion
 
     // A sound file of the library (not of a read-only pack, nor one waiting
     // hidden in .deleted): overwritten in place, while it is still this sound.
+    // A layers preset stays one, a single sound stays a single sound.
     if (activeFile.existsAsFile() && AVDexedLibrary::isPresetFile(activeFile)
         && avIsInVisibleLibrary(activeFile, root) && ! AVDexedLibrary::isReadOnly(activeFile, root)) {
-        // Renamed or deleted elsewhere (Finder, another instance, another
-        // project) and a new sound saved under the same name: the file now holds
-        // another id, and that sound is never overwritten. A sound without id
-        // (from 0.1.0) has nothing to compare and saves in place as before.
-        const auto expectedId = processor->getAVPresetId().trim();
-        const auto holdsOtherSound = [&expectedId](const File& file) {
-            return expectedId.isNotEmpty() && readNativePresetId(file).trim() != expectedId;
-        };
-        if (! holdsOtherSound(activeFile)) {
-            const auto oldKey = playView.getPresetKeyForFile(activeFile);
-            auto presetId = expectedId.isNotEmpty() ? expectedId : readNativePresetId(activeFile);
-            if (presetId.isEmpty())
-                presetId = Uuid().toString();
-            const auto state = createNativePresetState(*processor, presetId);
-            bool written = false, replacedMeanwhile = false;
-            {
-                // Under the library lock, as the browser's rename and delete: a
-                // preset another AV Dexed just moved, removed or replaced is not
-                // touched here (checked again now that nobody else can write).
-                const AVDexedLibrary::LibraryScope lock(3000);
-                if (! state.isEmpty() && lock.held && activeFile.existsAsFile()) {
-                    replacedMeanwhile = holdsOtherSound(activeFile);
-                    written = ! replacedMeanwhile && AVDexedLibrary::writeAtomically(activeFile, state);
-                }
-            }
-            if (! replacedMeanwhile) {
-                if (! written) {
-                    showAVNotice(language.text("saveError"), language.format("writeError", {{"path", activeFile.getFullPathName()}}));
-                    if (completion) completion(false);
-                    return;
-                }
-                playView.migratePresetKey(oldKey, "user:" + presetId);
-                processor->setAVPresetContext(processor->getAVPresetName(), presetId, activeFile);
-                processor->captureAVPresetBaseline();
-                playView.setActiveUserPreset(activeFile);
-                processor->updateHostDisplay();
-                showAVFooterNotice(language.format("savedSound", {{"name", activeFile.getFileNameWithoutExtension()}}));
-                if (completion) completion(true);
-                return;
-            }
+        const auto outcome = AVOverwritePreset(activeFile, processor->getAVPresetId().trim(), processor->getAVPresetName(),
+                                               nativePresetHasLayers(activeFile));
+        if (outcome != AVOverwrite::holdsOtherSound) {
+            if (completion) completion(outcome == AVOverwrite::saved);
+            return;
         }
         AVSaveSoundAs(std::move(completion),
                       language.format("presetReplacedElsewhere", {{"name", activeFile.getFileNameWithoutExtension()}}));
@@ -1847,11 +1838,91 @@ void DexedAudioProcessorEditor::AVSaveSound(std::function<void(bool)> completion
     AVSaveSoundAs(std::move(completion));
 }
 
-void DexedAudioProcessorEditor::AVSaveSoundAs(std::function<void(bool)> completion, const String& reason) {
+DexedAudioProcessorEditor::AVOverwrite DexedAudioProcessorEditor::AVOverwritePreset(const File& file, const String& expectedId,
+                                                                                     const String& name, bool layers) {
+    auto& language = AVDexedLanguageService::getInstance();
+    // Renamed or deleted elsewhere (Finder, another instance, another
+    // project) and a new sound saved under the same name: the file now holds
+    // another id, and that sound is never overwritten. A sound without id
+    // (from 0.1.0) has nothing to compare and saves in place as before.
+    const auto holdsOtherSound = [&expectedId](const File& candidate) {
+        return expectedId.isNotEmpty() && readNativePresetId(candidate).trim() != expectedId;
+    };
+    if (holdsOtherSound(file))
+        return AVOverwrite::holdsOtherSound;
+    const auto oldKey = playView.getPresetKeyForFile(file);
+    auto presetId = expectedId.isNotEmpty() ? expectedId : readNativePresetId(file);
+    if (presetId.isEmpty())
+        presetId = Uuid().toString();
+    const auto state = createNativePresetState(*processor, presetId, name, layers);
+    bool written = false;
+    {
+        // Under the library lock, as the browser's rename and delete: a
+        // preset another AV Dexed just moved, removed or replaced is not
+        // touched here (checked again now that nobody else can write).
+        const AVDexedLibrary::LibraryScope lock(3000);
+        if (! state.isEmpty() && lock.held && file.existsAsFile()) {
+            if (holdsOtherSound(file))
+                return AVOverwrite::holdsOtherSound;
+            written = AVDexedLibrary::writeAtomically(file, state);
+        }
+    }
+    if (! written) {
+        showAVNotice(language.text("saveError"), language.format("writeError", {{"path", file.getFullPathName()}}));
+        return AVOverwrite::failed;
+    }
+    playView.migratePresetKey(oldKey, "user:" + presetId);
+    processor->setAVPresetContext(name, presetId, file);
+    processor->captureAVPresetBaseline();
+    if (layers)
+        processor->setAVLayerSetContext(file, presetId);
+    playView.setActiveUserPreset(file);
+    processor->updateHostDisplay();
+    showAVFooterNotice(language.format("savedSound", {{"name", file.getFileNameWithoutExtension()}}));
+    return AVOverwrite::saved;
+}
+
+void DexedAudioProcessorEditor::AVSaveLayers(const String& suggestedName) {
     auto& language = AVDexedLanguageService::getInstance();
     const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
-    // The folder being browsed when it is a real, writable one; else "User Presets".
-    auto folder = playView.getSelectedLibraryFolder();
+    const auto setFile = processor->getAVLayerSetFile();
+    // Moved, deleted or in a pack: a new file, as "Guardar" of a sound does.
+    if (! (setFile.existsAsFile() && AVDexedLibrary::isPresetFile(setFile)
+           && avIsInVisibleLibrary(setFile, root) && ! AVDexedLibrary::isReadOnly(setFile, root))) {
+        AVSaveLayersAs(suggestedName);
+        return;
+    }
+    if (AVOverwritePreset(setFile, processor->getAVLayerSetId().trim(), readNativePresetName(setFile), true)
+        == AVOverwrite::holdsOtherSound)
+        AVSavePresetAs(true, setFile.getFileNameWithoutExtension(),
+                       AVDexedLibrary::writableFolderFor(root, AVDexedLibrary::userPresetsFolderName), {},
+                       language.format("presetReplacedElsewhere", {{"name", setFile.getFileNameWithoutExtension()}}));
+    else
+        updateUI();
+}
+
+void DexedAudioProcessorEditor::AVSaveLayersAs(const String& suggestedName) {
+    // The layers' own file names them best; then the performance they came from.
+    // Always into "User Presets": the Capas page shows no browser folder.
+    const auto setFile = processor->getAVLayerSetFile();
+    const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+    AVSavePresetAs(true, setFile != File() ? setFile.getFileNameWithoutExtension() : suggestedName,
+                   AVDexedLibrary::writableFolderFor(root, AVDexedLibrary::userPresetsFolderName), {}, {});
+}
+
+void DexedAudioProcessorEditor::AVSaveSoundAs(std::function<void(bool)> completion, const String& reason) {
+    // A layers preset (the sound is the layers' own file) stays one.
+    const auto soundFile = processor->getAVPresetPath();
+    AVSavePresetAs(soundFile != File() && soundFile == processor->getAVLayerSetFile(), {}, {}, std::move(completion), reason);
+}
+
+void DexedAudioProcessorEditor::AVSavePresetAs(bool layers, const String& suggestedName, File folder,
+                                               std::function<void(bool)> completion, const String& reason) {
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+    // By default the folder being browsed when it is a real, writable one; else "User Presets".
+    if (folder == File())
+        folder = playView.getSelectedLibraryFolder();
     if (! (folder.isDirectory() && avIsInVisibleLibrary(folder, root) && folder.hasWriteAccess()
            && ! AVDexedLibrary::isReadOnly(folder, root)))
         // Never a pack that happens to be called "User Presets" ("User Presets 2" then).
@@ -1859,10 +1930,10 @@ void DexedAudioProcessorEditor::AVSaveSoundAs(std::function<void(bool)> completi
     const auto place = avFolderDisplayName(folder, root);
 
     AVDexedPromptOverlay::Options options;
-    options.title = language.text("saveAs");
+    options.title = language.text(layers ? "layerSaveAs" : "saveAs");
     options.message = (reason.isNotEmpty() ? reason + "\n" : String()) + language.format("saveAsWhere", {{"folder", place}});
     options.hasEditor = true;
-    options.editorText = processor->getAVPresetName().trim();
+    options.editorText = (suggestedName.trim().isNotEmpty() ? suggestedName : processor->getAVPresetName()).trim();
     options.placeholder = language.text("soundName");
     options.maxLength = 64;
     options.confirmText = language.text("save");
@@ -1871,7 +1942,7 @@ void DexedAudioProcessorEditor::AVSaveSoundAs(std::function<void(bool)> completi
         return avPresetFileStem(text).isEmpty() ? AVDexedLanguageService::getInstance().text("soundNameInvalid") : String();
     };
     Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
-    showAVPrompt(std::move(options), [safeThis, folder, place, completion = std::move(completion)](bool confirmed, const String& text) {
+    showAVPrompt(std::move(options), [safeThis, folder, place, layers, completion = std::move(completion)](bool confirmed, const String& text) {
         if (safeThis == nullptr)
             return;
         if (!confirmed) {
@@ -1888,7 +1959,7 @@ void DexedAudioProcessorEditor::AVSaveSoundAs(std::function<void(bool)> completi
         const AVDexedLibrary::LibraryScope lock(4000);
         if (lock.held && folder.createDirectory().wasOk()) {
             destination = AVDexedLibrary::uniqueDestination(folder, avPresetFileStem(text) + AVDexedLibrary::presetExtension);
-            const auto state = createNativePresetState(*editor->processor, presetId, destination.getFileNameWithoutExtension());
+            const auto state = createNativePresetState(*editor->processor, presetId, destination.getFileNameWithoutExtension(), layers);
             written = ! state.isEmpty() && AVDexedLibrary::writeAtomically(destination, state);
         }
         if (! written) {
@@ -1899,6 +1970,8 @@ void DexedAudioProcessorEditor::AVSaveSoundAs(std::function<void(bool)> completi
         }
         editor->processor->setAVPresetContext(destination.getFileNameWithoutExtension(), presetId, destination);
         editor->processor->captureAVPresetBaseline();
+        if (layers)
+            editor->processor->setAVLayerSetContext(destination, presetId);
         editor->playView.setActiveUserPreset(destination);
         editor->processor->updateHostDisplay();
         editor->playView.refreshLibrary();
@@ -2001,8 +2074,9 @@ void DexedAudioProcessorEditor::loadNativePreset(const File& file) {
         return;
     }
 
+    const bool layers = xml->getChildByName("avLayers") != nullptr;
     Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
-    requestPresetReplacement([safeThis, file, state = std::move(state)]() mutable {
+    requestPresetReplacement([safeThis, file, layers, state = std::move(state)]() mutable {
         if (safeThis == nullptr)
             return;
         if (!safeThis->processor->loadAVNativePreset(state.getData(), static_cast<int>(state.getSize()))) {
@@ -2010,8 +2084,14 @@ void DexedAudioProcessorEditor::loadNativePreset(const File& file) {
             safeThis->showAVNotice(language.text("presetError"), language.text("invalidPreset"));
             return;
         }
-        safeThis->processor->setAVPresetContext(safeThis->processor->getAVPresetName(), readNativePresetId(file), file);
+        const auto presetId = readNativePresetId(file);
+        safeThis->processor->setAVPresetContext(safeThis->processor->getAVPresetName(), presetId, file);
         safeThis->processor->captureAVPresetBaseline();
+        if (layers) {
+            // "Guardar capas" writes here again.
+            safeThis->processor->setAVLayerSetContext(file, presetId);
+            safeThis->layersView.showLayerSet(file);
+        }
         safeThis->playView.setActiveUserPreset(file);
         safeThis->processor->updateHostDisplay();
         safeThis->updateUI();
