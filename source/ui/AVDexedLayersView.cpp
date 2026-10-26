@@ -173,7 +173,9 @@ public:
         highKey.setSelectedId(settings.highNote.load() + 1, dontSendNotification);
         updating = false;
 
-        const auto name = processor.getAVLayerProgram(layer).getName().trim();
+        // A voice with a blank name shows a dash.
+        auto name = processor.getAVLayerProgram(layer).getName().trim();
+        if (name.isEmpty()) name = String::fromUTF8("—");
         const int sounding = processor.getAVLayerSoundingVoices(layer);
         const bool selected = processor.getAVSelectedLayer() == layer;
         const int group = settings.alternateGroup.load();
@@ -187,7 +189,7 @@ public:
         if (const int table = settings.microTable.load(); table > 0)
             voices << String::fromUTF8(" · ") << language.text("microTuning" + String(table));
         if (name != voice.name || voices != voice.voices || selected != voice.selected || (sounding > 0) != voice.sounding) {
-            voice.name = name.isNotEmpty() ? name : String("—");
+            voice.name = name;
             voice.voices = voices;
             voice.selected = selected;
             voice.sounding = sounding > 0;
