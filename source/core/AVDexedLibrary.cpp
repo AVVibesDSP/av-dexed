@@ -26,6 +26,11 @@
  #endif
 #endif
 
+#if ! JUCE_WINDOWS
+ #include <dirent.h>
+ #include <sys/stat.h>
+#endif
+
 using namespace juce;
 
 namespace AVDexedLibrary {
@@ -150,15 +155,44 @@ bool factoryFingerprints(const void* zipData, size_t zipSize, std::map<String, S
     return ! byName.empty();
 }
 
+/** The names in `folder`: its files and its folders (a link to a folder
+    counts as a folder). On macOS and Linux the kind comes with the listing
+    itself, so a folder of thousands of sounds is listed without asking the
+    disk about each one (JUCE's iterator does, three times). */
+void listEntries(const File& folder, StringArray* files, StringArray* folders) {
+   #if JUCE_WINDOWS
+    for (const auto& entry : RangedDirectoryIterator(folder, false, "*", File::findFilesAndDirectories)) {
+        auto* list = entry.isDirectory() ? folders : files;
+        if (list != nullptr) list->add(entry.getFile().getFileName());
+    }
+   #else
+    auto* directory = opendir(folder.getFullPathName().toRawUTF8());
+    if (directory == nullptr) return;
+    while (const auto* entry = readdir(directory)) {
+        const auto name = String::fromUTF8(entry->d_name);
+        if (name == "." || name == "..") continue;
+        bool isFolder = entry->d_type == DT_DIR;
+        if (entry->d_type == DT_LNK || entry->d_type == DT_UNKNOWN) {
+            struct stat info;
+            isFolder = stat(folder.getChildFile(name).getFullPathName().toRawUTF8(), &info) == 0 && S_ISDIR(info.st_mode);
+        }
+        auto* list = isFolder ? folders : files;
+        if (list != nullptr) list->add(name);
+    }
+    closedir(directory);
+   #endif
+}
+
 /** Visible subfolders of `folder`, sorted naturally ignoring case. Reserved
     names ("Profiles", "Cartridges") only matter in the root: deeper down they
     are ordinary user folders. */
 Array<File> visibleSubfolders(const File& folder, bool isLibraryRoot) {
     Array<File> found;
-    for (const auto& entry : RangedDirectoryIterator(folder, false, "*", File::findDirectories)) {
-        const auto name = entry.getFile().getFileName();
+    StringArray names;
+    listEntries(folder, nullptr, &names);
+    for (const auto& name : names) {
         if (isIgnoredName(name) || (isLibraryRoot && isReservedFolderName(name))) continue;
-        found.add(entry.getFile());
+        found.add(folder.getChildFile(name));
     }
     std::sort(found.begin(), found.end(), [](const File& a, const File& b) {
         return a.getFileName().compareNatural(b.getFileName(), false) < 0;
@@ -1014,9 +1048,11 @@ bool isSoundFile(const File& file) {
 Array<File> findSoundFiles(const File& root) {
     Array<File> files;
     const auto addSoundsOf = [&files](const File& folder) {
+        StringArray names;
+        listEntries(folder, &names, nullptr);
         Array<File> level;
-        for (const auto& entry : RangedDirectoryIterator(folder, false, "*", File::findFiles))
-            if (isSoundFile(entry.getFile())) level.add(entry.getFile());
+        for (const auto& name : names)
+            if (const auto file = folder.getChildFile(name); isSoundFile(file)) level.add(file);
         std::sort(level.begin(), level.end(), [](const File& a, const File& b) {
             return a.getFileName().compareNatural(b.getFileName(), false) < 0;
         });
@@ -1026,6 +1062,30 @@ Array<File> findSoundFiles(const File& root) {
     addSoundsOf(root);
     forEachFolder(root, true, addSoundsOf);
     return files;
+}
+
+std::vector<SoundFileInfo> listSoundFiles(const File& root) {
+    std::vector<SoundFileInfo> found;
+    for (const auto& file : findSoundFiles(root)) {
+        SoundFileInfo info { file, 0, 0 };
+       #if JUCE_WINDOWS
+        info.size = file.getSize();
+        info.modified = file.getLastModificationTime().toMilliseconds();
+       #else
+        // One stat for both, the time as JUCE reads it (milliseconds of the
+        // modification time): the caches compare it with File's own.
+        struct stat status;
+        if (stat(file.getFullPathName().toRawUTF8(), &status) != 0) continue;
+        info.size = int64(status.st_size);
+       #if JUCE_MAC || JUCE_IOS
+        info.modified = int64(status.st_mtimespec.tv_sec) * 1000 + int64(status.st_mtimespec.tv_nsec) / 1000000;
+       #else
+        info.modified = int64(status.st_mtime) * 1000;
+       #endif
+       #endif
+        found.push_back(std::move(info));
+    }
+    return found;
 }
 
 String librarySignature(const File& root) {

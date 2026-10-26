@@ -19,6 +19,9 @@ bool runAVDexedSysexTests();
 bool runAVDexedLayerTests();
 bool runAVDexedConversionTests();
 int AVRunConvertCheck(const juce::File& library);
+int AVRunConvertLibrary(const juce::File& library, const juce::File& destination);
+int AVRunIndexBench(const juce::File& root);
+int AVRunCompareImages(const juce::File& before, const juce::File& after);
 bool runAVDexedPerformanceTests();
 bool runAVDexedKernelTests();
 int AVRunGolden(const juce::StringArray& arguments);
@@ -152,6 +155,12 @@ int main(int argc, char** argv)
     }
     if (argc == 3 && juce::String(argv[1]) == "--convert-check")
         return AVRunConvertCheck(juce::File(juce::String::fromUTF8(argv[2])));
+    if (argc == 4 && juce::String(argv[1]) == "--convert-library")
+        return AVRunConvertLibrary(juce::File(juce::String::fromUTF8(argv[2])), juce::File(juce::String::fromUTF8(argv[3])));
+    if (argc == 4 && juce::String(argv[1]) == "--compare-images")
+        return AVRunCompareImages(juce::File(juce::String::fromUTF8(argv[2])), juce::File(juce::String::fromUTF8(argv[3])));
+    if (argc == 3 && juce::String(argv[1]) == "--index-bench")
+        return AVRunIndexBench(juce::File(juce::String::fromUTF8(argv[2])));
     if (argc >= 2 && juce::String(argv[1]) == "--golden") {
         juce::StringArray arguments;
         for (int i = 2; i < argc; ++i) arguments.add(juce::String::fromUTF8(argv[i]));

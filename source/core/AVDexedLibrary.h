@@ -256,6 +256,15 @@ bool isSoundFile(const juce::File& file);
     sorted naturally. The same names are skipped as in listFolders(), at every
     level; a symbolic link back into the library is not entered twice. */
 juce::Array<juce::File> findSoundFiles(const juce::File& root);
+/** A sound file with its size and modification time (milliseconds, as
+    juce::File::getLastModificationTime() gives it). */
+struct SoundFileInfo {
+    juce::File file;
+    juce::int64 size = 0, modified = 0;
+};
+/** findSoundFiles() with each file's size and time, asking the disk once per
+    file: the browser's walk of a library of tens of thousands of sounds. */
+std::vector<SoundFileInfo> listSoundFiles(const juce::File& root);
 
 /** A cheap fingerprint of the library's shape for polling: relative path and
     modification time of every folder at any depth, plus name, size and time of

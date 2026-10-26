@@ -369,6 +369,7 @@ public:
     friend bool AVRenderUIEvidence(const juce::File& directory);
     friend bool AVRunLibraryQA(const juce::File& outputDirectory);
     friend bool runAVDexedDropTests();
+    friend int AVRunIndexBench(const juce::File&);
     friend int AVRunUICpu(const juce::File& bankFile, int slot);
     friend int AVRunUIResize(const juce::File& bankFile, int slot, const juce::File& outputDirectory);
     friend int AVRunAdvancedNotice(const juce::File& outputDirectory);

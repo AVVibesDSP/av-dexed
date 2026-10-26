@@ -59,6 +59,35 @@ String avStableStateHash(const void* data, size_t size) {
 
 String avProgramSuffix(int program) { return ":" + String(program).paddedLeft('0', 2); }
 
+/** The browser's index of the library's sound files, kept between windows and
+    sessions (`.cache/library-index` in the root, where nothing lists it): what
+    each file shows for its size and time, so a new window reads only the files
+    that changed. One line per file: path below the root, size, time, order in
+    its folder, identity, name, tab separated. */
+struct AVSavedPreset {
+    int64 size = 0, time = 0;
+    int order = -1;
+    String key, name;
+};
+constexpr const char* avPresetIndexHeader = "AV Dexed library index 1";
+
+File avPresetIndexFile(const File& root) {
+    return root.getChildFile(".cache").getChildFile("library-index");
+}
+
+std::map<String, AVSavedPreset> avReadPresetIndex(const File& root) {
+    std::map<String, AVSavedPreset> saved;
+    StringArray lines;
+    lines.addLines(avPresetIndexFile(root).loadFileAsString());
+    if (lines.isEmpty() || lines[0] != avPresetIndexHeader) return saved;   // another format: read everything again
+    for (int i = 1; i < lines.size(); ++i) {
+        const auto fields = StringArray::fromTokens(lines[i], "\t", {});
+        if (fields.size() != 6 || fields[0].isEmpty() || fields[4].isEmpty()) continue;
+        saved[fields[0]] = { fields[1].getLargeIntValue(), fields[2].getLargeIntValue(), fields[3].getIntValue(), fields[4], fields[5] };
+    }
+    return saved;
+}
+
 String avEllipsis(const String& text) { return text + String::fromUTF8("…"); }
 
 /** Cmd, Ctrl or Alt: an arrow with one of them belongs to the editor's shortcuts. */
@@ -1382,15 +1411,19 @@ void AVDexedPlayView::paintListBoxItem(int row, Graphics& g, int width, int heig
         g.setColour(AVDexedTheme::oceanHighlight.withAlpha(0.8f));
         g.drawRoundedRectangle(rowArea.reduced(0.5f), 6.0f, 1.0f);
     }
-    const auto number = entry.isUser ? String("U") : String(entry.program + 1).paddedLeft('0', 2);
-    AVDexedTheme::drawGreyText(g, number, AVDexedTheme::font(12.0f, "Medium"),
-                               { 12.0f, 0.0f, 26.0f, float(height) }, Justification::centredLeft, 0.6f);
+    // Its place in the list shown (1, 2, 3… to the end), never a bank's slot:
+    // a folder of many banks counts on instead of starting over at 01.
+    const auto numberFont = AVDexedTheme::font(12.0f, "Medium");
+    const auto number = String(row + 1).paddedLeft('0', 2);
+    const float numberWidth = GlyphArrangement::getStringWidth(numberFont, String::repeatedString("8", jmax(2, String(int(visibleEntries.size())).length())));
+    AVDexedTheme::drawGreyText(g, number, numberFont, { 12.0f, 0.0f, jmax(26.0f, numberWidth + 2.0f), float(height) },
+                               Justification::centredLeft, 0.6f);
     const float starX = float(width) - 30.0f;
     // Name and source share the row between the number and the star. The
     // name comes first: the source takes what the name leaves, never less
     // than ~40% when both are long, and a long one is cut with "…" at a
     // readable size instead of shrinking into a smudge.
-    const float nameX = 42.0f, gap = 10.0f;
+    const float nameX = jmax(42.0f, 12.0f + numberWidth + 8.0f), gap = 10.0f;
     const float span = jmax(0.0f, starX - 6.0f - nameX);
     const auto nameFont = AVDexedTheme::font(15.0f, active ? "SemiBold" : "Medium");
     const auto sourceFont = AVDexedTheme::font(13.0f, "Medium");
@@ -1899,9 +1932,11 @@ void AVDexedPlayView::reindexLibrary() {
                              cachedBanks = std::move(cachedBanks), safeThis] {
         // Taken before the walk: anything that changes during it shows at the next poll.
         auto signature = AVDexedLibrary::librarySignature(root);
+        const auto savedIndex = avReadPresetIndex(root);
+        int readFromDisk = 0, presets = 0;
         std::vector<PresetEntry> entries;
         StringPairArray carried;
-        std::map<String, bool> readOnlyFolders;
+        std::map<String, std::pair<bool, String>> readOnlyFolders;   // per directory: read-only, its folder
         const auto carryFavorites = [&carried](const AVPresetBank& before, const AVPresetBank& after) {
             // The same file with new content (a sound saved into its slot, an
             // edit in the bank manager): favourites follow the unchanged voices,
@@ -1914,15 +1949,19 @@ void AVDexedPlayView::reindexLibrary() {
                 if (changed == 1 || AVDexedLibrary::voiceHash(before.cartridge, slot) == AVDexedLibrary::voiceHash(after.cartridge, slot))
                     carried.set("bank:" + before.fingerprint + avProgramSuffix(slot), "bank:" + after.fingerprint + avProgramSuffix(slot));
         };
-        for (const auto& file : AVDexedLibrary::findSoundFiles(root)) {
+        for (const auto& found : AVDexedLibrary::listSoundFiles(root)) {
+            const auto& file = found.file;
             if (cancelled->load()) return;
             const auto directory = file.getParentDirectory().getFullPathName();
-            if (readOnlyFolders.count(directory) == 0) readOnlyFolders[directory] = AVDexedLibrary::isReadOnly(file, root);
-            const bool readOnly = readOnlyFolders[directory];
-            const auto folder = AVDexedLibrary::folderOf(file, root);
+            auto known = readOnlyFolders.find(directory);
+            if (known == readOnlyFolders.end())
+                known = readOnlyFolders.emplace(directory, std::make_pair(AVDexedLibrary::isReadOnly(file, root),
+                                                                          AVDexedLibrary::folderOf(file, root))).first;
+            const bool readOnly = known->second.first;
+            const auto& folder = known->second.second;
             const auto path = file.getFullPathName();
-            const auto fileSize = file.getSize();
-            const auto modified = file.getLastModificationTime().toMilliseconds();
+            const auto fileSize = found.size;
+            const auto modified = found.modified;
             if (file.getFileExtension().equalsIgnoreCase(".syx")) {
                 std::shared_ptr<AVPresetBank> bank;
                 const auto cached = cachedBanks.find(path);
@@ -1959,6 +1998,7 @@ void AVDexedPlayView::reindexLibrary() {
                 }
                 continue;
             }
+            ++presets;
             const auto cached = cachedPresets.find(path);
             if (cached != cachedPresets.end() && cached->second.indexedFileSize == fileSize
                 && cached->second.indexedModificationTime == modified && cached->second.key.isNotEmpty()) {
@@ -1968,27 +2008,75 @@ void AVDexedPlayView::reindexLibrary() {
                 entries.push_back(std::move(entry));
                 continue;
             }
-            MemoryBlock contents;
-            if (fileSize <= 0 || fileSize > 32 * 1024 * 1024 || !file.loadFileAsData(contents)) continue;
-            auto xml = AudioProcessor::getXmlFromBinary(contents.getData(), static_cast<int>(contents.getSize()));
-            if (xml == nullptr) continue;
-            const auto tree = ValueTree::fromXml(*xml);
-            const auto stableId = tree.getProperty("libraryPresetId").toString().trim();
-            auto name = tree.getChildWithName("session").getProperty("avPresetName").toString();
-            if (name.isEmpty()) name = file.getFileNameWithoutExtension();
             PresetEntry entry;
             entry.file = file;
-            entry.name = name;
             // Its folder; a loose preset has none (not the data folder's name).
             entry.source = folder.isEmpty() ? String() : file.getParentDirectory().getFileName();
-            entry.key = stableId.isNotEmpty() ? "user:" + stableId
-                                              : "user-content:" + avStableStateHash(contents.getData(), contents.getSize());
             entry.isUser = true;
             entry.isStock = entry.readOnly = readOnly;
             entry.indexedFileSize = fileSize;
             entry.indexedModificationTime = modified;
             entry.folder = folder;
+            // The saved index knows this file as it is: not read again.
+            const auto saved = savedIndex.find(file.getRelativePathFrom(root).replaceCharacter('\\', '/'));
+            if (saved != savedIndex.end() && saved->second.size == fileSize && saved->second.time == modified) {
+                entry.name = saved->second.name;
+                entry.key = saved->second.key;
+                entry.order = saved->second.order;
+                entries.push_back(std::move(entry));
+                continue;
+            }
+            MemoryBlock contents;
+            if (fileSize <= 0 || fileSize > 32 * 1024 * 1024 || !file.loadFileAsData(contents)) continue;
+            const auto xml = AudioProcessor::getXmlFromBinary(contents.getData(), static_cast<int>(contents.getSize()));
+            if (xml == nullptr) continue;
+            ++readFromDisk;
+            const auto stableId = xml->getStringAttribute("libraryPresetId").trim();
+            const auto* session = xml->getChildByName("session");
+            auto name = session != nullptr ? session->getStringAttribute("avPresetName") : String();
+            if (name.isEmpty()) name = file.getFileNameWithoutExtension();
+            entry.name = name;
+            entry.key = stableId.isNotEmpty() ? "user:" + stableId
+                                              : "user-content:" + avStableStateHash(contents.getData(), contents.getSize());
+            entry.order = session != nullptr ? session->getIntAttribute("avLibraryOrder", -1) : -1;
             entries.push_back(std::move(entry));
+        }
+        if (cancelled->load()) return;
+        // Each folder in its order: the voices of a converted bank as the bank
+        // had them, the banks' voices, then the other sounds by name (the walk's order).
+        {
+            std::map<String, size_t> folderRank;
+            for (const auto& entry : entries) folderRank.emplace(entry.folder, folderRank.size());
+            std::vector<size_t> walk(entries.size());
+            for (size_t i = 0; i < walk.size(); ++i) walk[i] = i;
+            const auto rank = [&entries](size_t i) { return entries[i].order >= 0 ? 0 : entries[i].isUser ? 2 : 1; };
+            std::stable_sort(walk.begin(), walk.end(), [&](size_t a, size_t b) {
+                const auto fa = folderRank[entries[a].folder], fb = folderRank[entries[b].folder];
+                if (fa != fb) return fa < fb;
+                if (rank(a) != rank(b)) return rank(a) < rank(b);
+                return rank(a) == 0 && entries[a].order < entries[b].order;
+            });
+            std::vector<PresetEntry> sorted;
+            sorted.reserve(entries.size());
+            for (const auto i : walk) sorted.push_back(std::move(entries[i]));
+            entries = std::move(sorted);
+        }
+        // The index for the next window, when this walk learned something new.
+        if (readFromDisk > 0 || presets != int(savedIndex.size())) {
+            // Streamed: tens of thousands of lines appended to one String copy it each time.
+            MemoryOutputStream text;
+            text << avPresetIndexHeader;
+            for (const auto& entry : entries) {
+                if (! entry.isUser) continue;
+                const auto relative = entry.file.getRelativePathFrom(root).replaceCharacter('\\', '/');
+                if (relative.containsAnyOf("\t\r\n") || entry.name.containsAnyOf("\t\r\n")) continue;   // read again next time
+                text << "\n" << relative << "\t" << String(entry.indexedFileSize) << "\t" << String(entry.indexedModificationTime)
+                     << "\t" << String(entry.order) << "\t" << entry.key << "\t" << entry.name;
+            }
+            text << "\n";
+            const auto index = avPresetIndexFile(root);
+            if (index.getParentDirectory().createDirectory())
+                AVDexedLibrary::writeAtomically(index, text.getMemoryBlock());
         }
         if (cancelled->load()) return;
         MessageManager::callAsync([safeThis, generation, entries = std::move(entries), signature, carried]() mutable {

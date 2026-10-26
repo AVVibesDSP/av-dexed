@@ -7,7 +7,11 @@
 // as its bank voice does. --convert-check runs that last check on every bank
 // of a library (a copy of one), as its conversion would make them.
 
+#if defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 #include "../source/PluginProcessor.h"
+#include "../source/ui/PluginEditor.h"
 #include "../source/parameter/Model.h"
 #include "../source/core/AVDexedSysex.h"
 #include "../source/core/AVDexedConversion.h"
@@ -636,4 +640,105 @@ int AVRunConvertCheck(const juce::File& library) {
               << juce::String((juce::Time::getMillisecondCounterHiRes() - started) / 1000.0, 1) << " s\n";
     if (different > 0) std::cout << different << " folders with sounds that do not play as their voice\n";
     return different == 0 ? 0 : 1;
+}
+
+/** Every first-level folder of `library` converted flat into `destination`
+    (as the library's conversion will lay it out), kept there: a library of
+    sound files to measure the browser with. */
+int AVRunConvertLibrary(const juce::File& library, const juce::File& destination) {
+    if (! library.isDirectory() || destination.exists()) {
+        std::cerr << "Needs an existing library and a destination that does not exist yet\n";
+        return 2;
+    }
+    destination.createDirectory();
+    const auto started = juce::Time::getMillisecondCounterHiRes();
+    int sounds = 0;
+    for (const auto& folder : AVDexedLibrary::listFolders(library)) {
+        auto files = folder.findChildFiles(juce::File::findFiles | juce::File::ignoreHiddenFiles, true, "*.syx;*.SYX");
+        std::sort(files.begin(), files.end(), [](const juce::File& a, const juce::File& b) {
+            return a.getFullPathName().compareNatural(b.getFullPathName(), false) < 0;
+        });
+        if (files.isEmpty()) continue;
+        AVDexedConversion::Request request;
+        request.sources = files;
+        request.root = destination;
+        request.destination = destination.getChildFile(folder.getFileName());
+        request.layout = AVDexedConversion::Layout::flat;
+        request.backup = false;
+        const auto result = DexedAudioProcessor::convertAVBanks(request);
+        if (! result.ok) return 1;
+        sounds += result.sounds;
+    }
+    std::cout << sounds << " sounds in " << juce::String((juce::Time::getMillisecondCounterHiRes() - started) / 1000.0, 1)
+              << " s (conversion only)\n";
+    return 0;
+}
+
+/** How long the browser of a new window takes to list `root` (a library):
+    once without its saved index, once with it. */
+int AVRunIndexBench(const juce::File& root) {
+#if JUCE_MAC
+    const auto pump = [](int milliseconds) {
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + milliseconds;
+        while (juce::Time::getMillisecondCounterHiRes() < deadline)
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.005, true);
+    };
+    const auto oldApp = DexedAudioProcessor::dexedAppDir, oldCart = DexedAudioProcessor::dexedCartDir;
+    DexedAudioProcessor::dexedAppDir = root;
+    DexedAudioProcessor::dexedCartDir = AVDexedLibrary::rootFor(root);
+    root.getChildFile(".cache").getChildFile("library-index").deleteFile();
+    int code = 0;
+    for (const auto* run : { "without its index", "with its index" }) {
+        DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
+        auto editor = std::make_unique<DexedAudioProcessorEditor>(&processor);
+        const auto started = juce::Time::getMillisecondCounterHiRes();
+        while (editor->playView.libraryIndexing && juce::Time::getMillisecondCounterHiRes() - started < 300000)
+            pump(5);
+        const auto seconds = (juce::Time::getMillisecondCounterHiRes() - started) / 1000.0;
+        std::cout << "Listed " << editor->playView.libraryEntries.size() << " sounds " << run << " in "
+                  << juce::String(seconds, 2) << " s\n";
+        if (editor->playView.libraryIndexing) code = 1;
+        editor.reset();
+        pump(200);
+    }
+    std::cout << "Index: " << root.getChildFile(".cache").getChildFile("library-index").getSize() / 1024 << " KB\n";
+    DexedAudioProcessor::dexedAppDir = oldApp;
+    DexedAudioProcessor::dexedCartDir = oldCart;
+    return code;
+#else
+    juce::ignoreUnused(root);
+    return 2;
+#endif
+}
+
+/** The PNG files of `before` against those of `after` with the same names:
+    how many pixels differ, and where (the --render-ui captures before and
+    after a change). */
+int AVRunCompareImages(const juce::File& before, const juce::File& after) {
+    int changed = 0;
+    for (const auto& entry : juce::RangedDirectoryIterator(before, false, "*.png", juce::File::findFiles)) {
+        const auto other = after.getChildFile(entry.getFile().getFileName());
+        const auto a = juce::ImageFileFormat::loadFrom(entry.getFile());
+        const auto b = juce::ImageFileFormat::loadFrom(other);
+        if (! b.isValid() || a.getBounds() != b.getBounds()) {
+            std::cout << entry.getFile().getFileName() << ": missing or another size\n";
+            ++changed;
+            continue;
+        }
+        int different = 0;
+        juce::Rectangle<int> area;
+        const juce::Image::BitmapData da(a, juce::Image::BitmapData::readOnly), db(b, juce::Image::BitmapData::readOnly);
+        for (int y = 0; y < a.getHeight(); ++y)
+            for (int x = 0; x < a.getWidth(); ++x)
+                if (da.getPixelColour(x, y) != db.getPixelColour(x, y)) {
+                    ++different;
+                    area = area.isEmpty() ? juce::Rectangle<int>(x, y, 1, 1) : area.getUnion({ x, y, 1, 1 });
+                }
+        if (different > 0) {
+            std::cout << entry.getFile().getFileName() << ": " << different << " px differ in " << area.toString() << "\n";
+            ++changed;
+        }
+    }
+    std::cout << changed << " images differ\n";
+    return 0;
 }

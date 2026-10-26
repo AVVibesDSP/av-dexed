@@ -15,6 +15,7 @@
 #include "../source/ui/PluginEditor.h"
 #include "../source/ui/AVDexedStandaloneAccess.h"
 #include "../source/core/AVDexedLibrary.h"
+#include "../source/core/AVDexedConversion.h"
 #include "../source/core/Program.h"
 #include "../source/parameter/Model.h"
 #include <algorithm>
@@ -630,6 +631,52 @@ bool runAVDexedDropTests()
                                  "after saving, the browser opens the folder that holds the new preset");
                 processor.setAVLayerMode(false);
             }
+
+            // A converted bank lists its sounds in the bank's order (not the
+            // alphabet's), and the browser keeps an index of the library.
+            const auto reversed = outside.getChildFile("Al reves.syx");
+            {
+                Cartridge bank;
+                for (int slot = 0; slot < 32; ++slot) {
+                    uint8_t data[Program::PROGRAM_SIZE + 1];
+                    std::memcpy(data, Program::initialProgram().getRawData(), sizeof(data));
+                    data[134] = uint8_t(slot);
+                    data[144] = 30;   // transposed: none of them is the Init voice (an empty slot)
+                    bank.packProgram(data, slot, String::charToString(juce_wchar('Z' - slot % 26)) + " " + String(slot));
+                }
+                reversed.replaceWithData(bank.getVoiceSysex(), SYSEX_SIZE);
+            }
+            AVDexedConversion::Request request;
+            request.sources = { reversed };
+            request.root = root;
+            request.destination = root.getChildFile("Al reves");
+            request.layout = AVDexedConversion::Layout::flat;
+            request.backup = false;
+            passed &= expect(DexedAudioProcessor::convertAVBanks(request).sounds == 32, "a bank to list is converted");
+            editor->playView.refreshLibrary();
+            passed &= expect(pumpUntil([&] { return ! editor->playView.libraryIndexing; }, 5000), "the library is listed again");
+            editor->playView.setSelectedFolder("folder:Al reves");
+            bool inOrder = editor->playView.visibleEntries.size() == 32;
+            for (size_t i = 0; inOrder && i < editor->playView.visibleEntries.size(); ++i)
+                inOrder = editor->playView.visibleEntries[i].name.endsWith(" " + String(int(i)));
+            passed &= expect(inOrder, "a converted bank's sounds keep the bank's order, not the alphabet's");
+            const auto index = root.getChildFile(".cache").getChildFile("library-index");
+            passed &= expect(index.existsAsFile() && index.loadFileAsString().contains("Al reves/Z 0.avdexpreset")
+                                 && ! AVDexedLibrary::listFolders(root, true).contains(index.getParentDirectory()),
+                             "the browser keeps an index of the sounds, in a folder nothing lists");
+
+            // A new window lists the library from that index, and reads again
+            // only what changed (a sound saved over meanwhile).
+            const auto changed = root.getChildFile("Al reves").getChildFile("Y 1.avdexpreset");
+            passed &= expect(writeSound(changed, "Cambiado"), "a sound of the folder is written again");
+            editor.reset();
+            pump(200);
+            editor = std::make_unique<DexedAudioProcessorEditor>(&processor);
+            passed &= expect(pumpUntil([&] { return ! editor->playView.libraryIndexing; }, 5000), "a new window lists the library");
+            const auto& listed = editor->playView.libraryEntries;
+            const bool reread = std::any_of(listed.begin(), listed.end(), [&changed](const auto& entry) { return entry.file == changed && entry.name == "Cambiado"; });
+            const int inFolder = int(std::count_if(listed.begin(), listed.end(), [](const auto& entry) { return entry.folder == "Al reves"; }));
+            passed &= expect(reread && inFolder == 32, "it reads again the sound that changed, and lists the others from the index");
         }
         editor.reset();
         pump(300);

@@ -231,6 +231,7 @@ private:
     struct PresetEntry;
     friend bool AVRenderUIEvidence(const juce::File&);
     friend bool AVRunLibraryQA(const juce::File&);
+    friend int AVRunIndexBench(const juce::File&);
     friend bool runAVDexedDropTests();
     int getNumRows() override;
     void paintListBoxItem(int row, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
@@ -353,6 +354,7 @@ private:
         juce::String folder;                   // relative to the root with '/', "" = loose
         bool readOnly = false;
         bool transient = false;                // the active sound, outside the library
+        int order = -1;                        // a converted bank voice's place in its folder (-1: none)
     };
 
     DexedAudioProcessor& processor;
