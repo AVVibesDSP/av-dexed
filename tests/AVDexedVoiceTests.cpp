@@ -385,7 +385,8 @@ bool testWheelIsPlayedNotSaved() {
     juce::MidiBuffer wheel;
     wheel.addEvent(juce::MidiMessage::controllerEvent(1, 1, 100), 0);
     processor.processBlock(audio, wheel);
-    bool passed = expect(std::abs(cutoff->getValue() - soundCutoff) > 0.1f, "the mod wheel closes the filter (CC1 → Cutoff, inverted)");
+    bool passed = expect(std::abs(cutoff->getValue() - soundCutoff) > 0.1f,
+                         juce::String::fromUTF8("the mod wheel closes the filter (CC1 → Cutoff, inverted)"));
     passed &= expect(! processor.isAVPresetModified(), "playing the wheel does not mark the sound modified");
     passed &= expect(processor.captureAVSoundSettings().values.count(IDs::cutoff.name) == 0,
                      "saving keeps the sound's own cutoff, not where the wheel left it");
