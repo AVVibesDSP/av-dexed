@@ -451,6 +451,7 @@ exportedMany=$count sonidos en $banks bancos («$file» y los que siguen)
 exportSkipped=$count presets de capas no caben en un .syx
 exportFailed=No se pudo exportar a «$path».
 receivedFolderName=Recibido de DX7
+backupsReadOnly=Los respaldos son de solo lectura: importa el banco para cambiar sus sonidos.
 alreadyInLibrary=Ya estaba en tu biblioteca
 alreadyInLibraryMany=Ya estaban en tu biblioteca
 alreadyInFolderMany=Ya estaban en «$folder»

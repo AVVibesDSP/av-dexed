@@ -119,8 +119,9 @@ public:
 
 CartManager::CartManager(DexedAudioProcessorEditor *editor) : Component("CartManager") {
     mainWindow = editor;
-    // The data folder is the library: its folders are the tree's folders.
-    cartDir = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+    // The data folder is the library: its folders are the tree's folders. Once
+    // its banks are sounds, the banks are in the backups (read-only here).
+    cartDir = AVBanksFolder();
 
     activeCart.reset(new ProgramListBox("Active Programs Selector", 8));
     addAndMakeVisible(activeCart.get());
@@ -496,7 +497,12 @@ void CartManager::programDragged(ProgramListBox* destListBox, int dest, char* pa
         const auto file = AVPreviewFile;
         if (!file.existsAsFile()) return;
         auto& language = AVDexedLanguageService::getInstance();
-        // Factory and expansion packs are read-only.
+        // Factory and expansion packs are read-only, and so are the backups of
+        // the banks the library converted (their sounds are presets now).
+        if (file.isAChildOf(AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir).getChildFile(AVDexedLibrary::syxBackupsFolderName))) {
+            mainWindow->showAVNotice(language.text("saveError"), language.text("backupsReadOnly"));
+            return;
+        }
         if (AVDexedLibrary::isReadOnly(file, cartDir)) {
             mainWindow->showAVNotice(language.text("saveError"), language.text("packFolderReadOnly"));
             return;
@@ -558,7 +564,17 @@ void CartManager::showSysexConfigMsg() {
     mainWindow->showAVNotice(language.text("warning"), language.text("sysexConfigurationWarning"));
 }
 
+File CartManager::AVBanksFolder() {
+    const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+    return AVDexedLibrary::isLibraryConverted(root) ? root.getChildFile(AVDexedLibrary::syxBackupsFolderName) : root;
+}
+
 void CartManager::refreshFiles() {
+    // Converted (or undone) since the tree was set up: it shows where the banks are now.
+    if (const auto banks = AVBanksFolder(); banks != cartDir && cartBrowserList != nullptr) {
+        cartDir = banks;
+        cartBrowserList->setDirectory(cartDir, true, true);
+    }
     if (cartBrowserList != nullptr) cartBrowserList->refresh();
 }
 

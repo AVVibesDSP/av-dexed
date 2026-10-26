@@ -451,6 +451,7 @@ exportedMany=$count sounds in $banks banks (“$file” and the next ones)
 exportSkipped=$count layers presets do not fit in a .syx
 exportFailed=Could not export to “$path”.
 receivedFolderName=Received from DX7
+backupsReadOnly=The backups are read-only: import the bank to change its sounds.
 alreadyInLibrary=Already in your library
 alreadyInLibraryMany=Already in your library
 alreadyInFolderMany=Already in “$folder”

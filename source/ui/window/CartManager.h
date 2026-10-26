@@ -82,6 +82,8 @@ class CartManager : public Component, public Button::Listener, public DragAndDro
     std::unique_ptr<CartridgeFileDisplay> activeCartName;
 
     File cartDir;
+    /** Where the tree looks for banks: the library, or its backups once its banks are sounds. */
+    static File AVBanksFolder();
     // The file the preview (browserCart) shows: the tree's selection can move
     // on to a folder while the preview stays, and its voices load from here.
     File AVPreviewFile;
