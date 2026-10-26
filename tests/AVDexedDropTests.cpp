@@ -392,8 +392,9 @@ bool runAVDexedDropTests()
             prompt = openPrompt();
             passed &= expect(prompt != nullptr && promptText(*prompt) == "Coleccion", "a dropped folder suggests its name");
             if (prompt != nullptr) answerPrompt(*prompt, true);
-            passed &= expect(pumpUntil([&] { return presetsIn(root.getChildFile("Coleccion/Bajos/B1")) == 32; }, 5000)
-                                 && presetsIn(root.getChildFile("Coleccion/Pianos/P1")) == 32,
+            // Both: B1 is complete while P1's sounds are still being moved in.
+            passed &= expect(pumpUntil([&] { return presetsIn(root.getChildFile("Coleccion/Bajos/B1")) == 32
+                                                 && presetsIn(root.getChildFile("Coleccion/Pianos/P1")) == 32; }, 5000),
                              "a dropped folder keeps its structure, a folder per bank");
             pump(200);
 
