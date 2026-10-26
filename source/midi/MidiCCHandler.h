@@ -244,6 +244,39 @@ public:
         for (size_t i = 0; i < avParameters.size(); ++i)
             avWrittenByCC[i].store(std::numeric_limits<float>::quiet_NaN(), std::memory_order_relaxed);
     }
+    /** What the CCs hold moved, for a session: each parameter with the value
+        it has in the sound and the one the CC wrote. */
+    juce::ValueTree createAVCCWritesSnapshot() const {
+        juce::ValueTree result("avCCWrites");
+        for (size_t i = 0; i < avParameters.size(); ++i) {
+            auto* parameter = avParameters[i];
+            const float written = avWrittenByCC[i].load(std::memory_order_relaxed);
+            if (parameter == nullptr || std::isnan(written) || std::abs(parameter->getValue() - written) > 1.0e-6f) continue;
+            juce::ValueTree write("write");
+            write.setProperty(IDs::id, parameter->getParameterID(), nullptr);
+            write.setProperty("sound", avBeforeCC[i].load(std::memory_order_relaxed), nullptr);
+            write.setProperty("written", written, nullptr);
+            result.addChild(write, -1, nullptr);
+        }
+        return result;
+    }
+    /** A session again: a parameter that still holds what a CC wrote there
+        keeps the sound's own value under it (the wheel did not edit the sound). */
+    void restoreAVCCWrites(const juce::ValueTree& writes) {
+        for (const auto& write : writes) {
+            const auto id = write.getProperty(IDs::id).toString();
+            for (size_t i = 0; i < avParameters.size(); ++i) {
+                auto* parameter = avParameters[i];
+                if (parameter == nullptr || parameter->getParameterID() != id) continue;
+                const float written = float(write.getProperty("written", -1.0));
+                const float sound = float(write.getProperty("sound", -1.0));
+                if (std::abs(parameter->getValue() - written) <= 1.0e-6f && sound >= 0.0f && sound <= 1.0f) {
+                    avBeforeCC[i].store(sound, std::memory_order_relaxed);
+                    avWrittenByCC[i].store(parameter->getValue(), std::memory_order_relaxed);
+                }
+            }
+        }
+    }
 
     bool isAVInverted(int cc) const noexcept {
         return juce::isPositiveAndBelow(cc, 128) && avInvert[size_t(cc)].load(std::memory_order_relaxed);

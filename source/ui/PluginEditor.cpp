@@ -443,7 +443,7 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
         loadNativePreset(file);
     };
     playView.onProgramSelectionRequested = [this](int program, bool fromStock) {
-        requestPresetReplacement([this, program, fromStock] {
+        requestSoundReplacement([this, program, fromStock] {
             playView.commitProgramSelection(program, fromStock);
             rebuildProgramCombobox();
             refreshPresetHeader();
@@ -948,6 +948,23 @@ void DexedAudioProcessorEditor::requestPresetReplacement(std::function<void()> r
     });
 }
 
+void DexedAudioProcessorEditor::requestSoundReplacement(std::function<void()> replacement) {
+    if (!replacement)
+        return;
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    requestPresetReplacement([safeThis, replacement = std::move(replacement)] {
+        if (safeThis == nullptr)
+            return;
+        // Only a sound saved with its layers opens with layers. The layers
+        // stay as they were: the Capas page turns them on again.
+        if (safeThis->AVVisibleView != AVView::layers && safeThis->processor->isAVLayerModeOn()) {
+            safeThis->processor->setAVLayerMode(false);
+            safeThis->showAVFooterNotice(AVDexedLanguageService::getInstance().text("layerModeOffForSound"));
+        }
+        replacement();
+    });
+}
+
 void DexedAudioProcessorEditor::cartShow() {
     stopTimer();
     cartManager.resetActiveSysex();
@@ -1212,7 +1229,7 @@ void DexedAudioProcessorEditor::AVOpenImportedSounds(const Array<File>& banks, c
 }
 
 void DexedAudioProcessorEditor::applyCart(Cartridge cart, File file) {
-    requestPresetReplacement([this, cart = std::move(cart), file]() mutable {
+    requestSoundReplacement([this, cart = std::move(cart), file]() mutable {
         commitCart(std::move(cart), file);
     });
 }
@@ -1639,7 +1656,7 @@ void DexedAudioProcessorEditor::AVAdoptExternalSoundsOnce() {
 }
 
 void DexedAudioProcessorEditor::initProgram() {
-    requestPresetReplacement([this] {
+    requestSoundReplacement([this] {
         processor->resetToInitVoice();
         playView.setActiveUserPreset({});
         playView.captureCurrentAsBaseline();
@@ -1652,7 +1669,7 @@ void DexedAudioProcessorEditor::comboBoxChanged (ComboBox* comboBoxThatHasChange
     if (comboBoxThatHasChanged != global.programs)
         return;
     const int selectedProgram = global.programs->getSelectedId() - 1;
-    requestPresetReplacement([this, selectedProgram] {
+    requestSoundReplacement([this, selectedProgram] {
         processor->setCurrentProgram(selectedProgram);
         processor->updateHostDisplay();
         playView.setActiveUserPreset({});
@@ -1974,6 +1991,7 @@ void DexedAudioProcessorEditor::AVSavePresetAs(bool layers, const String& sugges
             editor->processor->setAVLayerSetContext(destination, presetId);
         editor->playView.setActiveUserPreset(destination);
         editor->processor->updateHostDisplay();
+        editor->playView.revealWhenIndexed(destination);
         editor->playView.refreshLibrary();
         editor->updateUI();
         editor->showAVFooterNotice(lang.format("savedIn", {{"place", place}}));
@@ -2076,7 +2094,7 @@ void DexedAudioProcessorEditor::loadNativePreset(const File& file) {
 
     const bool layers = xml->getChildByName("avLayers") != nullptr;
     Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
-    requestPresetReplacement([safeThis, file, layers, state = std::move(state)]() mutable {
+    auto load = [safeThis, file, layers, state = std::move(state)]() mutable {
         if (safeThis == nullptr)
             return;
         if (!safeThis->processor->loadAVNativePreset(state.getData(), static_cast<int>(state.getSize()))) {
@@ -2095,7 +2113,10 @@ void DexedAudioProcessorEditor::loadNativePreset(const File& file) {
         safeThis->playView.setActiveUserPreset(file);
         safeThis->processor->updateHostDisplay();
         safeThis->updateUI();
-    });
+    };
+    // Only a sound saved with its layers opens with layers.
+    if (layers) requestPresetReplacement(std::move(load));
+    else requestSoundReplacement(std::move(load));
 }
 
 void DexedAudioProcessorEditor::storeProgramShowDialog(Cartridge destSysex, File externalFile) {

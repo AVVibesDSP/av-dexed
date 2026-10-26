@@ -1248,6 +1248,35 @@ bool testDefaultWheelClosesTheFilter()
     fresh.processBlock(audio, events);
     const bool wheelDown = near(parameterValue(fresh, IDs::cutoff.name), 1.0f, 0.0001f)
         && fresh.controllers.modwheel_cc == 0 && !fresh.isAVPresetModified();
+
+    // A session saved with the wheel up reopens unmodified: the wheel's
+    // Cutoff is played, the sound's own value goes with it. A real edit
+    // made before still counts.
+    events.clear(); audio.clear();
+    events.addEvent(juce::MidiMessage::controllerEvent(1, 1, 100), 0);
+    fresh.processBlock(audio, events);
+    juce::MemoryBlock wheelSession;
+    fresh.getStateInformation(wheelSession);
+    DexedAudioProcessor reopened(DexedAudioProcessor::TestMode{});
+    const bool wheelReopens = reopened.loadAVStateInformation(wheelSession.getData(), static_cast<int>(wheelSession.getSize()))
+        && near(parameterValue(reopened, IDs::cutoff.name), parameterValue(fresh, IDs::cutoff.name), 0.0001f)
+        && !reopened.isAVPresetModified();
+    juce::MemoryBlock wheelAgain;
+    reopened.getStateInformation(wheelAgain);
+    DexedAudioProcessor reopenedTwice(DexedAudioProcessor::TestMode{});
+    const bool wheelReopensTwice = reopenedTwice.loadAVStateInformation(wheelAgain.getData(), static_cast<int>(wheelAgain.getSize()))
+        && !reopenedTwice.isAVPresetModified();
+    const auto wheelSound = fresh.createAVNativePresetState("Rueda", "av-wheel");
+    const auto wheelSoundXml = juce::AudioProcessor::getXmlFromBinary(wheelSound.getData(), static_cast<int>(wheelSound.getSize()));
+    const bool soundFileClean = wheelSoundXml != nullptr && wheelSoundXml->getChildByName("session") != nullptr
+        && wheelSoundXml->getChildByName("session")->getChildByName("avCCWrites") == nullptr;
+    if (auto* resonance = fresh.parameters.getParameter(IDs::resonance.name))
+        resonance->setValueNotifyingHost(resonance->getValue() > 0.5f ? 0.1f : 0.9f);
+    juce::MemoryBlock editedSession;
+    fresh.getStateInformation(editedSession);
+    DexedAudioProcessor reopenedEdited(DexedAudioProcessor::TestMode{});
+    const bool editStillCounts = reopenedEdited.loadAVStateInformation(editedSession.getData(), static_cast<int>(editedSession.getSize()))
+        && reopenedEdited.isAVPresetModified();
     fresh.releaseResources();
 
     // Saved like any mapping (here into an instance that had removed it)...
@@ -1286,6 +1315,9 @@ bool testDefaultWheelClosesTheFilter()
 
     return expect(defaultPresent, "a new instance maps CC1 to Cutoff, inverted, as a normal mapping, and has no arrow CCs")
         && expect(wheelUp && wheelDown, "CC1 closes the filter as it rises and still drives the DX7 mod wheel")
+        && expect(wheelReopens && wheelReopensTwice, "a session saved with the wheel up reopens unmodified")
+        && expect(soundFileClean, "a sound file does not carry what the wheel moved")
+        && expect(editStillCounts, "an edit saved in a session still reopens modified")
         && expect(roundTrip, "the default mapping survives a session round trip")
         && expect(flipped && moved, "the default mapping can be flipped and moved like any other")
         && expect(emptyStaysEmpty && staysEmptyTwice, "a session whose mappings were removed stays empty after restore")

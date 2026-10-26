@@ -268,7 +268,7 @@ void CartManager::programSelected(ProgramListBox* source, int pos) {
     // The preview's own file: the tree's selection may have moved to a folder.
     const auto sourceFile = AVPreviewFile;
     const auto safe = Component::SafePointer<CartManager>(this);
-    mainWindow->requestPresetReplacement([safe, selectedCart, sourceFile, pos, currentBank]() mutable {
+    mainWindow->requestSoundReplacement([safe, selectedCart, sourceFile, pos, currentBank]() mutable {
         if (safe == nullptr) return;
         auto* editor = safe->mainWindow;
         if (!currentBank) {

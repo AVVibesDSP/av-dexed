@@ -1166,6 +1166,10 @@ void AVDexedPlayView::refreshLibrary() {
     libraryChanged();
 }
 
+void AVDexedPlayView::revealWhenIndexed(const File& file) {
+    AVRevealFile = file;
+}
+
 void AVDexedPlayView::revealActivePreset() {
     searchField.clear();
     rebuildFilter();
@@ -2023,6 +2027,26 @@ void AVDexedPlayView::publishLibrary(std::vector<PresetEntry> entries, unsigned 
     rebuildFolderPicker();
     rebuildFilter();
     refreshLabels();
+    // A sound just saved into another folder than the one shown (the Capas
+    // page saves into "User Presets"): its folder opens, so it is not missed.
+    if (AVRevealFile != File()) {
+        const auto saved = std::find_if(libraryEntries.begin(), libraryEntries.end(),
+                                        [this](const PresetEntry& entry) { return entry.isUser && entry.file == AVRevealFile; });
+        if (saved != libraryEntries.end()) {
+            AVRevealFile = File();
+            const auto folder = saved->folder;
+            const bool shown = std::any_of(visibleEntries.begin(), visibleEntries.end(),
+                                           [this](const PresetEntry& entry) { return isActiveEntry(entry); });
+            if (! shown) {
+                searchField.clear();
+                setSelectedFolder(folder.isNotEmpty() ? "folder:" + folder : String("loose"));
+                if (! std::any_of(visibleEntries.begin(), visibleEntries.end(),
+                                  [this](const PresetEntry& entry) { return isActiveEntry(entry); }))
+                    setSelectedFolder("all");
+            }
+            programList.scrollToEnsureRowIsOnscreen(jmax(0, programList.getSelectedRow()));
+        }
+    }
     // The first index after the window opened brings the row that plays.
     followActiveRow();
 }

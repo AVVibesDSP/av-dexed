@@ -187,6 +187,9 @@ public:
     juce::File getSelectedLibraryFolder() const;
     /** Re-reads the library from disk (after an import, a save, a change in Finder). */
     void refreshLibrary();
+    /** After "Guardar como": once the index lists `file`, the browser shows it,
+        opening its folder when the one shown does not hold it. */
+    void revealWhenIndexed(const juce::File& file);
     void refreshLabels();
     void setActiveUserPreset(const juce::File& file);
     void commitProgramSelection(int program, bool fromStock = false);
@@ -227,6 +230,7 @@ public:
 private:
     struct PresetEntry;
     friend bool AVRenderUIEvidence(const juce::File&);
+    friend bool runAVDexedDropTests();
     friend bool AVRunLibraryQA(const juce::File&);
     friend bool runAVDexedDropTests();
     int getNumRows() override;
@@ -404,6 +408,7 @@ private:
     /** The library bank shown as the active one while the processor plays the
         same bank without a file (a SysEx dump, the built-in Dexed_01). */
     juce::File AVStandInBankFile;
+    juce::File AVRevealFile;   // revealWhenIndexed(): waiting for the index
     /** How many of the process-wide library moves this view has followed. */
     size_t AVFollowedMoves = 0;
     juce::Time AVPreferencesTime;

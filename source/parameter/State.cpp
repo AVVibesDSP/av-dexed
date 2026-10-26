@@ -116,6 +116,12 @@ void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
             session.setProperty("cartridgeAmem", juce::MemoryBlock(amem, 1120).toBase64Encoding(), nullptr);
     }
 
+    // Where the mod wheel left a parameter is played, not edited: the sound's
+    // own value goes with it, so the session does not reopen "Modificado".
+    if (midiCCMapper != nullptr)
+        if (auto writes = midiCCMapper->createAVCCWritesSnapshot(); writes.getNumChildren() > 0)
+            session.addChild(writes, -1, nullptr);
+
     storage.addChild(session, -1, nullptr);
     storage.addChild(createAVLayersState(), -1, nullptr);
 
@@ -439,6 +445,14 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
         if (kbmData.isNotEmpty())
             applyKBMMapping(kbmData.toStdString());
     }
+    // A restored sound: no CC has moved anything of it yet, but in a session
+    // what the wheel held moved is still the wheel's (before the baseline:
+    // the sound's own values are what it hashes).
+    if (midiCCMapper != nullptr) {
+        midiCCMapper->forgetAVCCWrites();
+        if (! avLoadingSoundFile)
+            midiCCMapper->restoreAVCCWrites(session.getChildWithName("avCCWrites"));
+    }
     const auto baseline = session.getProperty("avPresetBaseline").toString();
     avPresetBaseline.store(static_cast<uint64_t>(baseline.getHexValue64()), std::memory_order_relaxed);
     // A baseline hashed by another version (0.1.0 also hashed the general
@@ -446,8 +460,6 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
     if (baseline.isEmpty() || avPresetBaseline.load(std::memory_order_relaxed) == 0
         || static_cast<int>(session.getProperty("avPresetBaselineFormat", 1)) != avPresetBaselineFormat)
         captureAVPresetBaseline();
-    // A restored sound: no CC has moved anything of it yet.
-    if (midiCCMapper != nullptr) midiCCMapper->forgetAVCCWrites();
     // The layers belong to the session; a sound file loads into the selected layer.
     if (avLoadingSoundFile) {
         avLayers[size_t(avSelectedLayer.load(std::memory_order_acquire))].setProgram(activeProgram);
@@ -493,6 +505,7 @@ juce::MemoryBlock DexedAudioProcessor::createAVNativePresetState(const juce::Str
         layers.removeProperty("setId", nullptr);
     }
     auto session = tree.getChildWithName(sessionNode);
+    session.removeChild(session.getChildWithName("avCCWrites"), nullptr);   // the values above are the sound's
     session.setProperty("avPresetName", name, nullptr);
     session.setProperty("avPresetId", id, nullptr);
     session.setProperty("avKnownPresetOrigin", true, nullptr);

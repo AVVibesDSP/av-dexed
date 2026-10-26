@@ -503,6 +503,43 @@ bool runAVDexedDropTests()
                 passed &= expect(resavedLayers != nullptr && resavedLayers->getChildElement(2) != nullptr
                                      && resavedLayers->getChildElement(2)->getIntAttribute("transpose") == 3,
                                  "\"Guardar\" in Play writes a layers preset with its layers");
+
+                // A sound without layers opened from Play plays alone (the
+                // layers stay, off); on the Capas page it goes into the
+                // selected layer.
+                const auto single = userPresets.getChildFile("Solo.avdexpreset");
+                passed &= expect(writeSound(single, "Solo"), "a single sound is written into the library");
+                processor.captureAVPresetBaseline();
+                editor->playView.refreshLabels();
+                editor->showAVView(DexedAudioProcessorEditor::AVView::layers, false);
+                const int selectedLayer = processor.getAVSelectedLayer();
+                editor->loadNativePreset(single);
+                pump(100);
+                passed &= expect(processor.isAVLayerModeOn() && processor.getAVSelectedLayer() == selectedLayer
+                                     && processor.getAVLayerSettings(2).transpose.load() == 3
+                                     && processor.getAVPresetName() == "Solo",
+                                 "on the Capas page a single sound goes into the selected layer");
+                editor->showAVView(DexedAudioProcessorEditor::AVView::play, false);
+                processor.captureAVPresetBaseline();
+                editor->playView.refreshLabels();
+                editor->loadNativePreset(single);
+                pump(100);
+                passed &= expect(! processor.isAVLayerModeOn() && processor.getAVPresetName() == "Solo"
+                                     && processor.getAVLayerSettings(2).transpose.load() == 3,
+                                 "from Play a single sound plays alone, the layers kept for the Capas page");
+                editor->loadNativePreset(layersPreset);
+                pump(100);
+                passed &= expect(processor.isAVLayerModeOn(), "a layers preset turns the layers on again");
+
+                // A sound saved into a folder the browser does not show: its folder opens.
+                editor->playView.setSelectedFolder("folder:" + String(AVDexedLibrary::factoryFolderName));
+                editor->layersView.onSaveLayers(true, {});
+                prompt = openPrompt();
+                if (prompt != nullptr) answerPrompt(*prompt, true, "Visible");
+                passed &= expect(pumpUntil([&editor] {
+                                     return editor->playView.selectedFolderKey == "folder:" + String(AVDexedLibrary::userPresetsFolderName);
+                                 }, 3000),
+                                 "after saving, the browser opens the folder that holds the new preset");
                 processor.setAVLayerMode(false);
             }
         }

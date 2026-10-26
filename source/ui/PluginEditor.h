@@ -232,6 +232,10 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     void applyLanguage();
     void changeListenerCallback(ChangeBroadcaster*) override;
     void requestPresetReplacement(std::function<void()> replacement);
+    /** requestPresetReplacement for a single sound (a sound file without
+        layers, a bank voice, Init): from Play or Advanced it plays alone, the
+        layer mode off; on the Capas page it goes into the selected layer. */
+    void requestSoundReplacement(std::function<void()> replacement);
     void commitCart(Cartridge cart, const File& file);
     void applyCart(Cartridge cart, File file);
     void storeProgramShowDialog(Cartridge destSysex, File externalFile);
