@@ -22,6 +22,7 @@ int AVRunConvertCheck(const juce::File& library);
 int AVRunConvertLibrary(const juce::File& library, const juce::File& destination);
 int AVRunIndexBench(const juce::File& root);
 int AVRunCompareImages(const juce::File& before, const juce::File& after);
+int AVRunMigrateCheck(const juce::File& library);
 bool runAVDexedPerformanceTests();
 bool runAVDexedKernelTests();
 int AVRunGolden(const juce::StringArray& arguments);
@@ -159,6 +160,8 @@ int main(int argc, char** argv)
         return AVRunConvertLibrary(juce::File(juce::String::fromUTF8(argv[2])), juce::File(juce::String::fromUTF8(argv[3])));
     if (argc == 4 && juce::String(argv[1]) == "--compare-images")
         return AVRunCompareImages(juce::File(juce::String::fromUTF8(argv[2])), juce::File(juce::String::fromUTF8(argv[3])));
+    if (argc == 3 && juce::String(argv[1]) == "--migrate-check")
+        return AVRunMigrateCheck(juce::File(juce::String::fromUTF8(argv[2])));
     if (argc == 3 && juce::String(argv[1]) == "--index-bench")
         return AVRunIndexBench(juce::File(juce::String::fromUTF8(argv[2])));
     if (argc >= 2 && juce::String(argv[1]) == "--golden") {

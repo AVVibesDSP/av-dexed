@@ -832,9 +832,13 @@ int AVRunConvertLibrary(const juce::File& library, const juce::File& destination
     return 0;
 }
 
+int AVRunIndexBench(const juce::File& root, bool withoutIndexFirst);
+
 /** How long the browser of a new window takes to list `root` (a library):
     once without its saved index, once with it. */
-int AVRunIndexBench(const juce::File& root) {
+int AVRunIndexBench(const juce::File& root) { return AVRunIndexBench(root, true); }
+
+int AVRunIndexBench(const juce::File& root, bool withoutIndexFirst) {
 #if JUCE_MAC
     const auto pump = [](int milliseconds) {
         const auto deadline = juce::Time::getMillisecondCounterHiRes() + milliseconds;
@@ -844,9 +848,9 @@ int AVRunIndexBench(const juce::File& root) {
     const auto oldApp = DexedAudioProcessor::dexedAppDir, oldCart = DexedAudioProcessor::dexedCartDir;
     DexedAudioProcessor::dexedAppDir = root;
     DexedAudioProcessor::dexedCartDir = AVDexedLibrary::rootFor(root);
-    root.getChildFile(".cache").getChildFile("library-index").deleteFile();
+    if (withoutIndexFirst) root.getChildFile(".cache").getChildFile("library-index").deleteFile();
     int code = 0;
-    for (const auto* run : { "without its index", "with its index" }) {
+    for (const auto* run : { withoutIndexFirst ? "without its index" : "with the index as it is", "with its index" }) {
         DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
         auto editor = std::make_unique<DexedAudioProcessorEditor>(&processor);
         const auto started = juce::Time::getMillisecondCounterHiRes();
@@ -899,4 +903,94 @@ int AVRunCompareImages(const juce::File& before, const juce::File& after) {
     }
     std::cout << changed << " images differ\n";
     return 0;
+}
+
+/** The one-time conversion of a library (a copy of one), checked: every bank
+    voice plays bit for bit as the sound file it became, every favourite bank
+    voice finds its sound, the first window lists it quickly, and undoing it
+    leaves every file as it was. */
+int AVRunMigrateCheck(const juce::File& library) {
+    if (! library.isDirectory()) return 2;
+    const auto oldApp = DexedAudioProcessor::dexedAppDir;
+    DexedAudioProcessor::dexedAppDir = library;
+    std::map<juce::String, juce::String> before;   // path → hash of the file
+    for (const auto& entry : juce::RangedDirectoryIterator(library, true, "*", juce::File::findFiles)) {
+        juce::MemoryBlock bytes;
+        entry.getFile().loadFileAsData(bytes);
+        before[entry.getFile().getRelativePathFrom(library)] = AVDexedLibrary::stableHash(bytes.getData(), bytes.getSize());
+    }
+    AVDexedConversion::Request request;
+    for (const auto& file : AVDexedLibrary::findSoundFiles(library))
+        if (file.hasFileExtension("syx")) request.sources.add(file);
+    request.root = library;
+    request.layout = AVDexedConversion::Layout::besideSources;
+    request.sourceBase = library;
+    request.backupLabel = "Biblioteca";
+    request.moveSources = true;
+    auto started = juce::Time::getMillisecondCounterHiRes();
+    const auto result = DexedAudioProcessor::convertAVBanks(request);
+    std::cout << "Converted " << result.banks << " banks into " << result.sounds << " sounds (" << result.repeated << " repeated, "
+              << result.empty << " empty) in " << juce::String((juce::Time::getMillisecondCounterHiRes() - started) / 1000.0, 1) << " s\n";
+    if (! result.ok) return 1;
+    int code = 0;
+    // Bit for bit, every voice of every original file against its sound file.
+    int checked = 0, different = 0, missing = 0;
+    for (const auto& original : request.sources) {
+        const auto backup = result.backup.getChildFile(original.getRelativePathFrom(library));
+        for (const auto& bank : AVDexedLibrary::readSourceBanks(backup)) {
+            if (bank.singleVoices) continue;
+            const auto fingerprint = AVDexedLibrary::bankFingerprint(bank.bank);
+            Cartridge plain;
+            const bool standard = AVDexedLibrary::readBank(backup, plain) && AVDexedLibrary::readSourceBanks(backup).size() == 1;
+            for (int slot = 0; slot < 32; ++slot) {
+                const auto sound = AVDexedConversion::convertedVoice(library, "bank:" + fingerprint + ":" + juce::String(slot).paddedLeft('0', 2));
+                if (sound == juce::File()) {
+                    // The Init voice is an empty slot: it has no sound.
+                    if (std::memcmp(Cartridge(bank.bank).unpackProgram(slot).getRawData(), Program::initialProgram().getRawData(), 145) != 0) ++missing;
+                    continue;
+                }
+                ++checked;
+                if (soundFilePrint(sound) != bankVoicePrint(bank.bank, standard ? backup : juce::File(), slot)) {
+                    if (++different <= 10) std::cerr << "  not the same: " << original.getFileName() << " #" << slot + 1 << '\n';
+                }
+            }
+        }
+    }
+    std::cout << checked << " voices checked bit for bit, " << different << " different, " << missing << " without a sound\n";
+    if (different > 0 || missing > 0) code = 1;
+    // The favourites of the copy's preferences.
+    juce::PropertiesFile preferences(library.getChildFile(DexedAudioProcessor::preferencesFileName), AVDexedLibrary::preferencesOptions());
+    int favorites = 0, found = 0;
+    for (const auto& key : juce::StringArray::fromLines(preferences.getValue("favoritePresetIds")))
+        if (key.startsWith("bank:")) {
+            ++favorites;
+            found += AVDexedConversion::convertedVoice(library, key).existsAsFile() ? 1 : 0;
+        }
+    std::cout << found << " of " << favorites << " favourite bank voices find their sound file\n";
+    juce::int64 bytes = 0;
+    for (const auto& file : result.files) bytes += file.getSize();
+    std::cout << juce::String(double(bytes) / (1024.0 * 1024.0), 1) << " MB of sound files\n";
+    AVRunIndexBench(library, false);
+    started = juce::Time::getMillisecondCounterHiRes();
+    const auto undone = AVDexedConversion::undoConversion(library, result.backup);
+    std::cout << "Undone: " << undone.restored << " files back, " << undone.removed << " sounds removed, " << undone.kept << " kept, in "
+              << juce::String((juce::Time::getMillisecondCounterHiRes() - started) / 1000.0, 1) << " s\n";
+    int changed = 0;
+    for (const auto& entry : juce::RangedDirectoryIterator(library, true, "*", juce::File::findFiles)) {
+        const auto path = entry.getFile().getRelativePathFrom(library);
+        if (path.startsWith(".cache") || path.startsWith(AVDexedLibrary::syxBackupsFolderName)) continue;
+        juce::MemoryBlock fileBytes;
+        entry.getFile().loadFileAsData(fileBytes);
+        const auto was = before.find(path);
+        if (was == before.end() || was->second != AVDexedLibrary::stableHash(fileBytes.getData(), fileBytes.getSize())) {
+            if (++changed <= 10) std::cerr << "  changed or new: " << path << '\n';
+        }
+    }
+    int gone = 0;
+    for (const auto& [path, hash] : before)
+        if (! path.startsWith(".cache") && ! library.getChildFile(path).existsAsFile()) ++gone;
+    std::cout << "After undoing: " << changed << " files changed or new, " << gone << " gone\n";
+    if (! undone.ok || changed > 0 || gone > 0) code = 1;
+    DexedAudioProcessor::dexedAppDir = oldApp;
+    return code;
 }
