@@ -548,6 +548,9 @@ public :
 private:
     uint64_t getAVMusicalFingerprint(const juce::String* nativeName = nullptr) const noexcept;
     juce::ValueTree createAVNativePresetTree(const juce::String& name, const juce::String& id, bool withLayers);
+    /** The live values of every parameter of `state` (an APVTS tree about to
+        be installed) that is neither the voice's nor one of its sound settings. */
+    void keepAVInstrumentValues(juce::ValueTree& state) const;
     struct AVConversionThread;
     std::unique_ptr<AVConversionThread> avConversion;   // startAVConversion()
     bool avConverterInstance = false;                   // installAVConversionBank() was called: a converter

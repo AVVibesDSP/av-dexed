@@ -331,6 +331,13 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
     const auto restoredBankFile = session.isValid() ? avSessionBankFile(restoredSourcePath) : juce::File();
     const auto restoredSoundTable = readAVSoundTable(restoredBankFile);
 
+    // A sound file made from a bank voice or a performance carries what the
+    // bank did: the voice and its sound settings. The instrument keeps the
+    // rest as it is (pitch bend, mono, portamento, engine, wheels…), as when
+    // the bank voice itself is loaded.
+    if (avLoadingSoundFile && session.isValid() && session.hasProperty("avSoundKey"))
+        keepAVInstrumentValues(parameterState);
+
     // State restoration must not echo parameter changes to an attached DX7.
     const juce::ScopedLock avStateLock(getCallbackLock());
     juce::ScopedValueSetter<bool> disableSysexEcho(sendSysexChange, false);
@@ -549,6 +556,24 @@ AVDexedConversion::Result DexedAudioProcessor::convertAVBanks(const AVDexedConve
         installed = nullptr;   // the layers replace the voice played
         return converter.makeAVLayersFile(layers, name, sourceName, number, order);
     }, progress);
+}
+
+void DexedAudioProcessor::keepAVInstrumentValues(juce::ValueTree& state) const {
+    static const auto voiceIds = [] {
+        std::set<juce::String> ids;
+        for (const auto& meta : dxParameters) ids.insert(meta.name);
+        for (int op = 0; op < 6; ++op) ids.insert(IDs::on.op(op).name);
+        return ids;
+    }();
+    std::set<juce::String> soundIds;
+    for (const auto* parameter : avSoundParameters)
+        if (parameter != nullptr) soundIds.insert(parameter->paramID);
+    for (auto child : state) {
+        const auto id = child.getProperty("id").toString();
+        if (voiceIds.count(id) > 0 || soundIds.count(id) > 0) continue;
+        if (auto* parameter = parameters.getParameter(id))
+            child.setProperty("value", parameter->convertFrom0to1(parameter->getValue()), nullptr);
+    }
 }
 
 bool DexedAudioProcessor::adoptAVConvertedVoice() {

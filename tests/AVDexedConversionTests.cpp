@@ -456,6 +456,30 @@ bool testKeepsTheInstrument() {
                      "a converted sound loads");
     passed &= expect(processor->midiCCMapper->getMapping(IDs::cutoff.name) == -1 && processor->currentSCLData == scl && ! scl.empty(),
                      "and keeps the instrument's MIDI assignments and tuning, as a bank voice does");
+
+    // The instrument's own settings (pitch bend, mono, portamento, engine,
+    // wheel) stay as they are, exactly as when the bank voice is loaded.
+    const auto setUp = [](DexedAudioProcessor& player) {
+        for (const auto& [id, value] : std::vector<std::pair<juce::String, float>> {
+                 { IDs::pitchBendUp.name, 12.0f }, { IDs::monoMode.name, 1.0f }, { IDs::portamentoTm.name, 40.0f },
+                 { IDs::engineType.name, 2.0f }, { IDs::modWheelPitch.name, 1.0f }, { IDs::cutoff.name, 0.3f } })
+            if (auto* parameter = player.parameters.getParameter(id))
+                parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+    };
+    auto fromSound = freshProcessor(), fromBank = freshProcessor();
+    setUp(*fromSound);
+    setUp(*fromBank);
+    fromSound->loadAVNativePreset(data.getData(), int(data.getSize()));
+    fromBank->setActiveBank(bank, file);
+    fromBank->setCurrentProgram(0);   // result.files[0] is its slot 1
+    bool same = true;
+    for (auto* parameter : fromSound->getParameters())
+        if (auto* other = fromBank->getParameters()[parameter->getParameterIndex()])
+            same &= std::abs(parameter->getValue() - other->getValue()) < 1.0e-6f;
+    const auto* bend = fromSound->parameters.getParameter(IDs::pitchBendUp.name);
+    passed &= expect(same && bend != nullptr && std::abs(bend->convertFrom0to1(bend->getValue()) - 12.0f) < 0.01f,
+                     "a converted sound keeps the instrument's pitch bend, mono, portamento and engine, as its bank voice does");
+    passed &= expect(renderPrint(*fromSound) == renderPrint(*fromBank), "and plays bit for bit as the bank voice with them");
     return passed;
 }
 
