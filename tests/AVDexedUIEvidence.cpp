@@ -234,6 +234,28 @@ bool AVRenderUIEvidence(const juce::File& directory) {
                 passed &= output != nullptr && PNGImageFormat().writeImageToStream(img, *output);
             }
         }
+        // The progress dialog of an import that takes a while.
+        for (const auto* locale : { "es", "en" }) {
+            auto& language = AVDexedLanguageService::getInstance();
+            language.setLanguage(locale);
+            language.sendSynchronousChangeMessage();
+            AVDexedPromptOverlay::Options options;
+            options.title = language.text("importAction");
+            options.message = language.format("importConverting", {{"folder", "Mis Rhodes"}, {"percent", "45"}});
+            options.progress = [] { return 0.45f; };
+            options.confirmText = language.text("cancel");
+            options.returnConfirms = false;
+            if (auto* prompt = editor->showAVPrompt(std::move(options), {})) {
+                AVDexedComponentFade::cancel(*prompt);
+                prompt->setVisible(true);
+                prompt->setAlpha(1.0f);
+                auto output = directory.getChildFile(String("Import-progress-") + locale + ".png").createOutputStream();
+                const auto img = prompt->createComponentSnapshot(prompt->getLocalBounds());
+                if (output) { output->setPosition(0); output->truncate(); }
+                passed &= output != nullptr && PNGImageFormat().writeImageToStream(img, *output);
+                prompt->dismiss();
+            }
+        }
         // Search/filter changes select rows, never load a sound.
         editor->playView.searchField.setText("Dexed_01");
         passed &= editor->playView.visibleEntries.size() >= 32;

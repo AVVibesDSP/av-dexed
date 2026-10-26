@@ -135,7 +135,10 @@ void AVDexedPromptOverlay::present() {
     toFront(false);
     AVDexedComponentFade::fadeIn(*this, 83);
     enterModalState(true);
-    if (AVOptions.progress) startTimerHz(10);
+    if (AVOptions.progress) {
+        AVShownProgress = AVOptions.progress();   // drawn from the first frame
+        startTimerHz(10);
+    }
     Component::SafePointer<AVDexedPromptOverlay> safeThis(this);
     MessageManager::callAsync([safeThis] {
         if (safeThis == nullptr || safeThis->AVFinished) return;
