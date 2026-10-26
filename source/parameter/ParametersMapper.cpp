@@ -428,6 +428,11 @@ void DexedAudioProcessor::setCurrentProgram(int index) {
         applyAVSoundSettings(index);
     // The settings are part of the sound just loaded: it is not "Modified".
     captureAVPresetBaseline();
+    // A voice of a bank the library has converted is its sound file (a host
+    // re-selecting the program after a restore, the startup bank). Never on
+    // the audio thread (a MIDI program change): that reads the disk.
+    if (auto* messages = juce::MessageManager::getInstanceWithoutCreating(); messages != nullptr && messages->isThisTheMessageThread())
+        adoptAVConvertedVoice();
 }
 
 const String DexedAudioProcessor::getProgramName(int index) {

@@ -474,6 +474,10 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
     }
     else
         restoreAVLayersState(storage.getChildWithName("avLayers"));
+    // A session of a bank voice that the library has turned into a sound
+    // file since: that file is its sound now ("Guardar" writes there).
+    if (! avLoadingSoundFile && getAVPresetPath() == juce::File() && avSoundFromBankSlot.load(std::memory_order_relaxed))
+        adoptAVConvertedVoice();
     programChanged.set(true);
     return true;
 }
@@ -547,7 +551,24 @@ AVDexedConversion::Result DexedAudioProcessor::convertAVBanks(const AVDexedConve
     }, progress);
 }
 
+bool DexedAudioProcessor::adoptAVConvertedVoice() {
+    const auto root = AVDexedLibrary::rootFor(dexedAppDir);
+    if (avConverterInstance || ! currentCart.containsData() || ! root.isDirectory()) return false;
+    juce::String key;
+    const auto file = AVDexedConversion::convertedVoice(root,
+        "bank:" + AVDexedLibrary::bankFingerprint(currentCart) + ":" + juce::String(currentProgram).paddedLeft('0', 2), &key);
+    if (file == juce::File()) return false;
+    // The name counts in the sound's identity once it is a sound file: an
+    // unchanged sound stays unchanged.
+    const bool modified = isAVPresetModified();
+    setAVPresetContext(file.getFileNameWithoutExtension(), key.fromFirstOccurrenceOf("user:", false, false), file);
+    avSoundFromBankSlot.store(false, std::memory_order_relaxed);
+    if (! modified) captureAVPresetBaseline();
+    return true;
+}
+
 void DexedAudioProcessor::installAVConversionBank(const AVDexedLibrary::SourceBank& bank) {
+    avConverterInstance = true;   // its voices are being converted: none of them is a sound file yet
     installAVActiveBank(bank.bank, juce::File(), makeAVSoundTable(bank.settings));
 }
 

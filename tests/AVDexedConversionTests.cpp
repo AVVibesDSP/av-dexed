@@ -665,6 +665,60 @@ bool testLibraryConversion() {
     return passed;
 }
 
+/** A DAW session saved with a bank voice of the library reopens, once the
+    library is converted, on the sound file that voice became: the same sound,
+    unmodified, "Guardar" writing there. So does a host choosing the program
+    again, and the bank an instance starts with. */
+bool testSessionsFindTheirSound() {
+    bool passed = true;
+    Scratch scratch;
+    const auto oldApp = DexedAudioProcessor::dexedAppDir;
+    DexedAudioProcessor::dexedAppDir = scratch.root;
+    const auto bankFile = scratch.root.getChildFile("Pianos/P.syx");
+    bankFile.getParentDirectory().createDirectory();
+    const auto bank = makeBank([](int slot) { return "PNO " + juce::String(slot); }, 80);
+    bankFile.replaceWithData(bankBytes(bank).getData(), bankBytes(bank).getSize());
+    juce::MemoryBlock session;
+    {
+        auto player = freshProcessor();
+        Cartridge read;
+        AVDexedLibrary::readBank(bankFile, read);
+        player->setActiveBank(read, bankFile);
+        player->setCurrentProgram(3);
+        player->getStateInformation(session);
+    }
+    const auto reopen = [&session] {
+        auto player = freshProcessor();
+        player->setStateInformation(session.getData(), int(session.getSize()));
+        return player;
+    };
+    const auto expected = renderPrint(*reopen());
+
+    AVDexedConversion::Request request;
+    request.sources = { bankFile };
+    request.root = scratch.root;
+    request.layout = AVDexedConversion::Layout::besideSources;
+    request.sourceBase = scratch.root;
+    request.moveSources = true;
+    passed &= expect(DexedAudioProcessor::convertAVBanks(request).ok, "the library is converted");
+    const auto sound = scratch.root.getChildFile("Pianos/PNO 3.avdexpreset");
+    auto reopened = reopen();
+    passed &= expect(sound.existsAsFile() && reopened->getAVPresetPath() == sound && reopened->getAVPresetName() == "PNO 3"
+                         && ! reopened->isAVPresetModified() && reopened->hasAVKnownPresetOrigin(),
+                     "a session of a converted bank voice reopens on its sound file, unmodified");
+    passed &= expect(renderPrint(*reopened) == expected, "and plays bit for bit as before");
+    auto selectedAgain = reopen();
+    selectedAgain->setCurrentProgram(3);
+    passed &= expect(selectedAgain->getAVPresetPath() == sound, "a host choosing the program again keeps it");
+    auto starting = freshProcessor();
+    starting->setActiveBank(bank, juce::File());
+    starting->setCurrentProgram(0);
+    passed &= expect(starting->getAVPresetPath() == scratch.root.getChildFile("Pianos/PNO 0.avdexpreset"),
+                     "the bank an instance starts with plays its converted sound file");
+    DexedAudioProcessor::dexedAppDir = oldApp;
+    return passed;
+}
+
 bool runAVDexedConversionTests() {
     bool passed = testVoiceNames();
     passed &= testConvertFolder();
@@ -673,6 +727,7 @@ bool runAVDexedConversionTests() {
     passed &= testExtrasInLayers();
     passed &= testPerformances();
     passed &= testLibraryConversion();
+    passed &= testSessionsFindTheirSound();
     std::cout << (passed ? "Conversion checks passed.\n" : "Conversion checks FAILED.\n");
     return passed;
 }

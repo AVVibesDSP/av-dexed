@@ -327,6 +327,11 @@ public :
     /** The sound without its name (every parameter but the instrument's, the
         voice, the tuning): the same for two voices that differ only in name. */
     uint64_t getAVSoundKey() const noexcept;
+    /** The sound is a bank voice of the library that has become a sound file
+        (AVDexedConversion::convertedVoice): from now on it is that file (its
+        name; "Guardar" writes there; the browser shows it). False when the
+        voice was not converted. */
+    bool adoptAVConvertedVoice();
     bool loadAVStateInformation(const void* data, int sizeInBytes);
     /** Loads a .dexedpreset. Unlike a host session, a sound file never changes
         the instrument-wide settings: "Volumen general" and the local tempo keep
@@ -543,6 +548,7 @@ private:
     juce::ValueTree createAVNativePresetTree(const juce::String& name, const juce::String& id, bool withLayers);
     struct AVConversionThread;
     std::unique_ptr<AVConversionThread> avConversion;   // startAVConversion()
+    bool avConverterInstance = false;                   // installAVConversionBank() was called: a converter
     juce::String avPresetName;
     juce::String avPresetId;
     juce::File avPresetPath;

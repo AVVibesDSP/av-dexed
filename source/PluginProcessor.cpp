@@ -145,7 +145,7 @@ DexedAudioProcessor::DexedAudioProcessor(SetupMode setupMode)
 
     if (setupMode == SetupMode::userData) {
         setupStartupCart();
-        setCurrentProgram(0);
+        setCurrentProgram(0);   // the factory bank converted: its first sound file (adoptAVConvertedVoice)
     } else {
         currentProgram = 0;
         activeProgram = Program::initialProgram();
