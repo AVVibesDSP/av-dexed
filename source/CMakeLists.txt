@@ -168,6 +168,7 @@ target_sources(${BaseTargetName} PRIVATE
 	engine/AVDexedLayer.cpp
 	engine/AVDexedVoiceBlock.cpp
 	AVDexedLayers.cpp
+	AVDexedFolderSounds.cpp
 	core/AVDexedLibrary.cpp
 	core/AVDexedConversion.cpp
 	core/Program.cpp

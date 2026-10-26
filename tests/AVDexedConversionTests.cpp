@@ -743,6 +743,126 @@ bool testSessionsFindTheirSound() {
     return passed;
 }
 
+/** MIDI program changes walk the folder of the sound playing, in the
+    browser's order, at once and bit for bit as opening that sound; Bank
+    Select counts in blocks of 128; a learned arrow steps through it with the
+    window closed; a sound that is more than a voice is read whole; a bank
+    voice still walks its bank. */
+bool testProgramChanges() {
+    bool passed = true;
+    Scratch scratch;
+    const auto oldApp = DexedAudioProcessor::dexedAppDir;
+    DexedAudioProcessor::dexedAppDir = scratch.root;
+    AVDexedConversion::Request request;
+    for (int b = 0; b < 5; ++b) {
+        const auto file = scratch.outside.getChildFile("B" + juce::String(b) + ".syx");
+        const auto bank = makeBank([b](int slot) { return "PC" + juce::String(b) + " " + juce::String(slot); }, 90 + b);
+        file.replaceWithData(bankBytes(bank).getData(), bankBytes(bank).getSize());
+        request.sources.add(file);
+    }
+    const auto folder = scratch.root.getChildFile("Carpeta");
+    request.root = scratch.root;
+    request.destination = folder;
+    request.layout = AVDexedConversion::Layout::flat;
+    request.backup = false;
+    const auto result = DexedAudioProcessor::convertAVBanks(request);
+    {
+        // A sound of the user's own after the converted ones.
+        auto maker = freshProcessor();
+        Cartridge bank = makeBank([](int) { return juce::String("ZETA"); }, 99);
+        maker->setActiveBank(bank, juce::File());
+        maker->setCurrentProgram(9);
+        const auto own = maker->createAVNativePresetState("Zeta", "id-zeta");
+        folder.getChildFile("Zeta.avdexpreset").replaceWithData(own.getData(), own.getSize());
+    }
+    std::vector<juce::File> byOrder(size_t(result.sounds));
+    for (const auto& file : result.files)
+        if (const auto xml = readXml(file); session(xml) != nullptr)
+            byOrder[size_t(session(xml)->getIntAttribute("avLibraryOrder"))] = file;
+    passed &= expect(result.ok && result.sounds == 160, "160 sounds to walk");
+
+    const auto open = [](DexedAudioProcessor& player, const juce::File& file) {
+        juce::MemoryBlock data;
+        file.loadFileAsData(data);
+        player.loadAVNativePreset(data.getData(), int(data.getSize()));
+        player.setAVPresetContext(player.getAVPresetName(), session(readXml(file))->getStringAttribute("avPresetId"), file);
+        player.captureAVPresetBaseline();
+    };
+    const auto settle = [](DexedAudioProcessor& player) {
+        for (int i = 0; i < 1000 && ! player.isAVFolderReadForTesting(); ++i) {
+            player.runAVTimerTickForTesting();
+            juce::Thread::sleep(5);
+        }
+        return player.isAVFolderReadForTesting();
+    };
+    const auto send = [](DexedAudioProcessor& player, std::initializer_list<juce::MidiMessage> messages) {
+        juce::AudioBuffer<float> audio(2, 64);
+        audio.clear();
+        juce::MidiBuffer midi;
+        for (const auto& message : messages) midi.addEvent(message, 0);
+        player.processBlock(audio, midi);
+    };
+    const auto voiceOf = [](const juce::File& file) {
+        auto reference = freshProcessor();
+        juce::MemoryBlock data;
+        file.loadFileAsData(data);
+        reference->loadAVNativePreset(data.getData(), int(data.getSize()));
+        return reference->activeProgram;
+    };
+    auto player = freshProcessor();
+    open(*player, byOrder[0]);
+    passed &= expect(settle(*player), "the folder of the sound playing is read");
+    send(*player, { juce::MidiMessage::programChange(1, 5) });
+    passed &= expect(std::memcmp(player->activeProgram.getRawData(), voiceOf(byOrder[5]).getRawData(), Program::PROGRAM_SIZE + 1) == 0,
+                     "a program change plays sound 6 of the folder at once, in render");
+    player->runAVTimerTickForTesting();
+    passed &= expect(player->getAVPresetPath() == byOrder[5] && ! player->isAVPresetModified(),
+                     "and the sound playing is that sound file then");
+    send(*player, { juce::MidiMessage::controllerEvent(1, 0, 0), juce::MidiMessage::controllerEvent(1, 32, 1),
+                    juce::MidiMessage::programChange(1, 2) });
+    player->runAVTimerTickForTesting();
+    passed &= expect(player->getAVPresetPath() == byOrder[130], "Bank Select 1 and program 3: sound 131");
+    send(*player, { juce::MidiMessage::controllerEvent(1, 32, 0), juce::MidiMessage::programChange(1, 0) });
+    player->runAVTimerTickForTesting();
+    passed &= expect(player->getAVPresetPath() == byOrder[0], "Bank Select 0 and program 1: the first sound");
+
+    // Bit for bit: a program change in the block plays as opening the sound.
+    {
+        auto changed = freshProcessor(), opened = freshProcessor();
+        open(*changed, byOrder[0]);
+        settle(*changed);
+        send(*changed, { juce::MidiMessage::programChange(1, 77) });
+        open(*opened, byOrder[77]);
+        send(*opened, {});
+        passed &= expect(renderPrint(*changed) == renderPrint(*opened), "a program change plays bit for bit as opening that sound");
+    }
+
+    // A learned arrow with the window closed: the next sound of the folder.
+    player->startAVPresetStepLearn(DexedAudioProcessor::AVPresetStep::next);
+    player->midiCCMapper->processControlChange(20, 127);
+    player->midiCCMapper->commitAVPresetStepLearn();
+    player->consumeAVPresetStepLearned();
+    send(*player, { juce::MidiMessage::controllerEvent(1, 20, 0) });
+    send(*player, { juce::MidiMessage::controllerEvent(1, 20, 127) });
+    player->runAVTimerTickForTesting();
+    passed &= expect(player->getAVPresetPath() == byOrder[1], "a learned arrow steps to the next sound of the folder");
+
+    // A sound of the user's own (more than a voice): read whole, a moment later.
+    send(*player, { juce::MidiMessage::controllerEvent(1, 32, 1), juce::MidiMessage::programChange(1, 32) });
+    player->runAVTimerTickForTesting();
+    passed &= expect(player->getAVPresetPath() == folder.getChildFile("Zeta.avdexpreset"), "a sound of one's own is read whole");
+
+    // A bank voice walks its bank, as before.
+    auto bankPlayer = freshProcessor();
+    bankPlayer->setActiveBank(makeBank([](int slot) { return "BNK " + juce::String(slot); }, 98), juce::File());
+    bankPlayer->setCurrentProgram(0);
+    for (int i = 0; i < 5; ++i) bankPlayer->runAVTimerTickForTesting();
+    send(*bankPlayer, { juce::MidiMessage::programChange(1, 7) });
+    passed &= expect(bankPlayer->getCurrentProgram() == 7, "a bank voice's program change walks its bank");
+    DexedAudioProcessor::dexedAppDir = oldApp;
+    return passed;
+}
+
 bool runAVDexedConversionTests() {
     bool passed = testVoiceNames();
     passed &= testConvertFolder();
@@ -752,6 +872,7 @@ bool runAVDexedConversionTests() {
     passed &= testPerformances();
     passed &= testLibraryConversion();
     passed &= testSessionsFindTheirSound();
+    passed &= testProgramChanges();
     std::cout << (passed ? "Conversion checks passed.\n" : "Conversion checks FAILED.\n");
     return passed;
 }

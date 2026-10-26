@@ -86,7 +86,9 @@ void DexedAudioProcessor::processMidiMessage(const MidiMessage *msg) {
             // editor open, it walks the Play list on the message thread.
             if (! avEditorOpen.load(std::memory_order_acquire))
                 if (const int steps = consumeAVPresetSteps(); steps != 0) {
-                    setCurrentProgram(((currentProgram + steps) % 32 + 32) % 32);
+                    // Through the folder of the sound playing; through the bank for a bank voice.
+                    if (! stepAVFolderSound(steps))
+                        setCurrentProgram(((currentProgram + steps) % 32 + 32) % 32);
                     avHostProgramDirty.store(true, std::memory_order_release);
                 }
                 switch(ctrl) {
@@ -105,6 +107,12 @@ void DexedAudioProcessor::processMidiMessage(const MidiMessage *msg) {
                     break;
                 case 5:
                     controllers.portamento_cc = value;
+                    break;
+                case 0:      // Bank Select: a program change then counts in blocks of 128 sounds of the folder
+                    avBankSelectMsb = value;
+                    break;
+                case 32:
+                    avBankSelectLsb = value;
                     break;
                 case 64:
                     sustain = value > 63;
@@ -137,7 +145,10 @@ void DexedAudioProcessor::processMidiMessage(const MidiMessage *msg) {
             return;
 
         case 0xc0 :
-            setCurrentProgram(buf[1]);
+            // Sound N of the folder of the sound playing (with Bank Select,
+            // N + 128 per bank); for a bank voice, voice N of its bank.
+            if (! playAVFolderSound((avBankSelectMsb * 128 + avBankSelectLsb) * 128 + buf[1]))
+                setCurrentProgram(buf[1]);
             return;
 
         case 0xd0 :
@@ -192,6 +203,7 @@ bool DexedAudioProcessor::enqueueAVSysEx(const uint8_t* data, int size) noexcept
 
 void DexedAudioProcessor::timerCallback() {
     flushAVPendingSysEx();
+    syncAVFolderSounds();
     tickAVRestoreGuard();
     stepAVPresetsWithoutEditor();
     if (avHostProgramDirty.exchange(false, std::memory_order_acq_rel))
@@ -213,7 +225,8 @@ void DexedAudioProcessor::stepAVPresetsWithoutEditor() {
         // Like a bank received by SysEx, a program change on this thread holds
         // the audio lock: render reads the voice it replaces.
         const juce::ScopedLock avStepLock(getCallbackLock());
-        setCurrentProgram(((currentProgram + steps) % 32 + 32) % 32);
+        if (! stepAVFolderSound(steps))
+            setCurrentProgram(((currentProgram + steps) % 32 + 32) % 32);
     }
     updateHostDisplay(ChangeDetails().withProgramChanged(true));
 }

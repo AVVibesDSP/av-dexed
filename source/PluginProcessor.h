@@ -280,6 +280,8 @@ public :
     explicit DexedAudioProcessor(TestMode);
     void flushAVPendingSysExForTesting() { flushAVPendingSysEx(); }
     void runAVTimerTickForTesting() { timerCallback(); }
+    /** The folder of the sound playing has been read and the sound found in it. */
+    bool isAVFolderReadForTesting() const { return avFolderSounds != nullptr && avFolderPosition.load() >= 0; }
 #endif
     DexedApvts parameters;
     Program activeProgram;
@@ -584,6 +586,38 @@ private:
     };
     using AVSoundTable = std::array<AVSoundSlot, 32>;
     std::array<juce::RangedAudioParameter*, AVSoundParameterCount> avSoundParameters {};
+    /** A sound of the folder of the sound playing, as a program change plays it
+        (AVDexedFolderSounds.cpp). */
+    struct AVFolderSound {
+        juce::File file;
+        juce::String id, name;
+        bool direct = false;   // a converted bank voice: its voice and sound settings are all of it
+        Program voice;
+        std::array<float, AVSoundParameterCount> values {};   // normalised
+        bool hasAmem = false;
+        std::array<uint8_t, AVDexedSysex::amemVoiceBytes> amem {};
+    };
+    struct AVFolderSounds {
+        juce::File folder;
+        juce::int64 stamp = 0;   // the folder's time when read
+        std::vector<AVFolderSound> sounds;   // in the browser's order
+    };
+    std::shared_ptr<const AVFolderSounds> avFolderSounds;   // render reads it, swapped under the callback lock
+    juce::ThreadPool avFolderReader { 1 };
+    juce::String avFolderRequested;                         // message thread: the folder and time asked for
+    juce::File avFolderPlaying;                             // message thread: the file avFolderPosition is for
+    std::atomic<int> avFolderPosition { -1 };               // the sound playing's place in it (-1: not one of them)
+    std::atomic<int> avFolderPendingContext { -1 };         // render → message thread: the place render just played
+    std::atomic<int> avFolderPendingLoad { -1 };            // render → message thread: a place to read whole
+    int avBankSelectMsb = 0, avBankSelectLsb = 0;           // render: CC0 and CC32
+    std::shared_ptr<const AVFolderSounds> readAVFolderSounds(const juce::File& folder, juce::int64 stamp) const;
+    /** Message thread (the timer): what render played becomes the sound file
+        it is; the folder of the sound playing is read when it changes. */
+    void syncAVFolderSounds();
+    /** Render: plays sound `index` of the folder; false when the sound playing
+        is not one of a folder's (the bank's way then). */
+    bool playAVFolderSound(int index);
+    bool stepAVFolderSound(int steps);
     // Instrument-wide settings: never part of a sound, never "Modified".
     juce::RangedAudioParameter* avOutputParameter = nullptr;
     juce::RangedAudioParameter* avDelayTempoParameter = nullptr;
