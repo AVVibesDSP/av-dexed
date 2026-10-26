@@ -318,21 +318,40 @@ Result convert(const Request& request, const SoundMaker& make, const LayersMaker
         const bool below = request.sourceBase != File() && source.isAChildOf(request.sourceBase);
         return below ? source.getRelativePathFrom(request.sourceBase).replaceCharacter('\\', '/') : source.getFileName();
     };
+    // What this conversion copied into the backup. A failure removes only these,
+    // and the folder only once empty: it may hold an original that could not go
+    // back to its place.
+    std::vector<File> copied;
+    const auto dropBackup = [&]() {
+        for (const auto& file : copied) file.deleteFile();
+        if (result.backup != File() && result.backup.findChildFiles(File::findFiles, true).isEmpty())
+            result.backup.deleteRecursively();
+        result.backup = File();
+    };
     if (request.backup && ! sources.empty()) {
         const auto backups = request.root.getChildFile(AVDexedLibrary::syxBackupsFolderName);
         auto label = Time::getCurrentTime().formatted("%Y-%m-%d %H%M");
         if (const auto clean = AVDexedLibrary::sanitizeFolderName(request.backupLabel); clean.isNotEmpty())
             label << " " << clean;
-        result.backup = AVDexedLibrary::uniqueDestination(backups, label);
+        {
+            // Chosen and made under the library's lock: another AV Dexed
+            // converting in the same minute gets a folder of its own.
+            const AVDexedLibrary::LibraryScope lock(10000);
+            if (lock.held) {
+                result.backup = AVDexedLibrary::uniqueDestination(backups, label);
+                if (! result.backup.createDirectory()) result.backup = File();
+            }
+        }
+        if (result.backup == File()) return fail();
         if (! request.moveSources)
             for (const auto& source : sources) {
                 auto target = result.backup.getChildFile(backupPathOf(source.file));
                 target = AVDexedLibrary::uniqueDestination(target.getParentDirectory(), target.getFileName());
                 if (! target.getParentDirectory().createDirectory() || ! source.file.copyFileTo(target)) {
-                    result.backup.deleteRecursively();
-                    result.backup = File();
+                    dropBackup();
                     return fail();
                 }
+                copied.push_back(target);
             }
     }
 
@@ -349,8 +368,7 @@ Result convert(const Request& request, const SoundMaker& make, const LayersMaker
             });
             for (const auto& folder : created)
                 if (folder.isDirectory() && folder.getNumberOfChildFiles(File::findFilesAndDirectories) == 0) folder.deleteFile();
-            if (result.backup != File()) result.backup.deleteRecursively();
-            result.backup = File();
+            dropBackup();
             return fail();
         };
         const auto makeFolderFor = [&created](const File& file) {
