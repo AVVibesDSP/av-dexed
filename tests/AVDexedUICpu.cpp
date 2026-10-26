@@ -41,18 +41,47 @@
 #include <iostream>
 #include <map>
 #include <thread>
-#include <sys/resource.h>
+#if JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+ #endif
+ #define NOGDI // its Rectangle() would clash with juce::Rectangle
+ #include <windows.h>
+#else
+ #include <sys/resource.h>
+#endif
 
 namespace {
+#if JUCE_WINDOWS
+// A FILETIME span (100 ns units) in seconds.
+double fileTimeSeconds(const FILETIME& time) {
+    return double((juce::uint64(time.dwHighDateTime) << 32) | time.dwLowDateTime) * 1.0e-7;
+}
+#endif
 double processSeconds() {
+#if JUCE_WINDOWS
+    FILETIME created {}, exited {}, kernel {}, user {};
+    if (! GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return 0.0;
+    return fileTimeSeconds(kernel) + fileTimeSeconds(user);
+#else
     rusage usage {};
     getrusage(RUSAGE_SELF, &usage);
     return double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) * 1.0e-6;
+#endif
 }
 double threadSeconds() {
+#if JUCE_WINDOWS
+    FILETIME created {}, exited {}, kernel {}, user {};
+    if (! GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0.0;
+    return fileTimeSeconds(kernel) + fileTimeSeconds(user);
+#else
     timespec now {};
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
     return double(now.tv_sec) + double(now.tv_nsec) * 1.0e-9;
+#endif
 }
 // The calling thread's CPU in the kernel only (macOS), in seconds.
 double threadSystemSeconds() {
