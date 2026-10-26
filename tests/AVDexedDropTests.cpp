@@ -677,6 +677,75 @@ bool runAVDexedDropTests()
             const bool reread = std::any_of(listed.begin(), listed.end(), [&changed](const auto& entry) { return entry.file == changed && entry.name == "Cambiado"; });
             const int inFolder = int(std::count_if(listed.begin(), listed.end(), [](const auto& entry) { return entry.folder == "Al reves"; }));
             passed &= expect(reread && inFolder == 32, "it reads again the sound that changed, and lists the others from the index");
+
+            // The library's own banks become sounds where they are: asked,
+            // converted, the favourites and the sound playing following them;
+            // a bank copied in later converts by itself; all of it undone.
+            const auto factory = AVDexedLibrary::folderNamed(root, AVDexedLibrary::factoryFolderName);
+            const auto factoryFile = factory.getChildFile("Dexed_01.syx");
+            Cartridge factoryBank;
+            AVDexedLibrary::readBank(factoryFile, factoryBank);
+            const auto favoriteKey = "bank:" + AVDexedLibrary::bankFingerprint(factoryBank) + ":03";
+            editor->playView.updateFavorites(StringArray(favoriteKey), {});
+            processor.setActiveBank(factoryBank, factoryFile);
+            processor.setCurrentProgram(1);
+            editor->playView.refreshLabels();
+            const auto syxIn = [&root] {
+                int count = 0;
+                for (const auto& file : AVDexedLibrary::findSoundFiles(root)) count += file.hasFileExtension("syx") ? 1 : 0;
+                return count;
+            };
+            const int banksBefore = syxIn();
+            // These dialogs ignore Return (a choice made on purpose): their pill is clicked.
+            const auto click = [&](AVDexedPromptOverlay& dialog, const String& text) {
+                for (auto* child : dialog.getChildren())
+                    if (auto* pill = dynamic_cast<TextButton*>(child); pill != nullptr && pill->getButtonText() == text) {
+                        pill->triggerClick();
+                        break;
+                    }
+                pumpUntil([&editor] { return ! editor->AVInPromptResult; }, 5000);
+                pump(150);
+            };
+            auto& words = AVDexedLanguageService::getInstance();
+            editor->AVOfferLibraryConversion(banksBefore);
+            prompt = openPrompt();
+            passed &= expect(prompt != nullptr && banksBefore > 1, "the library's banks are offered for conversion");
+            if (prompt != nullptr) click(*prompt, words.text("libraryConvertAction"));
+            passed &= expect(pumpUntil([&] { return AVDexedLibrary::isLibraryConverted(root) && ! processor.isAVConverting(); }, 60000)
+                                 && syxIn() == 0 && presetsIn(factory) == 32,
+                             "converting the library leaves no bank in it, each bank's sounds in its folder");
+            pump(300);
+            const auto converted = AVDexedConversion::convertedVoice(root, favoriteKey);
+            passed &= expect(converted.existsAsFile() && converted.getParentDirectory() == factory,
+                             "the favourite bank voice became a sound file in its folder");
+            String convertedKey;
+            AVDexedConversion::convertedVoice(root, favoriteKey, &convertedKey);
+            passed &= expect(editor->playView.favoriteKeys.contains(convertedKey) && ! editor->playView.favoriteKeys.contains(favoriteKey),
+                             "a favourite bank voice is a favourite sound file now");
+            passed &= expect(processor.getAVPresetPath().getParentDirectory() == factory, "the sound playing is its sound file now");
+            {
+                PropertiesFile preferences(DexedAudioProcessor::getPreferencesFile(), AVDexedLibrary::preferencesOptions());
+                passed &= expect(preferences.getBoolValue("libraryConversionAsked", false), "the question is not asked by itself again");
+            }
+            const auto added = root.getChildFile("Agregado").getChildFile("Nuevo.syx");
+            added.getParentDirectory().createDirectory();
+            const auto addedBytes = makeBank(42);
+            added.replaceWithData(addedBytes.getData(), addedBytes.getSize());
+            editor->playView.refreshLibrary();
+            passed &= expect(pumpUntil([&] { return ! added.exists() && presetsIn(added.getParentDirectory()) == 32; }, 20000),
+                             "a bank copied into the converted library becomes sounds by itself");
+            pump(300);
+            editor->AVUndoLibraryConversion();
+            prompt = openPrompt();
+            passed &= expect(prompt != nullptr, "undoing the conversion is asked first");
+            if (prompt != nullptr) click(*prompt, words.text("libraryUndoAction"));
+            passed &= expect(pumpUntil([&] { return ! AVDexedLibrary::isLibraryConverted(root); }, 20000)
+                                 && factoryFile.existsAsFile() && added.existsAsFile() && syxIn() == banksBefore + 1
+                                 && presetsIn(factory) == 0 && presetsIn(added.getParentDirectory()) == 0,
+                             "undone: every bank back where it was, the sounds made gone");
+            passed &= expect(editor->playView.favoriteKeys.contains(favoriteKey) && ! editor->playView.favoriteKeys.contains(convertedKey),
+                             "and the favourite is the bank voice again");
+            pump(300);
         }
         editor.reset();
         pump(300);

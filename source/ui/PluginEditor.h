@@ -22,6 +22,7 @@
 
 #include "../JuceLibraryCode/JuceHeader.h"
 #include "PluginProcessor.h"
+#include <set>
 #include "OperatorEditor.h"
 #include "GlobalEditor.h"
 #include "component/DXComponents.h"
@@ -278,6 +279,27 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
                                  StringArray refused, StringArray failed, int copied);
     void AVFinishImportConversion(const AVDexedConversion::Result& result, const File& folder, Array<File> banks,
                                   Array<File> presets, StringArray refused, StringArray failed, int copied);
+    /** A conversion on the processor's thread: a dialog shows its progress
+        (`progressText` of the percent done) when it takes a while, and
+        cancels it; `finished` runs on the message thread. False when another
+        one is running (the user is told). */
+    bool AVRunConversion(const AVDexedConversion::Request& request, std::function<String(int)> progressText,
+                         std::function<void(const AVDexedConversion::Result&)> finished);
+    /** The library's own banks turned into sounds where they are, once: the
+        question (asked by itself the first time the library is listed, or
+        from "Organizar"), then the conversion, the favourites following
+        their sounds and the sound playing becoming its file. */
+    void AVOfferLibraryConversion(int banks);
+    void AVConvertLibrary();
+    /** "Organizar" › undo: every conversion of the library's own banks
+        undone, newest first; the favourites go back to the bank voices. */
+    void AVUndoLibraryConversion();
+    /** Once the library is sound files, .syx files that appear in it (copied
+        with Finder, the factory banks restored) become sounds too. */
+    void AVConvertBanksAdded(const Array<File>& banks);
+    /** After a conversion of the library's own banks: favourites, the sound playing, the browser. */
+    void AVAdoptConverted(const AVDexedConversion::Result& result);
+    std::set<String> AVBanksTried;   // AVConvertBanksAdded: files tried (path|time), never again
     Component::SafePointer<AVDexedPromptOverlay> AVConversionPrompt;
     void loadNativePreset(const File& file);
 public:

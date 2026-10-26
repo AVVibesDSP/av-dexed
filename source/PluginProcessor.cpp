@@ -83,6 +83,7 @@ DexedAudioProcessor::DexedAudioProcessor(SetupMode setupMode)
       parameters (*this, nullptr) {
 
     MemoryLogger::getInstance()->install();
+    avIsolated = setupMode == SetupMode::isolatedTest;
 
     DXLOG("     _                   _ ");
     DXLOG("  __| | _____  _____  __| |");

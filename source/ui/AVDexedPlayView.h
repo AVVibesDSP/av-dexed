@@ -221,6 +221,14 @@ public:
     /** "Aprender MIDI" on the previous (0) / next (1) arrow: the editor shows
         the waiting dialog and starts the processor's learn. */
     std::function<void(int step)> onPresetStepLearnRequested;
+    /** Each time the library has been read: its .syx banks (none once they
+        are all sound files). */
+    std::function<void(const juce::Array<juce::File>& banks)> onLibraryListed;
+    /** "Organizar" › convert the library's banks into sounds / undo that. */
+    std::function<void()> onConvertLibrary, onUndoLibraryConversion;
+    /** Favourites that follow their sounds to new keys (a bank voice that
+        became a sound file, and back): old key → new key. */
+    void replaceFavoriteKeys(const std::map<juce::String, juce::String>& oldToNew);
     /** How a bank or folder name reads beside its sounds and in the centre: an
         AV expansion ("AV_DEXED_EXPANSION_Pianos_01", any case) drops its first
         three '_' tokens ("Pianos_01"). Display only: search, files and the

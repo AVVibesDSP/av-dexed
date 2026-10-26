@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "AVDexedPlayView.h"
+#include "../core/AVDexedConversion.h"
 #include "AVDexedKnob.h"
 #include "AVDexedFade.h"
 #include "../parameter/Model.h"
@@ -1170,6 +1171,19 @@ void AVDexedPlayView::revealWhenIndexed(const File& file) {
     AVRevealFile = file;
 }
 
+void AVDexedPlayView::replaceFavoriteKeys(const std::map<String, String>& oldToNew) {
+    loadFavorites();
+    StringArray add, remove;
+    for (const auto& key : favoriteKeys)
+        if (const auto moved = oldToNew.find(key); moved != oldToNew.end() && moved->second.isNotEmpty()) {
+            add.addIfNotAlreadyThere(moved->second);
+            remove.addIfNotAlreadyThere(key);
+        }
+    if (! add.isEmpty() || ! remove.isEmpty()) updateFavorites(add, remove);
+    rebuildFilter();
+    refreshLabels();
+}
+
 void AVDexedPlayView::revealActivePreset() {
     searchField.clear();
     rebuildFilter();
@@ -2100,6 +2114,12 @@ void AVDexedPlayView::publishLibrary(std::vector<PresetEntry> entries, unsigned 
     }
     // The first index after the window opened brings the row that plays.
     followActiveRow();
+    if (onLibraryListed) {
+        Array<File> banks;
+        for (const auto& entry : libraryEntries)
+            if (entry.bank != nullptr && ! entry.transient) banks.addIfNotAlreadyThere(entry.bank->file);
+        onLibraryListed(banks);
+    }
 }
 
 void AVDexedPlayView::refreshLabels() {
@@ -2482,6 +2502,12 @@ void AVDexedPlayView::showFolderActions() {
     // The original .syx files of the imported banks, where nothing reads them as sounds.
     const auto backups = root.getChildFile(AVDexedLibrary::syxBackupsFolderName);
     if (backups.isDirectory()) menu.addItem(7, language.text("showSyxBackups"));
+    const bool hasBanks = std::any_of(libraryEntries.begin(), libraryEntries.end(),
+                                      [](const PresetEntry& entry) { return entry.bank != nullptr && ! entry.transient; });
+    if (onConvertLibrary && hasBanks && ! AVDexedLibrary::isLibraryConverted(root))
+        menu.addItem(8, avEllipsis(language.text("libraryConvertMenu")));
+    if (onUndoLibraryConversion && AVDexedConversion::lastUndoableConversion(root) != File())
+        menu.addItem(9, avEllipsis(language.text("libraryUndoMenu")));
     menu.addItem(5, language.text("reindexLibrary"));
     menu.addItem(6, language.text("restoreFactory"));
     Component::SafePointer<AVDexedPlayView> safeThis(this);
@@ -2497,6 +2523,8 @@ void AVDexedPlayView::showFolderActions() {
         else if (result == 5) safeThis->refreshLibrary();
         else if (result == 6) safeThis->restoreFactorySounds();
         else if (result == 7) backups.revealToUser();
+        else if (result == 8 && safeThis->onConvertLibrary) safeThis->onConvertLibrary();
+        else if (result == 9 && safeThis->onUndoLibraryConversion) safeThis->onUndoLibraryConversion();
     });
 }
 

@@ -307,6 +307,8 @@ public :
     bool startAVConversion(const AVDexedConversion::Request& request,
                            std::function<void(const AVDexedConversion::Result&)> done);
     bool isAVConverting() const noexcept;
+    /** An instance that reads and writes nothing of the user's (tests, converters). */
+    bool isAVIsolated() const noexcept { return avIsolated; }
     float getAVConversionProgress() const noexcept;
     void cancelAVConversion() noexcept;
     /** In a converter instance (SetupMode::isolatedTest): `bank` installed
@@ -549,6 +551,7 @@ private:
     struct AVConversionThread;
     std::unique_ptr<AVConversionThread> avConversion;   // startAVConversion()
     bool avConverterInstance = false;                   // installAVConversionBank() was called: a converter
+    bool avIsolated = false;                            // SetupMode::isolatedTest
     juce::String avPresetName;
     juce::String avPresetId;
     juce::File avPresetPath;

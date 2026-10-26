@@ -493,6 +493,25 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
         else AVSaveLayers(name);
     };
     layersView.onOpenSoundFile = [this](const File& file) { importBanks(Array<File> { file }); };
+    playView.onConvertLibrary = [this] {
+        int banks = 0;
+        for (const auto& file : AVDexedLibrary::findSoundFiles(AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir)))
+            banks += file.hasFileExtension("syx") ? 1 : 0;
+        AVOfferLibraryConversion(banks);
+    };
+    playView.onUndoLibraryConversion = [this] { AVUndoLibraryConversion(); };
+    playView.onLibraryListed = [this](const Array<File>& banks) {
+        const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+        if (AVDexedLibrary::isLibraryConverted(root)) {
+            AVConvertBanksAdded(banks);
+            return;
+        }
+        // Asked once, by itself, when nothing else is open (a test instance never asks).
+        if (banks.isEmpty() || processor->isAVIsolated() || hasAVPromptOpen() || processor->isAVConverting()) return;
+        PropertiesFile preferences(DexedAudioProcessor::getPreferencesFile(), AVDexedLibrary::preferencesOptions());
+        if (preferences.getBoolValue("libraryConversionAsked", false)) return;
+        AVOfferLibraryConversion(banks.size());
+    };
     frameComponent.addChildComponent(layersView);
     frameComponent.addChildComponent(AVPageFade);   // above the pages, under every overlay
 
@@ -1191,29 +1210,39 @@ void DexedAudioProcessorEditor::importBanks(const Array<File>& dropped) {
 void DexedAudioProcessorEditor::AVStartImportConversion(const AVDexedConversion::Request& request, Array<File> banks,
                                                         Array<File> presets, StringArray refused, StringArray failed,
                                                         int copied) {
-    auto& language = AVDexedLanguageService::getInstance();
     Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
     const auto folder = request.destination;
-    const bool started = processor->startAVConversion(request,
-        [safeThis, folder, banks, presets, refused, failed, copied](const AVDexedConversion::Result& result) {
-            if (safeThis != nullptr)
-                safeThis->AVFinishImportConversion(result, folder, banks, presets, refused, failed, copied);
-        });
+    AVRunConversion(request, [folderName = folder.getFileName()](int percent) {
+        return AVDexedLanguageService::getInstance().format("importConverting", {{"folder", folderName}, {"percent", String(percent)}});
+    }, [safeThis, folder, banks, presets, refused, failed, copied](const AVDexedConversion::Result& result) {
+        if (safeThis != nullptr)
+            safeThis->AVFinishImportConversion(result, folder, banks, presets, refused, failed, copied);
+    });
+}
+
+bool DexedAudioProcessorEditor::AVRunConversion(const AVDexedConversion::Request& request, std::function<String(int)> progressText,
+                                                std::function<void(const AVDexedConversion::Result&)> finished) {
+    auto& language = AVDexedLanguageService::getInstance();
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    const bool started = processor->startAVConversion(request, [safeThis, finished](const AVDexedConversion::Result& result) {
+        if (safeThis == nullptr) return;
+        if (safeThis->AVConversionPrompt != nullptr) safeThis->AVConversionPrompt->dismiss();
+        if (finished) finished(result);
+    });
     if (! started) {
         showAVNotice(language.text("importAction"), language.text("importBusy"));
-        return;
+        return false;
     }
     // A bank or two converts in a moment; a longer conversion shows its progress.
-    Timer::callAfterDelay(400, [safeThis, folderName = folder.getFileName()] {
+    Timer::callAfterDelay(400, [safeThis, progressText] {
         if (safeThis == nullptr || ! safeThis->processor->isAVConverting()) return;
         auto& lang = AVDexedLanguageService::getInstance();
         AVDexedPromptOverlay::Options options;
         options.title = lang.text("importAction");
         options.progress = [safeThis] { return safeThis != nullptr ? safeThis->processor->getAVConversionProgress() : 1.0f; };
-        options.progressMessage = [safeThis, folderName] {
+        options.progressMessage = [safeThis, progressText] {
             const float done = safeThis != nullptr ? safeThis->processor->getAVConversionProgress() : 1.0f;
-            return AVDexedLanguageService::getInstance().format("importConverting",
-                {{"folder", folderName}, {"percent", String(roundToInt(done * 100.0f))}});
+            return progressText(roundToInt(done * 100.0f));
         };
         options.message = options.progressMessage();
         options.confirmText = lang.text("cancel");
@@ -1223,13 +1252,142 @@ void DexedAudioProcessorEditor::AVStartImportConversion(const AVDexedConversion:
             if (safeThis != nullptr && safeThis->processor->isAVConverting()) safeThis->processor->cancelAVConversion();
         });
     });
+    return true;
+}
+
+void DexedAudioProcessorEditor::AVOfferLibraryConversion(int banks) {
+    auto& language = AVDexedLanguageService::getInstance();
+    AVDexedPromptOverlay::Options options;
+    options.title = language.text("libraryConvertTitle");
+    // About 12 KB on disk per sound (a block and a half of the file system).
+    options.message = language.format("libraryConvertQuestion",
+        {{"banks", String(banks)}, {"size", String(jmax(1, roundToInt(banks * 32 * 12.0 / 1024.0)))}});
+    options.confirmText = language.text("libraryConvertAction");
+    options.cancelText = language.text("libraryConvertLater");
+    options.returnConfirms = false;   // a choice made on purpose
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    showAVPrompt(std::move(options), [safeThis](bool confirmed, const String&) {
+        if (safeThis == nullptr) return;
+        {
+            // Answered either way: never asked by itself again ("Organizar" still offers it).
+            PropertiesFile preferences(DexedAudioProcessor::getPreferencesFile(), AVDexedLibrary::preferencesOptions());
+            preferences.setValue("libraryConversionAsked", true);
+            preferences.saveIfNeeded();
+        }
+        if (confirmed) safeThis->AVConvertLibrary();
+    });
+}
+
+void DexedAudioProcessorEditor::AVConvertLibrary() {
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+    AVDexedConversion::Request request;
+    for (const auto& file : AVDexedLibrary::findSoundFiles(root))
+        if (file.hasFileExtension("syx")) request.sources.add(file);
+    if (request.sources.isEmpty()) return;
+    request.root = root;
+    request.layout = AVDexedConversion::Layout::besideSources;
+    request.sourceBase = root;
+    request.backupLabel = language.text("libraryBackupLabel");
+    request.moveSources = true;
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    AVRunConversion(request, [](int percent) {
+        return AVDexedLanguageService::getInstance().format("libraryConverting", {{"percent", String(percent)}});
+    }, [safeThis, root](const AVDexedConversion::Result& result) {
+        if (safeThis == nullptr) return;
+        auto& lang = AVDexedLanguageService::getInstance();
+        if (! result.ok) {
+            safeThis->showAVNotice(lang.text("libraryConvertTitle"), lang.text(result.cancelled ? "importCancelled" : "importConvertFailed"));
+            return;
+        }
+        AVDexedLibrary::setLibraryConverted(root, true);
+        safeThis->AVAdoptConverted(result);
+        String notice = lang.format("libraryConverted", {{"count", String(result.sounds)}});
+        if (result.repeated > 0)
+            notice << String::fromUTF8(" · ") << lang.format(result.repeated == 1 ? "importRepeatedOne" : "importRepeated",
+                                                            {{"count", String(result.repeated)}});
+        notice << String::fromUTF8(" · ") << lang.text("importBackupPart");
+        safeThis->showAVFooterNotice(notice);
+    });
+}
+
+void DexedAudioProcessorEditor::AVAdoptConverted(const AVDexedConversion::Result& result) {
+    // The favourites of bank voices follow them to their sound files; the
+    // sound playing, a bank voice that was converted, is its file now.
+    std::map<String, String> favorites;
+    for (const auto& origin : result.origins) favorites[origin.bankKey] = origin.key;
+    playView.replaceFavoriteKeys(favorites);
+    processor->adoptAVConvertedVoice();
+    processor->updateHostDisplay();
+    playView.refreshLibrary();
+    updateUI();
+}
+
+void DexedAudioProcessorEditor::AVUndoLibraryConversion() {
+    auto& language = AVDexedLanguageService::getInstance();
+    AVDexedPromptOverlay::Options options;
+    options.title = language.text("libraryUndoTitle");
+    options.message = language.text("libraryUndoQuestion");
+    options.confirmText = language.text("libraryUndoAction");
+    options.cancelText = language.text("cancel");
+    options.returnConfirms = false;
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    showAVPrompt(std::move(options), [safeThis](bool confirmed, const String&) {
+        if (safeThis == nullptr || ! confirmed) return;
+        auto& lang = AVDexedLanguageService::getInstance();
+        const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+        int restored = 0, kept = 0;
+        std::map<String, String> favorites;
+        // Newest first: the banks added later with Finder, then the library itself.
+        for (auto backup = AVDexedConversion::lastUndoableConversion(root); backup != File();
+             backup = AVDexedConversion::lastUndoableConversion(root)) {
+            const auto undone = AVDexedConversion::undoConversion(root, backup);
+            if (! undone.ok) break;
+            restored += undone.restored;
+            kept += undone.kept;
+            for (const auto& origin : undone.origins) favorites[origin.key] = origin.bankKey;
+        }
+        AVDexedLibrary::setLibraryConverted(root, false);
+        safeThis->playView.replaceFavoriteKeys(favorites);
+        safeThis->playView.refreshLibrary();
+        safeThis->updateUI();
+        String notice = lang.format("libraryUndone", {{"count", String(restored)}});
+        if (kept > 0) notice << String::fromUTF8(" · ") << lang.format("libraryUndoKept", {{"count", String(kept)}});
+        safeThis->showAVFooterNotice(notice);
+    });
+}
+
+void DexedAudioProcessorEditor::AVConvertBanksAdded(const Array<File>& banks) {
+    if (processor->isAVConverting()) return;
+    // Each file once (an unreadable one would come back at every reading).
+    Array<File> fresh;
+    for (const auto& file : banks)
+        if (AVBanksTried.insert(file.getFullPathName() + "|" + String(file.getLastModificationTime().toMilliseconds())).second)
+            fresh.add(file);
+    if (fresh.isEmpty()) return;
+    auto& language = AVDexedLanguageService::getInstance();
+    const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
+    AVDexedConversion::Request request;
+    request.sources = fresh;
+    request.root = root;
+    request.layout = AVDexedConversion::Layout::besideSources;
+    request.sourceBase = root;
+    request.backupLabel = language.text("libraryAddedLabel");
+    request.moveSources = true;
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    AVRunConversion(request, [](int percent) {
+        return AVDexedLanguageService::getInstance().format("libraryConverting", {{"percent", String(percent)}});
+    }, [safeThis](const AVDexedConversion::Result& result) {
+        if (safeThis == nullptr || ! result.ok || result.banks == 0) return;
+        safeThis->AVAdoptConverted(result);
+        safeThis->showAVFooterNotice(AVDexedLanguageService::getInstance().format("libraryBanksAdded", {{"count", String(result.banks)}}));
+    });
 }
 
 void DexedAudioProcessorEditor::AVFinishImportConversion(const AVDexedConversion::Result& result, const File& folder,
                                                          Array<File> banks, Array<File> presets, StringArray refused,
                                                          StringArray failed, int copied) {
     auto& language = AVDexedLanguageService::getInstance();
-    if (AVConversionPrompt != nullptr) AVConversionPrompt->dismiss();
     if (! result.ok) {
         // The sounds copied before it stay; the library has nothing of the conversion.
         AVOpenImportedSounds(banks, presets, copied > 0 ? folder : File(), refused, failed);
