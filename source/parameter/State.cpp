@@ -556,7 +556,8 @@ AVDexedConversion::MadeSound DexedAudioProcessor::makeAVLayersFile(
     const juce::String& sourceName, int number, int order) {
     applyAVLayerSetup(layers);   // as the Capas page installs a performance
     AVDexedConversion::MadeSound made;
-    auto tree = createAVNativePresetTree(name, juce::Uuid().toString(), true);
+    made.id = juce::Uuid().toString();
+    auto tree = createAVNativePresetTree(name, made.id, true);
     setAVLayerMode(false);       // the next voice converts as one sound
     if (! tree.isValid()) return made;
     tree.removeChild(tree.getChildWithName(IDs::profile), nullptr);
@@ -582,7 +583,8 @@ AVDexedConversion::MadeSound DexedAudioProcessor::makeAVSoundFile(int slot, cons
     setCurrentProgram(slot);   // the voice with its settings, as the browser plays it
     AVDexedConversion::MadeSound made;
     made.key = getAVSoundKey();
-    auto tree = createAVNativePresetTree(name, juce::Uuid().toString(), false);
+    made.id = juce::Uuid().toString();
+    auto tree = createAVNativePresetTree(name, made.id, false);
     if (! tree.isValid()) return made;
     // The instrument's: a sound file without them leaves them as they are.
     tree.removeChild(tree.getChildWithName(IDs::profile), nullptr);

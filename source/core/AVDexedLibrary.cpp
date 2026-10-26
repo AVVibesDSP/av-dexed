@@ -1064,6 +1064,48 @@ Array<File> findSoundFiles(const File& root) {
     return files;
 }
 
+namespace {
+constexpr const char* soundIndexHeader = "AV Dexed library index 1";
+File soundIndexFile(const File& root) { return root.getChildFile(cacheFolderName).getChildFile("library-index"); }
+File convertedMarker(const File& root) { return root.getChildFile(".library-presets-v1"); }
+}
+
+std::map<String, IndexedSound> readSoundIndex(const File& root) {
+    std::map<String, IndexedSound> saved;
+    StringArray lines;
+    lines.addLines(soundIndexFile(root).loadFileAsString());
+    if (lines.isEmpty() || lines[0] != soundIndexHeader) return saved;   // another format: read everything again
+    // One line per file: path, size, time, order, key, name (tab separated).
+    for (int i = 1; i < lines.size(); ++i) {
+        const auto fields = StringArray::fromTokens(lines[i], "\t", {});
+        if (fields.size() != 6 || fields[0].isEmpty() || fields[4].isEmpty()) continue;
+        saved[fields[0]] = { fields[0], fields[1].getLargeIntValue(), fields[2].getLargeIntValue(), fields[3].getIntValue(),
+                             fields[4], fields[5] };
+    }
+    return saved;
+}
+
+bool writeSoundIndex(const File& root, const std::vector<IndexedSound>& sounds) {
+    // Streamed: tens of thousands of lines appended to one String copy it each time.
+    MemoryOutputStream text;
+    text << soundIndexHeader;
+    for (const auto& sound : sounds) {
+        if (sound.path.containsAnyOf("\t\r\n") || sound.name.containsAnyOf("\t\r\n")) continue;   // read again next time
+        text << "\n" << sound.path << "\t" << String(sound.size) << "\t" << String(sound.modified) << "\t"
+             << String(sound.order) << "\t" << sound.key << "\t" << sound.name;
+    }
+    text << "\n";
+    const auto index = soundIndexFile(root);
+    return index.getParentDirectory().createDirectory() && writeAtomically(index, text.getMemoryBlock());
+}
+
+bool isLibraryConverted(const File& root) { return convertedMarker(root).existsAsFile(); }
+
+void setLibraryConverted(const File& root, bool converted) {
+    if (converted) convertedMarker(root).replaceWithText("1\n");
+    else convertedMarker(root).deleteFile();
+}
+
 std::vector<SoundFileInfo> listSoundFiles(const File& root) {
     std::vector<SoundFileInfo> found;
     for (const auto& file : findSoundFiles(root)) {

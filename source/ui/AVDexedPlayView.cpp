@@ -59,35 +59,6 @@ String avStableStateHash(const void* data, size_t size) {
 
 String avProgramSuffix(int program) { return ":" + String(program).paddedLeft('0', 2); }
 
-/** The browser's index of the library's sound files, kept between windows and
-    sessions (`.cache/library-index` in the root, where nothing lists it): what
-    each file shows for its size and time, so a new window reads only the files
-    that changed. One line per file: path below the root, size, time, order in
-    its folder, identity, name, tab separated. */
-struct AVSavedPreset {
-    int64 size = 0, time = 0;
-    int order = -1;
-    String key, name;
-};
-constexpr const char* avPresetIndexHeader = "AV Dexed library index 1";
-
-File avPresetIndexFile(const File& root) {
-    return root.getChildFile(".cache").getChildFile("library-index");
-}
-
-std::map<String, AVSavedPreset> avReadPresetIndex(const File& root) {
-    std::map<String, AVSavedPreset> saved;
-    StringArray lines;
-    lines.addLines(avPresetIndexFile(root).loadFileAsString());
-    if (lines.isEmpty() || lines[0] != avPresetIndexHeader) return saved;   // another format: read everything again
-    for (int i = 1; i < lines.size(); ++i) {
-        const auto fields = StringArray::fromTokens(lines[i], "\t", {});
-        if (fields.size() != 6 || fields[0].isEmpty() || fields[4].isEmpty()) continue;
-        saved[fields[0]] = { fields[1].getLargeIntValue(), fields[2].getLargeIntValue(), fields[3].getIntValue(), fields[4], fields[5] };
-    }
-    return saved;
-}
-
 String avEllipsis(const String& text) { return text + String::fromUTF8("…"); }
 
 /** Cmd, Ctrl or Alt: an arrow with one of them belongs to the editor's shortcuts. */
@@ -1932,7 +1903,7 @@ void AVDexedPlayView::reindexLibrary() {
                              cachedBanks = std::move(cachedBanks), safeThis] {
         // Taken before the walk: anything that changes during it shows at the next poll.
         auto signature = AVDexedLibrary::librarySignature(root);
-        const auto savedIndex = avReadPresetIndex(root);
+        const auto savedIndex = AVDexedLibrary::readSoundIndex(root);
         int readFromDisk = 0, presets = 0;
         std::vector<PresetEntry> entries;
         StringPairArray carried;
@@ -2019,7 +1990,7 @@ void AVDexedPlayView::reindexLibrary() {
             entry.folder = folder;
             // The saved index knows this file as it is: not read again.
             const auto saved = savedIndex.find(file.getRelativePathFrom(root).replaceCharacter('\\', '/'));
-            if (saved != savedIndex.end() && saved->second.size == fileSize && saved->second.time == modified) {
+            if (saved != savedIndex.end() && saved->second.size == fileSize && saved->second.modified == modified) {
                 entry.name = saved->second.name;
                 entry.key = saved->second.key;
                 entry.order = saved->second.order;
@@ -2063,20 +2034,12 @@ void AVDexedPlayView::reindexLibrary() {
         }
         // The index for the next window, when this walk learned something new.
         if (readFromDisk > 0 || presets != int(savedIndex.size())) {
-            // Streamed: tens of thousands of lines appended to one String copy it each time.
-            MemoryOutputStream text;
-            text << avPresetIndexHeader;
-            for (const auto& entry : entries) {
-                if (! entry.isUser) continue;
-                const auto relative = entry.file.getRelativePathFrom(root).replaceCharacter('\\', '/');
-                if (relative.containsAnyOf("\t\r\n") || entry.name.containsAnyOf("\t\r\n")) continue;   // read again next time
-                text << "\n" << relative << "\t" << String(entry.indexedFileSize) << "\t" << String(entry.indexedModificationTime)
-                     << "\t" << String(entry.order) << "\t" << entry.key << "\t" << entry.name;
-            }
-            text << "\n";
-            const auto index = avPresetIndexFile(root);
-            if (index.getParentDirectory().createDirectory())
-                AVDexedLibrary::writeAtomically(index, text.getMemoryBlock());
+            std::vector<AVDexedLibrary::IndexedSound> index;
+            for (const auto& entry : entries)
+                if (entry.isUser)
+                    index.push_back({ entry.file.getRelativePathFrom(root).replaceCharacter('\\', '/'), entry.indexedFileSize,
+                                      entry.indexedModificationTime, entry.order, entry.key, entry.name });
+            AVDexedLibrary::writeSoundIndex(root, index);
         }
         if (cancelled->load()) return;
         MessageManager::callAsync([safeThis, generation, entries = std::move(entries), signature, carried]() mutable {

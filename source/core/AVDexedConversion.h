@@ -28,6 +28,7 @@ juce::StringArray voiceNames(const Cartridge& bank, int count, const juce::Strin
 struct MadeSound {
     juce::MemoryBlock state;
     juce::uint64 key = 0;
+    juce::String id;   // the sound file's libraryPresetId
 };
 /** Makes the sound file of `bank`'s voice `slot`, named `name`, at `order`
     in its folder. All the voices of one bank come in a row. */
@@ -45,7 +46,8 @@ using LayersMaker = std::function<MadeSound(const std::array<AVDexedPerformance:
 enum class Layout {
     folderPerBank,   // a folder per bank inside the destination ("Rhodes/…")
     flat,            // every voice directly in the destination
-    automatic        // flat for one bank in all, a folder per bank for more
+    automatic,       // flat for one bank in all, a folder per bank for more
+    besideSources    // each file's voices in the folder the file is in (the library's own banks; no destination)
 };
 // The performances of a file are a folder like a bank: "<file>", or
 // "<file> Performances" when the file holds banks too. Their voices come from
@@ -59,6 +61,20 @@ struct Request {
     juce::File sourceBase;             // a dropped folder: the backup keeps the paths below it
     juce::String backupLabel;          // names the backup folder ("2026-10-25 2134 <label>")
     bool backup = true;
+    /** The originals move into the backup instead of being copied there: the
+        library's own banks, which must not stay in it as banks. The backup
+        then keeps a record of the conversion (undoConversion), and the library
+        a record of where each bank voice went (convertedVoice). */
+    bool moveSources = false;
+};
+
+/** Where a bank voice went: its key in the browser ("bank:<fingerprint>:<slot>",
+    as its favourite) and the sound file that plays it now, with that file's
+    key ("user:<id>"). A repeated voice goes to the sound already there. */
+struct Origin {
+    juce::String bankKey;
+    juce::File file;
+    juce::String key;
 };
 
 struct Result {
@@ -73,6 +89,7 @@ struct Result {
     juce::Array<juce::File> folders;   // the folders that received sounds
     juce::Array<juce::File> files;     // the sound files written
     juce::File backup;                 // the backup folder, when one was made
+    std::vector<Origin> origins;       // every bank voice converted or repeated
 };
 
 /** Converts `request.sources`. Each sound file is written into a hidden
@@ -86,4 +103,23 @@ Result convert(const Request& request, const SoundMaker& make, const LayersMaker
 /** The key a converted sound file keeps (session "avSoundKey"); 0 for any
     other sound file. */
 juce::uint64 readSoundKey(const juce::File& soundFile);
+
+/** The sound file a bank voice of the library became ("bank:<fingerprint>:<slot>"),
+    while it is there; File() otherwise. `key`, when given, receives its key
+    ("user:<id>"). A DAW session that played the bank voice finds it this way. */
+juce::File convertedVoice(const juce::File& root, const juce::String& bankKey, juce::String* key = nullptr);
+
+/** A conversion with moveSources undone from its backup: the original files go
+    back where they were (when nothing else is there now), and the sound files
+    it made go, those that nobody changed since (a sound saved over is kept). */
+struct UndoResult {
+    bool ok = false;
+    int restored = 0, removed = 0, kept = 0;
+    std::vector<Origin> origins;       // the bank voices that are banks again
+};
+UndoResult undoConversion(const juce::File& root, const juce::File& backup);
+
+/** The newest backup of a conversion that can be undone (one made with
+    moveSources, its record still there); File() when there is none. */
+juce::File lastUndoableConversion(const juce::File& root);
 }

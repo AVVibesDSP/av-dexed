@@ -563,6 +563,108 @@ bool testPerformances() {
 }
 }
 
+/** Every file below `folder` with its bytes, by path below it (what "as it was" means). */
+std::map<juce::String, juce::MemoryBlock> snapshot(const juce::File& folder) {
+    std::map<juce::String, juce::MemoryBlock> files;
+    for (const auto& entry : juce::RangedDirectoryIterator(folder, true, "*", juce::File::findFiles)) {
+        const auto path = entry.getFile().getRelativePathFrom(folder);
+        if (path.startsWith(".cache") || path.startsWith(AVDexedLibrary::syxBackupsFolderName)) continue;
+        juce::MemoryBlock bytes;
+        entry.getFile().loadFileAsData(bytes);
+        files[path] = bytes;
+    }
+    return files;
+}
+
+/** The library's own banks turned into sounds where they are (the one-time
+    conversion of the library), their files moved into the backup, and all of
+    it undone again. */
+bool testLibraryConversion() {
+    bool passed = true;
+    Scratch scratch;
+    const auto& root = scratch.root;
+    const auto write = [](const juce::File& file, const juce::MemoryBlock& bytes) {
+        file.getParentDirectory().createDirectory();
+        return file.replaceWithData(bytes.getData(), bytes.getSize());
+    };
+    auto b1 = makeBank([](int slot) { return juce::String(slot) + " BAS " + juce::String(slot); }, 70);
+    auto b2 = makeBank([](int slot) { return juce::String(slot) + " BAS X" + juce::String(slot); }, 71);
+    b2.packProgram(b1.unpackProgram(5).getRawData(), 5, "5 BAS COPY");   // the same sound as B1's slot 6
+    write(root.getChildFile("Basses/B1.syx"), bankBytes(b1));
+    write(root.getChildFile("Basses/B2.syx"), bankBytes(b2));
+    write(root.getChildFile("Mis cosas/Rhodes/R.syx"), bankBytes(makeBank([](int slot) { return "RHO " + juce::String(slot); }, 72)));
+    write(root.getChildFile("Dexed Factory/Dexed_01.syx"), bankBytes(makeBank([](int slot) { return "FAC " + juce::String(slot); }, 73)));
+    AVDexedLibrary::writePackManifest(root.getChildFile("Dexed Factory"), "factory", "Dexed Factory");
+    write(root.getChildFile("Suelto.syx"), bankBytes(makeBank([](int slot) { return "LOOSE " + juce::String(slot); }, 74)));
+    {
+        DexedAudioProcessor player(DexedAudioProcessor::TestMode{});
+        write(root.getChildFile("User Presets/Piano.avdexpreset"), player.createAVNativePresetState("Piano", "id-piano"));
+    }
+    const auto before = snapshot(root);
+
+    AVDexedConversion::Request request;
+    for (const auto& file : AVDexedLibrary::findSoundFiles(root))
+        if (file.hasFileExtension("syx")) request.sources.add(file);
+    request.root = root;
+    request.layout = AVDexedConversion::Layout::besideSources;
+    request.sourceBase = root;
+    request.backupLabel = "Biblioteca";
+    request.moveSources = true;
+    const auto result = DexedAudioProcessor::convertAVBanks(request);
+    bool noBanks = true;
+    for (const auto& file : AVDexedLibrary::findSoundFiles(root)) noBanks &= ! file.hasFileExtension("syx");
+    passed &= expect(result.ok && result.banks == 5 && result.repeated == 1 && result.sounds == 5 * 32 - 1 && noBanks,
+                     "the library's banks become sounds and no bank is left in it");
+    passed &= expect(presetsIn(root.getChildFile("Basses")).size() == 63 && presetsIn(root.getChildFile("Mis cosas/Rhodes")).size() == 32
+                         && presetsIn(root.getChildFile("Dexed Factory")).size() == 32 && presetsIn(root).size() == 32
+                         && root.getChildFile("Dexed Factory").getChildFile(AVDexedLibrary::packManifestName).existsAsFile(),
+                     "each bank's sounds stay in its folder, at any depth, a pack still a pack");
+    passed &= expect(root.getChildFile("User Presets/Piano.avdexpreset").hasIdenticalContentTo(root.getChildFile("User Presets/Piano.avdexpreset"))
+                         && snapshot(root)["User Presets/Piano.avdexpreset"] == before.at("User Presets/Piano.avdexpreset"),
+                     "a sound file of the library is left as it is");
+    bool backedUp = result.backup.getChildFile(".conversion").existsAsFile();
+    for (const auto* path : { "Basses/B1.syx", "Basses/B2.syx", "Mis cosas/Rhodes/R.syx", "Dexed Factory/Dexed_01.syx", "Suelto.syx" }) {
+        juce::MemoryBlock bytes;
+        backedUp &= result.backup.getChildFile(path).loadFileAsData(bytes) && bytes == before.at(juce::String(path).replaceCharacter('/', juce::File::getSeparatorChar()));
+    }
+    passed &= expect(backedUp, "the original files are in the backup as they were, with their folders and a record");
+
+    // Where each bank voice went: sessions and favourites follow it.
+    juce::String key;
+    const auto voice = AVDexedConversion::convertedVoice(root, "bank:" + AVDexedLibrary::bankFingerprint(b1) + ":05", &key);
+    juce::String repeatedKey;
+    const auto repeated = AVDexedConversion::convertedVoice(root, "bank:" + AVDexedLibrary::bankFingerprint(b2) + ":05", &repeatedKey);
+    passed &= expect(voice.existsAsFile() && voice.getParentDirectory() == root.getChildFile("Basses") && key.startsWith("user:")
+                         && repeated == voice && repeatedKey == key,
+                     "a bank voice finds the sound it became, a repeated one the sound kept");
+    passed &= expect(AVDexedLibrary::readSoundIndex(root).count("Basses/" + voice.getFileName()) == 1,
+                     "the browser's index already knows the new sounds");
+    passed &= expect(AVDexedConversion::lastUndoableConversion(root) == result.backup, "the conversion can be undone");
+
+    // Undone: the library is as it was.
+    const auto undone = AVDexedConversion::undoConversion(root, result.backup);
+    passed &= expect(undone.ok && undone.restored == 5 && undone.removed == result.sounds && undone.kept == 0
+                         && int(undone.origins.size()) == 5 * 32,
+                     "undoing it puts the five files back and removes every sound it made");
+    passed &= expect(snapshot(root) == before, "and the library is exactly as it was");
+    passed &= expect(! result.backup.exists() && ! AVDexedConversion::convertedVoice(root, "bank:" + AVDexedLibrary::bankFingerprint(b1) + ":05").exists()
+                         && AVDexedConversion::lastUndoableConversion(root) == juce::File(),
+                     "its backup goes, and the bank voices are banks again");
+
+    // A sound saved over since the conversion stays when it is undone.
+    const auto again = DexedAudioProcessor::convertAVBanks(request);
+    const auto edited = presetsIn(root.getChildFile("Basses")).getFirst();
+    {
+        DexedAudioProcessor player(DexedAudioProcessor::TestMode{});
+        write(edited, player.createAVNativePresetState("Editado", "id-editado"));
+    }
+    const auto undoneAgain = AVDexedConversion::undoConversion(root, again.backup);
+    passed &= expect(again.ok && undoneAgain.ok && undoneAgain.kept == 1 && edited.existsAsFile()
+                         && root.getChildFile("Basses/B1.syx").existsAsFile(),
+                     "a sound saved over since stays when the conversion is undone");
+    return passed;
+}
+
 bool runAVDexedConversionTests() {
     bool passed = testVoiceNames();
     passed &= testConvertFolder();
@@ -570,6 +672,7 @@ bool runAVDexedConversionTests() {
     passed &= testKeepsTheInstrument();
     passed &= testExtrasInLayers();
     passed &= testPerformances();
+    passed &= testLibraryConversion();
     std::cout << (passed ? "Conversion checks passed.\n" : "Conversion checks FAILED.\n");
     return passed;
 }

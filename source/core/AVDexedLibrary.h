@@ -266,6 +266,24 @@ struct SoundFileInfo {
     file: the browser's walk of a library of tens of thousands of sounds. */
 std::vector<SoundFileInfo> listSoundFiles(const juce::File& root);
 
+/** Hidden folder of the root for what AV Dexed keeps about the library (the
+    browser's index, where converted bank voices went). Never listed. */
+inline constexpr const char* cacheFolderName = ".cache";
+/** The browser's index of the library's sound files, kept between windows
+    and sessions: what each file shows for its size and time, so a new window
+    reads only the files that changed. */
+struct IndexedSound {
+    juce::String path;                     // below the root, with '/'
+    juce::int64 size = 0, modified = 0;    // as SoundFileInfo
+    int order = -1;                        // a converted bank voice's place in its folder
+    juce::String key, name;                // the browser's identity ("user:<id>") and the name shown
+};
+std::map<juce::String, IndexedSound> readSoundIndex(const juce::File& root);   // by path
+bool writeSoundIndex(const juce::File& root, const std::vector<IndexedSound>& sounds);
+/** Whether the library's own banks have been turned into sound files. */
+bool isLibraryConverted(const juce::File& root);
+void setLibraryConverted(const juce::File& root, bool converted);
+
 /** A cheap fingerprint of the library's shape for polling: relative path and
     modification time of every folder at any depth, plus name, size and time of
     the sound files loose in the root. No file is opened. The root's own time is
