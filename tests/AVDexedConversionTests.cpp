@@ -396,13 +396,12 @@ bool testConvertFolder() {
     passed &= expect(! cancel.ok && ! root.getChildFile("Cancelado").exists()
                          && backups.getNumberOfChildFiles(juce::File::findDirectories) == backupsBefore,
                      "a cancelled conversion changes nothing and leaves no backup");
+    // A file where a folder would go: a read-only folder still takes new files on Windows.
     const auto locked = root.getChildFile("Bloqueado");
-    locked.createDirectory();
-    locked.setReadOnly(true, false);
+    locked.replaceWithText("not a folder");
     AVDexedConversion::Request refused = request;
     refused.destination = locked.getChildFile("Dentro");
     const auto failed = DexedAudioProcessor::convertAVBanks(refused);
-    locked.setReadOnly(false, false);
     passed &= expect(! failed.ok && ! locked.getChildFile("Dentro").exists()
                          && backups.getNumberOfChildFiles(juce::File::findDirectories) == backupsBefore,
                      "a destination that cannot be written changes nothing and leaves no backup");
