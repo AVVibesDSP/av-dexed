@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.22)
 if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
 endif()
-project(AVDexed VERSION 0.3.4)
+project(AVDexed VERSION 0.3.5)
 
 option(DEXED_BUILD_TESTS "Build AV Dexed regression tests" OFF)
 if(DEXED_BUILD_TESTS)
