@@ -3,6 +3,7 @@
 #include "StateLegacy.h"
 #include "midi/MidiCCHandler.h"
 #include "core/AVDexedSysex.h"
+#include "ui/AVDexedLanguage.h"
 #include <cstdlib>
 #include <set>
 
@@ -574,6 +575,118 @@ void DexedAudioProcessor::keepAVInstrumentValues(juce::ValueTree& state) const {
         if (auto* parameter = parameters.getParameter(id))
             child.setProperty("value", parameter->convertFrom0to1(parameter->getValue()), nullptr);
     }
+}
+
+DexedAudioProcessor::AVExportResult DexedAudioProcessor::exportAVSoundsToBanks(const juce::Array<juce::File>& sounds,
+                                                                              const juce::File& folder, const juce::String& stem) {
+    AVExportResult result;
+    struct Voice {
+        Program voice;
+        juce::String name;
+        std::map<juce::String, float> values;
+        bool hasAmem = false;
+        std::array<uint8_t, AVDexedSysex::amemVoiceBytes> amem {};
+    };
+    std::vector<Voice> voices;
+    DexedAudioProcessor converter(SetupMode::isolatedTest);
+    converter.avConverterInstance = true;
+    for (const auto& file : sounds) {
+        juce::MemoryBlock data;
+        const auto xml = file.getSize() <= 32 * 1024 * 1024 && file.loadFileAsData(data)
+            ? getXmlFromBinary(data.getData(), int(data.getSize())) : nullptr;
+        const auto* session = xml != nullptr ? xml->getChildByName("session") : nullptr;
+        if (session == nullptr || xml->getChildByName("avLayers") != nullptr
+            || ! converter.loadAVNativePreset(data.getData(), int(data.getSize()))) {
+            ++result.skipped;
+            continue;
+        }
+        Voice voice;
+        voice.voice = converter.activeProgram;
+        // The DX7 shows ten ASCII characters.
+        auto name = session->getStringAttribute("avPresetName").trim();
+        if (name.isEmpty()) name = file.getFileNameWithoutExtension();
+        juce::String ascii;
+        for (const auto c : name)
+            if (c >= 32 && c < 127 && ascii.length() < 10) ascii << juce::String::charToString(c);
+        voice.name = ascii;
+        for (const auto* parameter : converter.avSoundParameters)
+            if (parameter != nullptr && std::abs(parameter->getValue() - parameter->getDefaultValue()) > 1.0e-4f)
+                voice.values[parameter->paramID] = parameter->convertFrom0to1(parameter->getValue());
+        juce::MemoryBlock amem;
+        voice.hasAmem = amem.fromBase64Encoding(session->getStringAttribute("voiceAmem")) && amem.getSize() == voice.amem.size();
+        if (voice.hasAmem) std::memcpy(voice.amem.data(), amem.getData(), voice.amem.size());
+        voices.push_back(std::move(voice));
+    }
+    result.voices = int(voices.size());
+    const int banks = (int(voices.size()) + 31) / 32;
+    if (banks == 0 || ! folder.createDirectory()) return result;
+    for (int b = 0; b < banks; ++b) {
+        Cartridge bank;
+        AVDexedLibrary::BankSettings settings;
+        std::array<uint8_t, AVDexedSysex::amemBytes> amem {};
+        bool anyAmem = false;
+        for (int slot = 0; slot < 32; ++slot) {
+            const auto index = size_t(b * 32 + slot);
+            if (index >= voices.size()) {
+                bank.packProgram(Program::initialProgram().getRawData(), slot, "INIT VOICE");
+                continue;
+            }
+            const auto& voice = voices[index];
+            bank.packProgram(voice.voice.getRawData(), slot, voice.name);
+            if (! voice.values.empty()) settings[slot] = { AVDexedLibrary::voiceHash(bank, slot), voice.values };
+            if (voice.hasAmem) {
+                std::memcpy(amem.data() + slot * AVDexedSysex::amemVoiceBytes, voice.amem.data(), voice.amem.size());
+                anyAmem = true;
+            }
+        }
+        // The AMEM goes before the voices, as a DX7II sends a bank.
+        juce::MemoryBlock original;
+        if (anyAmem) {
+            bank.setAmem(amem.data());
+            const auto message = AVDexedSysex::amemMessage(amem.data());
+            original.append(message.data(), message.size());
+        }
+        const auto bytes = AVDexedLibrary::composeBankFile(original, bank, settings);
+        const auto target = AVDexedLibrary::uniqueDestination(folder, (banks == 1 ? stem : stem + " " + juce::String(b + 1)) + ".syx");
+        if (! AVDexedLibrary::writeAtomically(target, bytes)) return result;
+        result.files.add(target);
+    }
+    result.ok = true;
+    return result;
+}
+
+void DexedAudioProcessor::keepAVReceivedBank(const uint8_t* bytes, int size) {
+    const auto root = AVDexedLibrary::rootFor(dexedAppDir);
+    if ((avIsolated && ! avKeepsReceivedBanks) || bytes == nullptr || size <= 0 || ! root.isDirectory() || isAVConverting()) return;
+    // The dump as a file to convert (removed once converted; the backup keeps a copy).
+    const auto dump = root.getChildFile(AVDexedLibrary::cacheFolderName)
+                          .getChildFile("received " + juce::Time::getCurrentTime().formatted("%Y-%m-%d %H%M%S") + ".syx");
+    if (! dump.getParentDirectory().createDirectory() || ! dump.replaceWithData(bytes, size_t(size))) return;
+    AVDexedConversion::Request request;
+    request.sources = { dump };
+    request.root = root;
+    request.destination = AVDexedLibrary::writableFolderFor(root, AVDexedLanguageService::getInstance().text("receivedFolderName"));
+    request.layout = AVDexedConversion::Layout::flat;
+    request.backupLabel = "SysEx";
+    const auto bankKey = "bank:" + AVDexedLibrary::bankFingerprint(currentCart) + ":" + juce::String(currentProgram).paddedLeft('0', 2);
+    std::weak_ptr<std::atomic<bool>> alive = avAlive;
+    if (! startAVConversion(request, [this, alive, dump, bankKey](const AVDexedConversion::Result& result) {
+            dump.deleteFile();
+            const auto living = alive.lock();
+            if (living == nullptr || ! living->load() || ! result.ok) return;
+            // The voice playing, still the received one: its sound file now.
+            const auto playing = "bank:" + AVDexedLibrary::bankFingerprint(currentCart) + ":" + juce::String(currentProgram).paddedLeft('0', 2);
+            if (playing != bankKey || getAVPresetPath() != juce::File()) return;
+            for (const auto& origin : result.origins)
+                if (origin.bankKey == bankKey && origin.file.existsAsFile()) {
+                    setAVPresetContext(origin.file.getFileNameWithoutExtension(), origin.key.fromFirstOccurrenceOf("user:", false, false), origin.file);
+                    avSoundFromBankSlot.store(false, std::memory_order_relaxed);
+                    captureAVPresetBaseline();
+                    updateHostDisplay(ChangeDetails().withProgramChanged(true));
+                    break;
+                }
+        }))
+        dump.deleteFile();
 }
 
 bool DexedAudioProcessor::adoptAVConvertedVoice() {

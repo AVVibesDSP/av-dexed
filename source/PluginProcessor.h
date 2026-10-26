@@ -280,6 +280,8 @@ public :
     explicit DexedAudioProcessor(TestMode);
     void flushAVPendingSysExForTesting() { flushAVPendingSysEx(); }
     void runAVTimerTickForTesting() { timerCallback(); }
+    /** A test instance keeps the banks it receives, in the test's library. */
+    void keepAVReceivedBanksForTesting() { avKeepsReceivedBanks = true; }
     /** The folder of the sound playing has been read and the sound found in it. */
     bool isAVFolderReadForTesting() const { return avFolderSounds != nullptr && avFolderPosition.load() >= 0; }
 #endif
@@ -309,6 +311,20 @@ public :
     bool startAVConversion(const AVDexedConversion::Request& request,
                            std::function<void(const AVDexedConversion::Result&)> done);
     bool isAVConverting() const noexcept;
+    /** The voices of `sounds` (sound files, in the order given) as DX7 banks of
+        32 for a hardware DX7 or another synth: `stem.syx`, or `stem 1.syx`,
+        `stem 2.syx`… for more than 32, in `folder` (never over a file). Each
+        voice keeps its sound settings (embedded as AV Dexed embeds them) and its
+        DX7II additional data, so importing them again gives the same sounds;
+        its name is the sound's, cut to the DX7's 10 characters. Layers presets
+        are left out. Message thread. */
+    struct AVExportResult {
+        bool ok = false;
+        juce::Array<juce::File> files;
+        int voices = 0, skipped = 0;
+    };
+    static AVExportResult exportAVSoundsToBanks(const juce::Array<juce::File>& sounds, const juce::File& folder,
+                                                const juce::String& stem);
     /** An instance that reads and writes nothing of the user's (tests, converters). */
     bool isAVIsolated() const noexcept { return avIsolated; }
     float getAVConversionProgress() const noexcept;
@@ -557,6 +573,13 @@ private:
     std::unique_ptr<AVConversionThread> avConversion;   // startAVConversion()
     bool avConverterInstance = false;                   // installAVConversionBank() was called: a converter
     bool avIsolated = false;                            // SetupMode::isolatedTest
+    std::shared_ptr<std::atomic<bool>> avAlive = std::make_shared<std::atomic<bool>>(true);   // false once destroyed
+    bool avKeepsReceivedBanks = false;                  // keepAVReceivedBank() in an isolated instance (tests)
+    /** Message thread: a 32-voice bank received by SysEx (a DX7's dump, a
+        librarian) becomes sounds of the library too, in "Recibido de DX7"
+        (a sound already there is not added again); it plays meanwhile, and
+        the voice playing becomes its sound file once converted. */
+    void keepAVReceivedBank(const uint8_t* bytes, int size);
     juce::String avPresetName;
     juce::String avPresetId;
     juce::File avPresetPath;

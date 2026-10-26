@@ -500,6 +500,7 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
         AVOfferLibraryConversion(banks);
     };
     playView.onUndoLibraryConversion = [this] { AVUndoLibraryConversion(); };
+    playView.onExportSounds = [this](const Array<File>& sounds, const String& name) { AVExportSounds(sounds, name); };
     playView.onLibraryListed = [this](const Array<File>& banks) {
         const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
         if (AVDexedLibrary::isLibraryConverted(root)) {
@@ -1353,6 +1354,33 @@ void DexedAudioProcessorEditor::AVUndoLibraryConversion() {
         safeThis->updateUI();
         String notice = lang.format("libraryUndone", {{"count", String(restored)}});
         if (kept > 0) notice << String::fromUTF8(" · ") << lang.format("libraryUndoKept", {{"count", String(kept)}});
+        safeThis->showAVFooterNotice(notice);
+    });
+}
+
+void DexedAudioProcessorEditor::AVExportSounds(const Array<File>& sounds, const String& name) {
+    auto& language = AVDexedLanguageService::getInstance();
+    auto start = File::getSpecialLocation(File::userDesktopDirectory);
+    if (! start.isDirectory()) start = File::getSpecialLocation(File::userDocumentsDirectory);
+    fileChooser = std::make_unique<FileChooser>(language.text("exportFolderTitle"), start.getChildFile(name + ".syx"), avBankSaveFilter, true);
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    fileChooser->launchAsync(FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles,
+                             [safeThis, sounds](const FileChooser& chooser) {
+        const auto chosen = chooser.getResult();
+        if (safeThis == nullptr || chosen == File()) return;
+        auto& lang = AVDexedLanguageService::getInstance();
+        // Never over a file: "name 2.syx" when the name is taken (the chooser may have asked already).
+        const auto exported = DexedAudioProcessor::exportAVSoundsToBanks(sounds, chosen.getParentDirectory(),
+                                                                         chosen.getFileNameWithoutExtension());
+        if (! exported.ok) {
+            safeThis->showAVNotice(lang.text("exportFolderTitle"), lang.format("exportFailed", {{"path", chosen.getFullPathName()}}));
+            return;
+        }
+        auto notice = lang.format(exported.files.size() == 1 ? "exportedOne" : "exportedMany",
+                                  {{"count", String(exported.voices)}, {"banks", String(exported.files.size())},
+                                   {"file", exported.files.getFirst().getFileName()}});
+        if (exported.skipped > 0)
+            notice << String::fromUTF8(" · ") << lang.format("exportSkipped", {{"count", String(exported.skipped)}});
         safeThis->showAVFooterNotice(notice);
     });
 }

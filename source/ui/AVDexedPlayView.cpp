@@ -2508,12 +2508,20 @@ void AVDexedPlayView::showFolderActions() {
         menu.addItem(8, avEllipsis(language.text("libraryConvertMenu")));
     if (onUndoLibraryConversion && AVDexedConversion::lastUndoableConversion(root) != File())
         menu.addItem(9, avEllipsis(language.text("libraryUndoMenu")));
+    // The sound files of the folder shown, as the list has them (for a DX7).
+    Array<File> folderSounds;
+    const auto folderKey = selectedFolderKey.fromFirstOccurrenceOf("folder:", false, false);
+    if (folderKey.isNotEmpty())
+        for (const auto& entry : libraryEntries)
+            if (entry.isUser && avInFolder(entry.folder, folderKey)) folderSounds.add(entry.file);
+    if (onExportSounds)
+        menu.addItem(10, avEllipsis(language.text("exportFolderMenu")), ! folderSounds.isEmpty());
     menu.addItem(5, language.text("reindexLibrary"));
     menu.addItem(6, language.text("restoreFactory"));
     Component::SafePointer<AVDexedPlayView> safeThis(this);
     menu.setLookAndFeel(&getLookAndFeel());  // menus never inherit it from their target
     menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&folderActionsButton),
-                       [safeThis, folder, root, backups](int result) {
+                       [safeThis, folder, root, backups, folderSounds](int result) {
         if (safeThis == nullptr)
             return;
         if (result == 1) safeThis->promptNewFolder(nullptr);
@@ -2525,6 +2533,7 @@ void AVDexedPlayView::showFolderActions() {
         else if (result == 7) backups.revealToUser();
         else if (result == 8 && safeThis->onConvertLibrary) safeThis->onConvertLibrary();
         else if (result == 9 && safeThis->onUndoLibraryConversion) safeThis->onUndoLibraryConversion();
+        else if (result == 10 && safeThis->onExportSounds) safeThis->onExportSounds(folderSounds, folder.getFileName());
     });
 }
 

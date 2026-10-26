@@ -198,6 +198,7 @@ void DexedAudioProcessor::cancelAVConversion() noexcept {
 }
 
 DexedAudioProcessor::~DexedAudioProcessor() {
+    avAlive->store(false);
     // A conversion still running stops where it is (nothing of it reaches the library).
     if (avConversion != nullptr) avConversion->stopThread(60000);
     avFolderReader.removeAllJobs(true, 10000);

@@ -318,6 +318,7 @@ void DexedAudioProcessor::handleAVSysExNow(const uint8_t* buf, int sz) {
                 if ( received.load(buf, sz) == 0 ) {
                     setActiveBank(received, juce::File());
                     setCurrentProgram(0);
+                    keepAVReceivedBank(buf, sz);
                 }
             }
         }

@@ -297,6 +297,8 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     /** Once the library is sound files, .syx files that appear in it (copied
         with Finder, the factory banks restored) become sounds too. */
     void AVConvertBanksAdded(const Array<File>& banks);
+    /** "Organizar" › export: `sounds` as .syx banks wherever the user chooses. */
+    void AVExportSounds(const Array<File>& sounds, const String& name);
     /** After a conversion of the library's own banks: favourites, the sound playing, the browser. */
     void AVAdoptConverted(const AVDexedConversion::Result& result);
     std::set<String> AVBanksTried;   // AVConvertBanksAdded: files tried (path|time), never again

@@ -226,6 +226,8 @@ public:
     std::function<void(const juce::Array<juce::File>& banks)> onLibraryListed;
     /** "Organizar" › convert the library's banks into sounds / undo that. */
     std::function<void()> onConvertLibrary, onUndoLibraryConversion;
+    /** "Organizar" › export: the sound files of the folder shown, in its order, and its name. */
+    std::function<void(const juce::Array<juce::File>& sounds, const juce::String& folderName)> onExportSounds;
     /** Favourites that follow their sounds to new keys (a bank voice that
         became a sound file, and back): old key → new key. */
     void replaceFavoriteKeys(const std::map<juce::String, juce::String>& oldToNew);

@@ -12,6 +12,7 @@
 #endif
 #include "../source/PluginProcessor.h"
 #include "../source/ui/PluginEditor.h"
+#include "../source/ui/AVDexedLanguage.h"
 #include "../source/parameter/Model.h"
 #include "../source/core/AVDexedSysex.h"
 #include "../source/core/AVDexedConversion.h"
@@ -863,6 +864,124 @@ bool testProgramChanges() {
     return passed;
 }
 
+/** A folder of sounds exported as .syx banks and imported again: the same
+    voices, settings and DX7II data, the same sounds bit for bit. */
+bool testExportRoundTrip() {
+    bool passed = true;
+    Scratch scratch;
+    // 40 voices: a bank with a reverb embedded on slot 4, and 8 voices of a DX7II bank with its AMEM.
+    const auto first = makeBank([](int slot) { return juce::String(slot) + " EXP " + juce::String(slot); }, 110);
+    AVDexedLibrary::BankSettings settings;
+    settings[3] = { AVDexedLibrary::voiceHash(first, 3), { { IDs::reverbAmount.name, 0.5f }, { IDs::cutoff.name, 0.25f } } };
+    const auto firstFile = scratch.outside.getChildFile("Uno.syx");
+    const auto firstBytes = AVDexedLibrary::composeBankFile(bankBytes(first), first, settings);
+    firstFile.replaceWithData(firstBytes.getData(), firstBytes.getSize());
+    auto second = makeBank([](int slot) { return "MK2 " + juce::String(slot); }, 111);
+    for (int slot = 8; slot < 32; ++slot) second.packProgram(Program::initialProgram().getRawData(), slot, "INIT VOICE");
+    std::array<uint8_t, 1120> amem {};
+    amem[2 * 35 + 5] = 2;
+    amem[2 * 35 + 34] = 3;
+    juce::MemoryBlock secondBytes;
+    const auto amemMessage = AVDexedSysex::amemMessage(amem.data());
+    secondBytes.append(amemMessage.data(), amemMessage.size());
+    secondBytes.append(bankBytes(second).getData(), bankBytes(second).getSize());
+    const auto secondFile = scratch.outside.getChildFile("Dos.syx");
+    secondFile.replaceWithData(secondBytes.getData(), secondBytes.getSize());
+
+    AVDexedConversion::Request request;
+    request.sources = { firstFile, secondFile };
+    request.root = scratch.root;
+    request.destination = scratch.root.getChildFile("Ida");
+    request.layout = AVDexedConversion::Layout::flat;
+    request.backup = false;
+    const auto there = DexedAudioProcessor::convertAVBanks(request);
+    std::vector<juce::File> byOrder(size_t(there.sounds));
+    for (const auto& file : there.files)
+        if (const auto xml = readXml(file); session(xml) != nullptr)
+            byOrder[size_t(session(xml)->getIntAttribute("avLibraryOrder"))] = file;
+    juce::Array<juce::File> sounds;
+    for (const auto& file : byOrder) sounds.add(file);
+    const auto exported = DexedAudioProcessor::exportAVSoundsToBanks(sounds, scratch.outside.getChildFile("Exportados"), "Ida");
+    passed &= expect(there.ok && there.sounds == 40 && exported.ok && exported.voices == 40 && exported.files.size() == 2
+                         && exported.files[0].getFileName() == "Ida 1.syx" && exported.files[1].getFileName() == "Ida 2.syx",
+                     "40 sounds export as two banks of the DX7");
+    const auto back = AVDexedLibrary::readSourceBanks(exported.files[0]);
+    const auto backSecond = AVDexedLibrary::readSourceBanks(exported.files[1]);
+    bool sameVoices = back.size() == 1 && backSecond.size() == 1;
+    for (int slot = 0; sameVoices && slot < 32; ++slot)
+        sameVoices = std::memcmp(Cartridge(back[0].bank).unpackProgram(slot).getRawData(),
+                                 Cartridge(first).unpackProgram(slot).getRawData(), 145) == 0;
+    for (int slot = 0; sameVoices && slot < 8; ++slot)
+        sameVoices = std::memcmp(Cartridge(backSecond[0].bank).unpackProgram(slot).getRawData(),
+                                 Cartridge(second).unpackProgram(slot).getRawData(), 145) == 0;
+    passed &= expect(sameVoices && Cartridge(back[0].bank).getProgramName(3).trim() == "EXP 3",
+                     "the voices come back the same, named as the sounds (without the slot number)");
+    passed &= expect(back[0].settings.count(3) == 1 && std::abs(back[0].settings.at(3).values.at(IDs::reverbAmount.name) - 0.5f) < 1.0e-4f
+                         && backSecond[0].bank.getAmemVoice(2) != nullptr && backSecond[0].bank.getAmemVoice(2)[5] == 2,
+                     "with their sound settings and DX7II additional data");
+
+    // Imported again: the same sounds, bit for bit.
+    AVDexedConversion::Request again = request;
+    again.sources = exported.files;
+    again.destination = scratch.root.getChildFile("Vuelta");
+    const auto returned = DexedAudioProcessor::convertAVBanks(again);
+    std::vector<juce::File> returnedByOrder(size_t(returned.sounds));
+    for (const auto& file : returned.files)
+        if (const auto xml = readXml(file); session(xml) != nullptr)
+            returnedByOrder[size_t(session(xml)->getIntAttribute("avLibraryOrder"))] = file;
+    bool sameSounds = returned.ok && returned.sounds == 40;
+    for (size_t i = 0; sameSounds && i < byOrder.size(); ++i)
+        sameSounds = soundFilePrint(byOrder[i]) == soundFilePrint(returnedByOrder[i]);
+    passed &= expect(sameSounds, "imported again, every sound plays bit for bit as before");
+    return passed;
+}
+
+/** A bank received by SysEx becomes sounds in "Recibido de DX7" (once). */
+bool testReceivedBank() {
+#if JUCE_MAC
+    bool passed = true;
+    Scratch scratch;
+    const auto oldApp = DexedAudioProcessor::dexedAppDir;
+    DexedAudioProcessor::dexedAppDir = scratch.root;
+    const auto pump = [](int milliseconds) {
+        const auto deadline = juce::Time::getMillisecondCounterHiRes() + milliseconds;
+        while (juce::Time::getMillisecondCounterHiRes() < deadline)
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.005, true);
+    };
+    auto player = freshProcessor();
+    player->keepAVReceivedBanksForTesting();
+    const auto bank = makeBank([](int slot) { return "RX " + juce::String(slot); }, 120);
+    const auto dump = bankBytes(bank);
+    const auto receive = [&] {
+        juce::AudioBuffer<float> audio(2, 64);
+        audio.clear();
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage(dump.getData(), int(dump.getSize())), 0);
+        player->processBlock(audio, midi);
+        player->runAVTimerTickForTesting();
+    };
+    const auto folder = scratch.root.getChildFile(AVDexedLanguageService::getInstance().text("receivedFolderName"));
+    receive();
+    for (int i = 0; i < 400 && (presetsIn(folder).size() < 32 || player->isAVConverting()); ++i) pump(10);
+    pump(100);
+    passed &= expect(presetsIn(folder).size() == 32 && AVDexedLibrary::bankFingerprint(player->currentCart) == AVDexedLibrary::bankFingerprint(bank),
+                     "a bank received by SysEx plays, and becomes 32 sounds of the library");
+    passed &= expect(player->getAVPresetPath() == folder.getChildFile("RX 0.avdexpreset"), "the voice playing is its sound file then");
+    receive();
+    for (int i = 0; i < 400 && player->isAVConverting(); ++i) pump(10);
+    pump(100);
+    passed &= expect(presetsIn(folder).size() == 32, "the same bank again adds nothing");
+    bool noDump = true;
+    for (const auto& entry : juce::RangedDirectoryIterator(scratch.root.getChildFile(".cache"), false, "*.syx", juce::File::findFiles))
+        noDump = ! entry.getFile().exists();
+    passed &= expect(noDump, "and the received dump is not left behind");
+    DexedAudioProcessor::dexedAppDir = oldApp;
+    return passed;
+#else
+    return true;
+#endif
+}
+
 bool runAVDexedConversionTests() {
     bool passed = testVoiceNames();
     passed &= testConvertFolder();
@@ -873,6 +992,8 @@ bool runAVDexedConversionTests() {
     passed &= testLibraryConversion();
     passed &= testSessionsFindTheirSound();
     passed &= testProgramChanges();
+    passed &= testExportRoundTrip();
+    passed &= testReceivedBank();
     std::cout << (passed ? "Conversion checks passed.\n" : "Conversion checks FAILED.\n");
     return passed;
 }
