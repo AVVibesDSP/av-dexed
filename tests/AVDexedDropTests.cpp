@@ -549,12 +549,14 @@ bool runAVDexedDropTests()
                                  "a dropped layers file plays its layers");
                 passed &= expect(openPrompt() == nullptr, "no dialog is left open after the layers");
 
-                // "Guardar capas › Guardar como": the layers as a sound file
-                // (.avdexpreset) in "User Presets", asked only for a name.
+                // "Guardar como" of the Save button with the layers on: the
+                // layers as a sound file (.avdexpreset) in "User Presets",
+                // asked only for a name.
+                passed &= expect(processor.isAVLayerModeOn(), "the layers are on");
                 const int presetsBefore = presetsIn(userPresets);
-                editor->layersView.onSaveLayers(true, "Mis capas");
+                editor->AVSaveSoundAs();
                 prompt = openPrompt();
-                passed &= expect(prompt != nullptr && promptText(*prompt) == "Mis capas", "saving the layers asks only for a name");
+                passed &= expect(prompt != nullptr && promptText(*prompt).isNotEmpty(), "saving the layers asks only for a name");
                 if (prompt != nullptr) answerPrompt(*prompt, true, "Capas guardadas");
                 const auto layersPreset = userPresets.getChildFile("Capas guardadas.avdexpreset");
                 MemoryBlock savedLayers;
@@ -566,7 +568,7 @@ bool runAVDexedDropTests()
                 // "Guardar" writes the same file again, asking nothing.
                 processor.getAVLayerSettings(2).transpose = 7;
                 processor.selectAVLayer(4);   // another layer in Play: still the same layers preset
-                editor->layersView.onSaveLayers(false, {});
+                editor->AVSaveSound();
                 pump(50);
                 passed &= expect(openPrompt() == nullptr && presetsIn(userPresets) == presetsBefore + 1
                                      && processor.getAVPresetPath() == layersPreset,
@@ -622,13 +624,67 @@ bool runAVDexedDropTests()
 
                 // A sound saved into a folder the browser does not show: its folder opens.
                 editor->playView.setSelectedFolder("folder:" + String(AVDexedLibrary::factoryFolderName));
-                editor->layersView.onSaveLayers(true, {});
+                editor->AVSaveSoundAs();
                 prompt = openPrompt();
                 if (prompt != nullptr) answerPrompt(*prompt, true, "Visible");
                 passed &= expect(pumpUntil([&editor] {
                                      return editor->playView.selectedFolderKey == "folder:" + String(AVDexedLibrary::userPresetsFolderName);
                                  }, 3000),
                                  "after saving, the browser opens the folder that holds the new preset");
+
+                // New layers made from a sound of another folder: the Save
+                // button puts every layer into "User Presets", and that sound
+                // stays as it was.
+                const auto category = root.getChildFile("Epianos");
+                const auto epiano = category.getChildFile("Epiano.avdexpreset");
+                passed &= expect(category.createDirectory().wasOk() && writeSound(epiano, "Epiano"), "a sound is written into a folder of its own");
+                MemoryBlock epianoBefore, epianoAfter;
+                epiano.loadFileAsData(epianoBefore);
+                processor.captureAVPresetBaseline();
+                editor->playView.refreshLabels();
+                editor->showAVView(DexedAudioProcessorEditor::AVView::play, false);
+                editor->loadNativePreset(epiano);
+                pump(100);
+                if (auto* question = openPrompt()) answerPrompt(*question, false);   // not expected
+                passed &= expect(! processor.isAVLayerModeOn() && processor.getAVLayerSetFile() == File(),
+                                 "a single sound opened from Play lets the layers go of their file");
+                editor->playView.setSelectedFolder("folder:Epianos");
+                editor->showAVView(DexedAudioProcessorEditor::AVView::layers, false);
+                processor.stackAVLayers(4, 5.0f);
+                const int userPresetsBefore = presetsIn(userPresets);
+                editor->AVSaveSound();
+                prompt = openPrompt();
+                passed &= expect(prompt != nullptr, "\"Guardar\" of new layers asks for their name");
+                if (prompt != nullptr) answerPrompt(*prompt, true, "Pila Epiano");
+                pump(50);
+                MemoryBlock stackedBytes;
+                const auto stacked = userPresets.getChildFile("Pila Epiano.avdexpreset");
+                const auto stackedXml = stacked.loadFileAsData(stackedBytes)
+                    ? AudioProcessor::getXmlFromBinary(stackedBytes.getData(), int(stackedBytes.getSize())) : nullptr;
+                epiano.loadFileAsData(epianoAfter);
+                passed &= expect(stackedXml != nullptr && stackedXml->getChildByName("avLayers") != nullptr
+                                     && presetsIn(userPresets) == userPresetsBefore + 1 && presetsIn(category) == 1
+                                     && epianoAfter == epianoBefore,
+                                 "new layers go into \"User Presets\" with every layer, never into the sound's folder nor over it");
+                editor->playView.setSelectedFolder("folder:Epianos");
+                editor->AVSaveSoundAs();
+                prompt = openPrompt();
+                if (prompt != nullptr) answerPrompt(*prompt, true, "Pila Epiano dos");
+                passed &= expect(userPresets.getChildFile("Pila Epiano dos.avdexpreset").existsAsFile() && presetsIn(category) == 1,
+                                 "\"Guardar como\" of the layers goes into \"User Presets\" too, whatever folder is shown");
+                // A stack makes new layers: "Guardar" asks, never writes over the last file.
+                processor.stackAVLayers(2, 3.0f);
+                editor->AVSaveSound();
+                prompt = openPrompt();
+                passed &= expect(prompt != nullptr && presetsIn(userPresets) == userPresetsBefore + 2,
+                                 "after a stack, \"Guardar\" saves new layers (it asks their name)");
+                if (prompt != nullptr) answerPrompt(*prompt, false);
+
+                // "User Presets" sits with "Todos" and "Favoritos", before the other folders.
+                int pinned = 0;
+                const auto pickerFolders = editor->playView.pickerFolders(pinned);
+                passed &= expect(pinned >= 1 && pickerFolders.getFirst() == userPresets && pickerFolders.indexOf(category) >= pinned,
+                                 "\"User Presets\" comes first in the folder picker, the other folders after it");
                 processor.setAVLayerMode(false);
             }
 

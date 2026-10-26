@@ -488,42 +488,62 @@ int AVRunAdvancedNotice(const juce::File& outputDirectory) {
             return editor;
         };
         // Each stage runs after the previous one's delay, in the app's own loop.
+        // The tab's click is AVOpenAdvanced(true, {}).
         DexedAudioProcessorEditor* editor = nullptr;
+        const auto onPage = [&editor](DexedAudioProcessorEditor::AVView view) { return editor->AVVisibleView == view; };
+        const auto click = [&](const char* key) {
+            auto* pill = findPill(*editor, language.text(key));
+            check(pill != nullptr, key);
+            if (pill != nullptr) pill->triggerClick();
+        };
         std::vector<std::pair<int, std::function<void()>>> stages {
             { 0, [&] {
                 processor.advancedNoticeHidden = false;
                 editor = open("es");
-                editor->showAVView(DexedAudioProcessorEditor::AVView::advanced, true);
+                editor->AVOpenAdvanced(true, {});
             } },
             { 900, [&] {
                 captureWindow(outputDirectory.getChildFile("advanced-notice-es.png"));
-                check(editor->hasAVPromptOpen(), "the notice shows the first time Advanced opens");
-                auto* dontShow = findPill(*editor, language.text("dontShowAgain"));
-                check(dontShow != nullptr, "it has \"No volver a mostrar\"");
-                if (dontShow != nullptr) dontShow->triggerClick();
+                check(editor->hasAVPromptOpen(), "the question shows the first time Advanced is clicked");
+                check(onPage(DexedAudioProcessorEditor::AVView::play), "before Advanced opens: Play stays behind it");
+                click("cancel");
             } },
             { 600, [&] {
-                check(!editor->hasAVPromptOpen(), "\"No volver a mostrar\" closes it");
+                check(!editor->hasAVPromptOpen() && onPage(DexedAudioProcessorEditor::AVView::play), "\"Cancelar\" stays in Play");
+                editor->AVOpenAdvanced(true, {});
+            } },
+            { 900, [&] {
+                check(editor->hasAVPromptOpen(), "the next click asks again");
+                click("advancedOpen");
+            } },
+            { 600, [&] {
+                check(!editor->hasAVPromptOpen() && onPage(DexedAudioProcessorEditor::AVView::advanced) && !processor.advancedNoticeHidden,
+                      "\"Abrir\" opens Advanced");
+                editor->showAVView(DexedAudioProcessorEditor::AVView::play, true);
+            } },
+            { 400, [&] { editor->AVOpenAdvanced(true, {}); } },
+            { 900, [&] {
+                check(!editor->hasAVPromptOpen() && onPage(DexedAudioProcessorEditor::AVView::advanced),
+                      "then it opens without asking while this window lasts");
+                editor = open("en");
+                editor->AVOpenAdvanced(true, {});
+            } },
+            { 900, [&] {
+                captureWindow(outputDirectory.getChildFile("advanced-notice-en.png"));
+                check(editor->hasAVPromptOpen() && onPage(DexedAudioProcessorEditor::AVView::play), "a new window asks again, in English too");
+                click("advancedOpenAlways");
+            } },
+            { 600, [&] {
+                check(!editor->hasAVPromptOpen() && onPage(DexedAudioProcessorEditor::AVView::advanced), "\"Always open\" opens Advanced");
                 check(processor.advancedNoticeHidden, "and is remembered");
                 processor.advancedNoticeHidden = false;
                 processor.loadPreference();
                 check(processor.advancedNoticeHidden, "and saved with the preferences");
-                editor->showAVView(DexedAudioProcessorEditor::AVView::play, true);
-            } },
-            { 400, [&] { editor->showAVView(DexedAudioProcessorEditor::AVView::advanced, true); } },
-            { 900, [&] {
-                check(!editor->hasAVPromptOpen(), "Advanced opens again without it");
-                processor.advancedNoticeHidden = false;
-                editor = open("en");
-                editor->showAVView(DexedAudioProcessorEditor::AVView::advanced, true);
+                editor = open("es");
+                editor->AVOpenAdvanced(true, {});
             } },
             { 900, [&] {
-                captureWindow(outputDirectory.getChildFile("advanced-notice-en.png"));
-                check(editor->hasAVPromptOpen(), "the English notice shows too");
-                if (auto* gotIt = findPill(*editor, language.text("gotIt"))) gotIt->triggerClick();
-            } },
-            { 600, [&] {
-                check(!editor->hasAVPromptOpen() && !processor.advancedNoticeHidden, "\"Got it\" only closes it");
+                check(!editor->hasAVPromptOpen() && onPage(DexedAudioProcessorEditor::AVView::advanced), "a new window then opens it at once");
                 MessageManager::getInstance()->stopDispatchLoop();
             } },
         };

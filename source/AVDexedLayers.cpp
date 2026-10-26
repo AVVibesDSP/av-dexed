@@ -401,6 +401,9 @@ void DexedAudioProcessor::stackAVLayers(int count, float cents) {
         }
         for (int layer = 0; layer < AVLayerCount; ++layer) setAVLayerMicroTuning(layer, -1, 0);
         avSelectedLayer.store(0, std::memory_order_release);
+        // New layers: "Guardar" saves them as new ones, never over the last set's file.
+        avLayerSetFile = juce::File();
+        avLayerSetId = {};
         activeProgram = voice;
         avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
         avLayerReleaseMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
@@ -431,6 +434,7 @@ void DexedAudioProcessor::resetAVLayers() {
     avLayerPanicMask.store((1u << AVLayerCount) - 1, std::memory_order_release);
     avLayerReleaseMask.store((1u << AVLayerCount) - 1, std::memory_order_release);   // channels changed: controllers at rest
     for (int layer = 0; layer < AVLayerCount; ++layer) setAVLayerMicroTuning(layer, -1, 0);
+    setAVLayerSetContext({}, {});   // new layers, as a stack
 }
 
 juce::ValueTree DexedAudioProcessor::createAVLayersState() const {

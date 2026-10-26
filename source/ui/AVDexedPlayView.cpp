@@ -2460,18 +2460,20 @@ void AVDexedPlayView::showFolderPicker() {
     };
     menu.addItem(1, language.text("allSounds"), true, selectedFolderKey == "all", icon(false));
     menu.addItem(2, language.text("favorites"), true, selectedFolderKey == "favorites", icon(true));
-    const auto folders = AVDexedLibrary::listFolders(root, true);
+    int pinned = 0;
+    const auto folders = pickerFolders(pinned);
     const bool loose = hasLooseSounds();
-    if (! folders.isEmpty() || loose) menu.addSeparator();
     StringArray keys;
     const auto selectedFolder = selectedFolderKey.fromFirstOccurrenceOf("folder:", false, false);
     for (const auto& folder : folders) {
+        if (keys.size() == pinned && (folders.size() > pinned || loose)) menu.addSeparator();
         const auto relative = avRelativeFolder(folder, root);
         const auto key = "folder:" + relative;
         menu.addItem(100 + keys.size(), folderLabel(key), true,
                      selectedFolderKey.startsWith("folder:") && avSameFolder(relative, selectedFolder), icon(false));
         keys.add(key);
     }
+    if (folders.size() == pinned && loose) menu.addSeparator();
     if (loose) menu.addItem(3, language.text("looseSounds"), true, selectedFolderKey == "loose", icon(false));
     Component::SafePointer<AVDexedPlayView> safeThis(this);
     menu.setLookAndFeel(&getLookAndFeel());  // menus never inherit it from their target
@@ -2485,6 +2487,17 @@ void AVDexedPlayView::showFolderPicker() {
         else if (isPositiveAndBelow(result - 100, keys.size()))
             safeThis->setSelectedFolder(keys[result - 100]);
     });
+}
+
+Array<File> AVDexedPlayView::pickerFolders(int& pinned) const {
+    const auto root = libraryRoot();
+    const auto userPresets = AVDexedLibrary::writableFolderFor(root, AVDexedLibrary::userPresetsFolderName);
+    Array<File> first, rest;
+    for (const auto& folder : AVDexedLibrary::listFolders(root, true))
+        (userPresets != File() && (folder == userPresets || folder.isAChildOf(userPresets)) ? first : rest).add(folder);
+    pinned = first.size();
+    first.addArray(rest);
+    return first;
 }
 
 void AVDexedPlayView::showFolderActions() {

@@ -172,20 +172,6 @@ bool AVRenderUIEvidence(const juce::File& directory) {
                     passed &= output != nullptr && PNGImageFormat().writeImageToStream(image, *output);
                     std::cout << "UI evidence: " << name << '\n';
                 }
-                // A real TX802 performance, when the factory files are on this machine.
-                const File tx802(String::fromUTF8(std::getenv("AVDEXED_TX802_PERFORMANCES") ? std::getenv("AVDEXED_TX802_PERFORMANCES") : ""));
-                if (tx802.existsAsFile()) {
-                    editor->layersView.loadPerformanceFile(tx802);
-                    editor->layersView.performanceList.setSelectedId(3, sendNotificationSync);
-                    editor->layersView.setVisible(false);
-                    editor->layersView.setVisible(true);
-                    editor->refreshPresetHeader();
-                    auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true, 1.0f);
-                    const auto name = String("Layers-tx802-") + locale + (scale == 1.0f ? "-normal.png" : "-compact.png");
-                    auto output = directory.getChildFile(name).createOutputStream();
-                    if (output) { output->setPosition(0); output->truncate(); }
-                    passed &= output != nullptr && PNGImageFormat().writeImageToStream(image, *output);
-                }
                 passed &= processor.loadAVStateInformation(beforeLayers.getData(), int(beforeLayers.getSize()));
                 processor.keyboardState.noteOn(2, 60, 0.8f);   // a restore lets go of held keys; this is no UI change
                 editor->showAVDexedPlayView(true, false);

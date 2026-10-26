@@ -267,6 +267,10 @@ private:
     void setSelectedFolder(const juce::String& folderKey);
     void rebuildFolderPicker();
     void showFolderPicker();
+    /** The picker's folders: "User Presets" (where new sounds are saved) and
+        its subfolders first, `pinned` of them, beside "Todos" and "Favoritos";
+        then the rest, as listFolders() orders them. */
+    juce::Array<juce::File> pickerFolders(int& pinned) const;
     void showFolderActions();
     void reindexLibrary();
     juce::String fingerprintFile(const juce::File& file) const;

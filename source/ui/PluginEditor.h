@@ -118,8 +118,10 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     /** The first time Advanced opens in this editor (on screen, after the
         cross-fade, no other dialog up): a notice that it draws more while notes
         sound, with "Don't show again". */
-    void AVMaybeShowAdvancedNotice();
-    bool AVAdvancedNoticeShown = false;
+    /** Advanced, once its question about the CPU is answered "Abrir" (asked
+        before the page is drawn, once per window); then `then`. */
+    void AVOpenAdvanced(bool animate, std::function<void()> then);
+    bool AVAdvancedAllowed = false;
     void AVUpdateFooter();
     /** The footer help text: the hovered control's help, or a temporary notice. */
     void AVUpdateHelpText();
@@ -243,19 +245,20 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
     void storeProgramResponse(AlertWindow *dialog, int response, Cartridge destSysex, File externalFile, bool hasExternalFile);
     /** "Guardar": overwrites the active .avdexpreset of the library (with its
         layers when it carries them), or writes a bank voice into its own slot;
-        anything else goes to "Guardar como". The completion says whether the
-        sound was saved. */
+        anything else goes to "Guardar como". With the layers on, the layers'
+        "Guardar". The completion says whether the sound was saved. */
     void AVSaveSound(std::function<void(bool)> completion = {});
     /** "Guardar como": a name prompt, then a new .avdexpreset in the selected
         library folder (or "User Presets"), with every layer when the sound is
-        a layers preset. Never overwrites. `reason`, when given, opens the
-        message (why "Guardar" could not save in place). */
+        a layers preset. Never overwrites. With the layers on, the layers'
+        "Guardar como". `reason`, when given, opens the message (why "Guardar"
+        could not save in place). */
     void AVSaveSoundAs(std::function<void(bool)> completion = {}, const juce::String& reason = {});
-    /** "Guardar" of the Capas page: the layers' own sound file again, while it
-        is still theirs; else "Guardar como" of the Capas page. */
-    void AVSaveLayers(const juce::String& suggestedName);
-    /** "Guardar como" of the Capas page: every layer in a new .avdexpreset. */
-    void AVSaveLayersAs(const juce::String& suggestedName);
+    /** "Guardar" of the layers: their own sound file again, while it is still
+        theirs; else their "Guardar como". */
+    void AVSaveLayers(std::function<void(bool)> completion);
+    /** "Guardar como" of the layers: every layer in a new .avdexpreset in "User Presets". */
+    void AVSaveLayersAs(std::function<void(bool)> completion, const juce::String& reason = {});
     /** Both "Guardar como"; `layers`: the file carries every layer. `folder`:
         where it goes (none: the folder being browsed, as "Guardar como"). */
     void AVSavePresetAs(bool layers, const juce::String& suggestedName, File folder,

@@ -396,13 +396,15 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
         tab->setTriggeredOnMouseDown(true);
         tab->setMouseClickGrabsKeyboardFocus(false);
     }
-    advancedTabButton.onClick = [this] { showAVDexedPlayView(false); };
+    advancedTabButton.onClick = [this] { AVOpenAdvanced(true, {}); };
     layersTabButton.onClick = [this] { showAVView(AVView::layers); };
     saveButton.onClick = [this] {
+        // With the layers on, the sound is all eight of them.
         auto& language = AVDexedLanguageService::getInstance();
+        const bool layers = processor->isAVLayerModeOn();
         PopupMenu menu;
-        menu.addItem(1, language.text("save"));
-        menu.addItem(2, language.text("saveAs"));
+        menu.addItem(1, language.text(layers ? "layerSave" : "save"));
+        menu.addItem(2, language.text(layers ? "layerSaveAs" : "saveAs"));
         Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
         menu.setLookAndFeel(&getLookAndFeel());
         menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&saveButton), [safeThis](int result) {
@@ -460,7 +462,8 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
         auto start = File::getSpecialLocation(File::userHomeDirectory).getChildFile("Downloads");
         if (! start.isDirectory()) start = File::getSpecialLocation(File::userDocumentsDirectory);
         fileChooser = std::make_unique<FileChooser>(AVDexedLanguageService::getInstance().text("importBankTitle"), start,
-                                                    String("*.syx;*.SYX;") + AVDexedLibrary::presetWildcards, true);
+                                                    String("*.syx;*.SYX;") + AVDexedLibrary::presetWildcards + ";*"
+                                                        + DexedAudioProcessor::AVLegacyLayersExtension, true);
         Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
         fileChooser->launchAsync(FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles
                                      | FileBrowserComponent::canSelectMultipleItems,
@@ -477,22 +480,18 @@ DexedAudioProcessorEditor::DexedAudioProcessorEditor (DexedAudioProcessor* owner
     frameComponent.addAndMakeVisible(playView.getPresetNavigator());
     frameComponent.addChildComponent(AVDropOverlay);
     playView.onOperatorSelected = [this](int op) {
-        showAVDexedPlayView(false);
-        if (isPositiveAndBelow(op, 6) && operators[op] != nullptr) {
-            operators[op]->grabKeyboardFocus();
-            operators[op]->flashHighlight();
-        }
+        AVOpenAdvanced(true, [this, op] {
+            if (isPositiveAndBelow(op, 6) && operators[op] != nullptr) {
+                operators[op]->grabKeyboardFocus();
+                operators[op]->flashHighlight();
+            }
+        });
     };
     playView.setBounds(24, 70, WINDOW_SIZE_X - 48, 550);
     frameComponent.addAndMakeVisible(classicView);
     classicView.setBounds(24, 70, WINDOW_SIZE_X - 48, 750);
     layersView.onNotice = [this](const String& text) { showAVFooterNotice(text); };
     layersView.onReplaceSound = [this](std::function<void()> replacement) { requestPresetReplacement(std::move(replacement)); };
-    layersView.onSaveLayers = [this](bool saveAs, const String& name) {
-        if (saveAs) AVSaveLayersAs(name);
-        else AVSaveLayers(name);
-    };
-    layersView.onOpenSoundFile = [this](const File& file) { importBanks(Array<File> { file }); };
     playView.onConvertLibrary = [this] {
         int banks = 0;
         for (const auto& file : AVDexedLibrary::findSoundFiles(AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir)))
@@ -853,31 +852,35 @@ void DexedAudioProcessorEditor::showAVView(AVView view, bool animate) {
         AVPageFade.setBounds(area.toNearestInt());
         AVPageFade.start(frameComponent, outgoingOnTop, 220.0, {});
     }
-    if (view == AVView::advanced)
-        AVMaybeShowAdvancedNotice();
 }
 
-void DexedAudioProcessorEditor::AVMaybeShowAdvancedNotice() {
-    if (processor->advancedNoticeHidden || AVAdvancedNoticeShown || !isShowing())
+void DexedAudioProcessorEditor::AVOpenAdvanced(bool animate, std::function<void()> then) {
+    // Asked before the page opens: drawing it is what costs. Once per window;
+    // "Abrir siempre" never asks again.
+    if (AVVisibleView == AVView::advanced || processor->advancedNoticeHidden || AVAdvancedAllowed
+        || ! isShowing() || ! AVCanShowNoticeNow()) {
+        showAVView(AVView::advanced, animate);
+        if (then) then();
         return;
+    }
+    auto& language = AVDexedLanguageService::getInstance();
+    AVDexedPromptOverlay::Options options;
+    options.title = language.text("advancedCpuTitle");
+    options.message = language.text("advancedCpuMessage");
+    options.confirmText = language.text("advancedOpen");
+    options.altText = language.text("advancedOpenAlways");
+    options.cancelText = language.text("cancel");
     Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
-    Timer::callAfterDelay(240, [safeThis] {
-        if (safeThis == nullptr || safeThis->AVAdvancedNoticeShown || safeThis->AVVisibleView != AVView::advanced
-            || !safeThis->isShowing() || !safeThis->AVCanShowNoticeNow())
-            return;
-        safeThis->AVAdvancedNoticeShown = true;
-        auto& language = AVDexedLanguageService::getInstance();
-        AVDexedPromptOverlay::Options options;
-        options.title = language.text("advancedCpuTitle");
-        options.message = language.text("advancedCpuMessage");
-        options.confirmText = language.text("gotIt");
-        options.altText = language.text("dontShowAgain");
-        options.onAlt = [safeThis] {
-            if (safeThis == nullptr) return;
-            safeThis->processor->advancedNoticeHidden = true;
-            safeThis->processor->savePreference();
-        };
-        safeThis->showAVPrompt(std::move(options), {});
+    options.onAlt = [safeThis, animate, then] {
+        if (safeThis == nullptr) return;
+        safeThis->processor->advancedNoticeHidden = true;
+        safeThis->processor->savePreference();
+        safeThis->AVOpenAdvanced(animate, then);
+    };
+    showAVPrompt(std::move(options), [safeThis, animate, then](bool confirmed, const String&) {
+        if (safeThis == nullptr || ! confirmed) return;
+        safeThis->AVAdvancedAllowed = true;
+        safeThis->AVOpenAdvanced(animate, then);
     });
 }
 
@@ -980,9 +983,11 @@ void DexedAudioProcessorEditor::requestSoundReplacement(std::function<void()> re
         if (safeThis == nullptr)
             return;
         // Only a sound saved with its layers opens with layers. The layers
-        // stay as they were: the Capas page turns them on again.
+        // stay as they were (the Capas page turns them on again), but no
+        // longer as their file's: a "Guardar" later saves them as new ones.
         if (safeThis->AVVisibleView != AVView::layers && safeThis->processor->isAVLayerModeOn()) {
             safeThis->processor->setAVLayerMode(false);
+            safeThis->processor->setAVLayerSetContext({}, {});
             safeThis->showAVFooterNotice(AVDexedLanguageService::getInstance().text("layerModeOffForSound"));
         }
         replacement();
@@ -2071,6 +2076,11 @@ void DexedAudioProcessorEditor::storeProgram() {
 }
 
 void DexedAudioProcessorEditor::AVSaveSound(std::function<void(bool)> completion) {
+    // With the layers on, the sound is all eight of them.
+    if (processor->isAVLayerModeOn()) {
+        AVSaveLayers(std::move(completion));
+        return;
+    }
     auto& language = AVDexedLanguageService::getInstance();
     const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
     const auto activeFile = playView.getActiveUserPreset();
@@ -2165,35 +2175,41 @@ DexedAudioProcessorEditor::AVOverwrite DexedAudioProcessorEditor::AVOverwritePre
     return AVOverwrite::saved;
 }
 
-void DexedAudioProcessorEditor::AVSaveLayers(const String& suggestedName) {
+void DexedAudioProcessorEditor::AVSaveLayers(std::function<void(bool)> completion) {
     auto& language = AVDexedLanguageService::getInstance();
     const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
     const auto setFile = processor->getAVLayerSetFile();
-    // Moved, deleted or in a pack: a new file, as "Guardar" of a sound does.
+    // New layers, or their file moved, deleted or in a pack: a new file, as "Guardar" of a sound does.
     if (! (setFile.existsAsFile() && AVDexedLibrary::isPresetFile(setFile)
            && avIsInVisibleLibrary(setFile, root) && ! AVDexedLibrary::isReadOnly(setFile, root))) {
-        AVSaveLayersAs(suggestedName);
+        AVSaveLayersAs(std::move(completion));
         return;
     }
-    if (AVOverwritePreset(setFile, processor->getAVLayerSetId().trim(), readNativePresetName(setFile), true)
-        == AVOverwrite::holdsOtherSound)
-        AVSavePresetAs(true, setFile.getFileNameWithoutExtension(),
-                       AVDexedLibrary::writableFolderFor(root, AVDexedLibrary::userPresetsFolderName), {},
+    const auto outcome = AVOverwritePreset(setFile, processor->getAVLayerSetId().trim(), readNativePresetName(setFile), true);
+    if (outcome == AVOverwrite::holdsOtherSound) {
+        AVSaveLayersAs(std::move(completion),
                        language.format("presetReplacedElsewhere", {{"name", setFile.getFileNameWithoutExtension()}}));
-    else
-        updateUI();
+        return;
+    }
+    updateUI();
+    if (completion) completion(outcome == AVOverwrite::saved);
 }
 
-void DexedAudioProcessorEditor::AVSaveLayersAs(const String& suggestedName) {
-    // The layers' own file names them best; then the performance they came from.
-    // Always into "User Presets": the Capas page shows no browser folder.
+void DexedAudioProcessorEditor::AVSaveLayersAs(std::function<void(bool)> completion, const String& reason) {
+    // Always into "User Presets", whatever folder the browser shows: a layer's
+    // sound may come from there, the layers do not. The layers' own file names
+    // them best.
     const auto setFile = processor->getAVLayerSetFile();
     const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
-    AVSavePresetAs(true, setFile != File() ? setFile.getFileNameWithoutExtension() : suggestedName,
-                   AVDexedLibrary::writableFolderFor(root, AVDexedLibrary::userPresetsFolderName), {}, {});
+    AVSavePresetAs(true, setFile != File() ? setFile.getFileNameWithoutExtension() : String(),
+                   AVDexedLibrary::writableFolderFor(root, AVDexedLibrary::userPresetsFolderName), std::move(completion), reason);
 }
 
 void DexedAudioProcessorEditor::AVSaveSoundAs(std::function<void(bool)> completion, const String& reason) {
+    if (processor->isAVLayerModeOn()) {
+        AVSaveLayersAs(std::move(completion), reason);
+        return;
+    }
     // A layers preset (the sound is the layers' own file) stays one.
     const auto soundFile = processor->getAVPresetPath();
     AVSavePresetAs(soundFile != File() && soundFile == processor->getAVLayerSetFile(), {}, {}, std::move(completion), reason);
@@ -2374,7 +2390,7 @@ void DexedAudioProcessorEditor::loadNativePreset(const File& file) {
         if (layers) {
             // "Guardar capas" writes here again.
             safeThis->processor->setAVLayerSetContext(file, presetId);
-            safeThis->layersView.showLayerSet(file);
+            safeThis->layersView.showLayerSet();
         }
         safeThis->playView.setActiveUserPreset(file);
         safeThis->processor->updateHostDisplay();
@@ -2802,8 +2818,8 @@ bool DexedAudioProcessorEditor::keyPressed(const KeyPress& key, Component* origi
     if ( keycode == 'L' && mods.isCtrlDown() ) {
         // The bank manager lives in Advanced: from Play, go there first, so it
         // is never left open behind a hidden view.
-        if (playView.isVisible()) showAVDexedPlayView(false, false);
-        cartShow();
+        if (playView.isVisible()) AVOpenAdvanced(false, [this] { cartShow(); });
+        else cartShow();
         return true;
     }
 
