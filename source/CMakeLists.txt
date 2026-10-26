@@ -169,6 +169,7 @@ target_sources(${BaseTargetName} PRIVATE
 	engine/AVDexedVoiceBlock.cpp
 	AVDexedLayers.cpp
 	core/AVDexedLibrary.cpp
+	core/AVDexedConversion.cpp
 	core/Program.cpp
 
     engine/EngineMkI.cpp
@@ -282,7 +283,8 @@ if(DEXED_BUILD_TESTS)
         ../tests/AVDexedSysexTests.cpp
         ../tests/AVDexedLayerTests.cpp
         ../tests/AVDexedPerformanceTests.cpp
-        ../tests/AVDexedKernelTests.cpp)
+        ../tests/AVDexedKernelTests.cpp
+        ../tests/AVDexedConversionTests.cpp)
     target_include_directories(AVDexedRegressionTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../libs

@@ -867,6 +867,28 @@ uint64_t DexedAudioProcessor::getAVMusicalFingerprint(const juce::String* native
     return hash;
 }
 
+uint64_t DexedAudioProcessor::getAVSoundKey() const noexcept {
+    uint64_t hash = 14695981039346656037ULL;
+    const auto append = [&hash](const void* bytes, size_t count) {
+        const auto* data = static_cast<const uint8_t*>(bytes);
+        for (size_t i = 0; i < count; ++i)
+            hash = (hash ^ data[i]) * 1099511628211ULL;
+    };
+    for (const auto* parameter : getParameters()) {
+        if (parameter == avOutputParameter || parameter == avDelayTempoParameter)
+            continue;
+        const float soundValue = midiCCMapper != nullptr ? midiCCMapper->getAVSoundValue(parameter) : parameter->getValue();
+        const auto value = static_cast<int32_t>(std::lround(soundValue * 1000000.0f));
+        append(&value, sizeof(value));
+    }
+    // The voice without its name (bytes 145–154 of the 155), with its operator switches.
+    append(activeProgram.getRawData(), 145);
+    append(activeProgram.getRawData() + Program::PROGRAM_SIZE, 1);
+    append(currentSCLData.data(), currentSCLData.size());
+    append(currentKBMData.data(), currentKBMData.size());
+    return hash;
+}
+
 void DexedAudioProcessor::captureAVPresetBaseline() noexcept {
     avPresetBaseline.store(getAVMusicalFingerprint(), std::memory_order_relaxed);
 }

@@ -28,6 +28,9 @@ inline constexpr const char* userPresetsFolderName = "User Presets";
 inline constexpr const char* packManifestName = ".avdexed-pack.json";
 inline constexpr const char* profilesFolderName = ".profiles";
 inline constexpr const char* backupFolderName = ".migration-backup";
+/** Where the original .syx files of imported banks are kept, once AV Dexed has
+    turned their voices into sound files. Never listed, never read as sounds. */
+inline constexpr const char* syxBackupsFolderName = "UserSYXsBackups";
 /** AV Dexed's own sound file (one sound with all its settings). */
 inline constexpr const char* presetExtension = ".avdexpreset";
 /** The same format as it was named until 0.2.0; still read everywhere. */
@@ -178,6 +181,19 @@ ImportResult importVoices(const juce::Array<juce::File>& sources, const juce::Fi
                           const juce::String& bankName, FolderIndex* index = nullptr);
 /** Same for an .avdexpreset (or .dexedpreset) sound (no content check beyond its size). */
 ImportResult importPreset(const juce::File& source, const juce::File& folder, FolderIndex* index = nullptr);
+
+/** One bank found in a file, as the library would play it. */
+struct SourceBank {
+    Cartridge bank;
+    BankSettings settings;   // embedded in a standard bank file; none for a bank taken out of a dump
+    juce::String name;       // the file's name ("Rhodes"), numbered when the file holds several ("Archivo 2")
+    int voices = 32;         // a bank built from single voices: only its first `voices` are real
+};
+/** The banks of a file of the DX7 family, the way importBank reads them: a
+    standard bank file as it is (with its settings and AMEM), every distinct
+    bank of a dump or archive, single voices gathered in banks of 32. Empty
+    when it holds no voice (a performance file, something else). */
+std::vector<SourceBank> readSourceBanks(const juce::File& file);
 
 //==============================================================================
 /** Fingerprints of every bank in the library. */

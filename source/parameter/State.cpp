@@ -2,6 +2,7 @@
 #include "parameter/Model.h"
 #include "StateLegacy.h"
 #include "midi/MidiCCHandler.h"
+#include "core/AVDexedSysex.h"
 #include <cstdlib>
 #include <set>
 
@@ -462,8 +463,14 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
         captureAVPresetBaseline();
     // The layers belong to the session; a sound file loads into the selected layer.
     if (avLoadingSoundFile) {
-        avLayers[size_t(avSelectedLayer.load(std::memory_order_acquire))].setProgram(activeProgram);
-        setAVLayerVoiceExtras(avSelectedLayer.load(std::memory_order_acquire), nullptr);
+        const int selected = avSelectedLayer.load(std::memory_order_acquire);
+        avLayers[size_t(selected)].setProgram(activeProgram);
+        // A DX7II voice of a converted bank brings its unison, random pitch
+        // and mono to its layer, as it does from the bank.
+        juce::MemoryBlock amem;
+        const bool hasAmem = amem.fromBase64Encoding(session.getProperty("voiceAmem").toString())
+            && amem.getSize() == size_t(AVDexedSysex::amemVoiceBytes);
+        setAVLayerVoiceExtras(selected, hasAmem && isAVLayerModeOn() ? static_cast<const uint8_t*>(amem.getData()) : nullptr);
     }
     else
         restoreAVLayersState(storage.getChildWithName("avLayers"));
@@ -473,6 +480,13 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
 
 
 juce::MemoryBlock DexedAudioProcessor::createAVNativePresetState(const juce::String& name, const juce::String& id, bool withLayers) {
+    juce::MemoryBlock bytes;
+    if (const auto tree = createAVNativePresetTree(name, id, withLayers); tree.isValid())
+        if (auto nativeXml = tree.createXml()) copyXmlToBinary(*nativeXml, bytes);
+    return bytes;
+}
+
+juce::ValueTree DexedAudioProcessor::createAVNativePresetTree(const juce::String& name, const juce::String& id, bool withLayers) {
     const juce::ScopedLock avStateLock(getCallbackLock());
     juce::MemoryBlock bytes;
     getStateInformation(bytes);
@@ -512,6 +526,49 @@ juce::MemoryBlock DexedAudioProcessor::createAVNativePresetState(const juce::Str
     session.setProperty("avPresetPath", juce::String(), nullptr);
     session.setProperty("avPresetBaseline", juce::String::toHexString(static_cast<juce::int64>(getAVMusicalFingerprint(&name))), nullptr);
     session.setProperty("avPresetBaselineFormat", avPresetBaselineFormat, nullptr);
-    if (auto nativeXml = tree.createXml()) copyXmlToBinary(*nativeXml, bytes);
-    return bytes;
+    return tree;
+}
+
+AVDexedConversion::Result DexedAudioProcessor::convertAVBanks(const AVDexedConversion::Request& request,
+                                                              const std::function<bool(float)>& progress) {
+    DexedAudioProcessor converter(SetupMode::isolatedTest);
+    const AVDexedLibrary::SourceBank* installed = nullptr;
+    // The voices of one bank come in a row: the bank is installed once.
+    return AVDexedConversion::convert(request, [&converter, &installed](const AVDexedLibrary::SourceBank& bank, int slot,
+                                                                         const juce::String& name, int order) {
+        if (installed != &bank) {
+            converter.installAVConversionBank(bank);
+            installed = &bank;
+        }
+        return converter.makeAVSoundFile(slot, name, bank.name, order);
+    }, progress);
+}
+
+void DexedAudioProcessor::installAVConversionBank(const AVDexedLibrary::SourceBank& bank) {
+    installAVActiveBank(bank.bank, juce::File(), makeAVSoundTable(bank.settings));
+}
+
+AVDexedConversion::MadeSound DexedAudioProcessor::makeAVSoundFile(int slot, const juce::String& name,
+                                                                  const juce::String& bankName, int order) {
+    setCurrentProgram(slot);   // the voice with its settings, as the browser plays it
+    AVDexedConversion::MadeSound made;
+    made.key = getAVSoundKey();
+    auto tree = createAVNativePresetTree(name, juce::Uuid().toString(), false);
+    if (! tree.isValid()) return made;
+    // The instrument's: a sound file without them leaves them as they are.
+    tree.removeChild(tree.getChildWithName(IDs::profile), nullptr);
+    tree.removeChild(tree.getChildWithName("tuning"), nullptr);
+    auto session = tree.getChildWithName(sessionNode);
+    session.removeProperty(cartridgeProperty, nullptr);
+    session.removeProperty("cartridgeAmem", nullptr);
+    session.setProperty("sourcePath", juce::String(), nullptr);
+    session.setProperty("avSoundFromBankSlot", false, nullptr);
+    session.setProperty("avSourceBank", bankName, nullptr);
+    session.setProperty("avSourceSlot", slot, nullptr);
+    session.setProperty("avLibraryOrder", order, nullptr);
+    session.setProperty("avSoundKey", juce::String::toHexString(static_cast<juce::int64>(made.key)), nullptr);
+    if (const auto* amem = currentCart.getAmemVoice(slot))
+        session.setProperty("voiceAmem", juce::MemoryBlock(amem, AVDexedSysex::amemVoiceBytes).toBase64Encoding(), nullptr);
+    if (auto xml = tree.createXml()) copyXmlToBinary(*xml, made.state);
+    return made;
 }

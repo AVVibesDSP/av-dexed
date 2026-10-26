@@ -17,6 +17,8 @@ bool runAVDexedVoiceTests();
 bool runAVDexedDropTests();
 bool runAVDexedSysexTests();
 bool runAVDexedLayerTests();
+bool runAVDexedConversionTests();
+int AVRunConvertCheck(const juce::File& library);
 bool runAVDexedPerformanceTests();
 bool runAVDexedKernelTests();
 int AVRunGolden(const juce::StringArray& arguments);
@@ -148,6 +150,8 @@ int main(int argc, char** argv)
         for (int i = 2; i < argc; ++i) arguments.add(juce::String::fromUTF8(argv[i]));
         return AVRunImport(arguments);
     }
+    if (argc == 3 && juce::String(argv[1]) == "--convert-check")
+        return AVRunConvertCheck(juce::File(juce::String::fromUTF8(argv[2])));
     if (argc >= 2 && juce::String(argv[1]) == "--golden") {
         juce::StringArray arguments;
         for (int i = 2; i < argc; ++i) arguments.add(juce::String::fromUTF8(argv[i]));
@@ -162,6 +166,7 @@ int main(int argc, char** argv)
     passed &= runAVDexedDropTests();
     passed &= runAVDexedSysexTests();
     passed &= runAVDexedLayerTests();
+    passed &= runAVDexedConversionTests();
     passed &= runAVDexedPerformanceTests();
     passed &= runAVDexedKernelTests();
     std::cout << (passed ? "AV Dexed regression tests passed.\n" : "AV Dexed regression tests FAILED.\n");

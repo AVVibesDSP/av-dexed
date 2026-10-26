@@ -47,7 +47,8 @@ bool isBankFile(const File& file) {
 
 bool isReservedFolderName(const String& name) {
     // Folders of the data folder that are not sound folders.
-    return name.equalsIgnoreCase("Cartridges") || name.equalsIgnoreCase("Profiles");
+    return name.equalsIgnoreCase("Cartridges") || name.equalsIgnoreCase("Profiles")
+        || name.equalsIgnoreCase(syxBackupsFolderName);
 }
 
 CriticalSection& libraryMutex() { static CriticalSection mutex; return mutex; }
@@ -674,6 +675,38 @@ ImportResult importBank(const File& source, const File& folder, FolderIndex* ind
         return result;
     }
     return writeBankFiles(banks, source.getFileNameWithoutExtension(), folder, index, false);
+}
+
+std::vector<SourceBank> readSourceBanks(const File& file) {
+    std::vector<SourceBank> found;
+    MemoryBlock bytes;
+    if (! readImportable(file, bytes)) return found;
+    const auto stem = file.getFileNameWithoutExtension();
+    Cartridge plain;
+    if (isPlainBankFile(bytes) && readBank(file, plain)) {
+        found.push_back({ plain, readEmbeddedSettings(bytes), stem, 32 });
+        return found;
+    }
+    // As importBank writes them: a standard file per distinct bank, read back.
+    const auto contents = AVDexedSysex::scan(bytes);
+    std::vector<std::pair<MemoryBlock, int>> banks;
+    std::vector<const AVDexedSysex::Bank*> distinct;
+    for (const auto& bank : contents.banks)
+        if (std::none_of(distinct.begin(), distinct.end(), [&bank](const auto* kept) { return kept->voices == bank.voices; }))
+            distinct.push_back(&bank);
+    for (const auto* bank : distinct)
+        banks.emplace_back(standardBankFile(*bank), 32);
+    if (banks.empty())
+        banks = voicesToBankFiles(contents.voices);
+    for (size_t i = 0; i < banks.size(); ++i) {
+        SourceBank source;
+        const int rc = source.bank.load(static_cast<const uint8_t*>(banks[i].first.getData()), int(banks[i].first.getSize()));
+        if (rc != 0 && rc != 1) continue;
+        source.name = banks.size() > 1 ? stem + " " + String(int(i + 1)) : stem;
+        source.voices = banks[i].second;
+        found.push_back(std::move(source));
+    }
+    return found;
 }
 
 bool isSingleVoiceFile(const File& file) {

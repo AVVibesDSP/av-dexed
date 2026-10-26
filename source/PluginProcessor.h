@@ -42,6 +42,7 @@
 #include "core/Program.h"
 #include "core/AVDexedLibrary.h"
 #include "core/AVDexedPerformance.h"
+#include "core/AVDexedConversion.h"
 #include "util/CommandFifo.h"
 
 struct ProcessorVoice {
@@ -294,6 +295,25 @@ public :
     /** A sound file (.avdexpreset). `withLayers`: it also carries every layer
         (a layers preset, saved by "Guardar capas"). */
     juce::MemoryBlock createAVNativePresetState(const juce::String& name, const juce::String& id, bool withLayers = false);
+    /** Banks of the DX7 family turned into sound files (AVDexedConversion), by
+        an instance of its own that reads and writes nothing of the user's.
+        Message thread. */
+    static AVDexedConversion::Result convertAVBanks(const AVDexedConversion::Request& request,
+                                                    const std::function<bool(float)>& progress = {});
+    /** In a converter instance (SetupMode::isolatedTest): `bank` installed
+        with its settings, as a bank file of the library plays. */
+    void installAVConversionBank(const AVDexedLibrary::SourceBank& bank);
+    /** In a converter instance: the installed bank's voice `slot` as the sound
+        file it becomes, loaded the way the browser loads it and saved the way
+        "Guardar como" saves it. Without the whole bank, and without the MIDI
+        assignments and the tuning: those are the instrument's, and loading
+        the sound keeps them as loading the bank voice does. It keeps where it
+        came from (`bankName`, the slot), its place in its folder and, for a
+        DX7II voice, its additional data (unison, random pitch, mono). */
+    AVDexedConversion::MadeSound makeAVSoundFile(int slot, const juce::String& name, const juce::String& bankName, int order);
+    /** The sound without its name (every parameter but the instrument's, the
+        voice, the tuning): the same for two voices that differ only in name. */
+    uint64_t getAVSoundKey() const noexcept;
     bool loadAVStateInformation(const void* data, int sizeInBytes);
     /** Loads a .dexedpreset. Unlike a host session, a sound file never changes
         the instrument-wide settings: "Volumen general" and the local tempo keep
@@ -507,6 +527,7 @@ public :
     // TUNING STUFF ====================================================
 private:
     uint64_t getAVMusicalFingerprint(const juce::String* nativeName = nullptr) const noexcept;
+    juce::ValueTree createAVNativePresetTree(const juce::String& name, const juce::String& id, bool withLayers);
     juce::String avPresetName;
     juce::String avPresetId;
     juce::File avPresetPath;
