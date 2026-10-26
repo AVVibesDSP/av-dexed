@@ -54,8 +54,17 @@ FolderState readFolder(const File& folder) {
     for (const auto& entry : RangedDirectoryIterator(folder, false, "*", File::findFiles)) {
         const auto file = entry.getFile();
         state.taken.insert(file.getFileNameWithoutExtension().toLowerCase());
-        if (AVDexedLibrary::isPresetFile(file))
-            if (const auto key = readSoundKey(file); key != 0) state.keys.insert(key);
+        MemoryBlock data;
+        if (! AVDexedLibrary::isPresetFile(file) || file.getSize() > 32 * 1024 * 1024 || ! file.loadFileAsData(data))
+            continue;
+        // Sounds converted before: the same sound is not added again, and new
+        // ones come after them.
+        if (const auto xml = readSoundXml(data))
+            if (const auto* session = xml->getChildByName("session"))
+                if (const auto key = uint64(session->getStringAttribute("avSoundKey").getHexValue64()); key != 0) {
+                    state.keys.insert(key);
+                    state.nextOrder = jmax(state.nextOrder, session->getIntAttribute("avLibraryOrder", -1) + 1);
+                }
     }
     return state;
 }
@@ -215,9 +224,15 @@ Result convert(const Request& request, const SoundMaker& make, const std::functi
 
     {
         const AVDexedLibrary::LibraryScope lock(10000);
-        std::vector<File> moved;
+        std::vector<File> moved, created;
         const auto undo = [&]() {
             for (const auto& file : moved) file.deleteFile();
+            // The folders made for them, deepest first, while they are empty.
+            std::sort(created.begin(), created.end(), [](const File& a, const File& b) {
+                return a.getFullPathName().length() > b.getFullPathName().length();
+            });
+            for (const auto& folder : created)
+                if (folder.isDirectory() && folder.getNumberOfChildFiles(File::findFilesAndDirectories) == 0) folder.deleteFile();
             if (result.backup != File()) result.backup.deleteRecursively();
             result.backup = File();
             return fail();
@@ -227,6 +242,9 @@ Result convert(const Request& request, const SoundMaker& make, const std::functi
             auto target = item.target;
             // Taken meanwhile (another AV Dexed, Finder): never overwritten.
             if (target.exists()) target = AVDexedLibrary::uniqueDestination(target.getParentDirectory(), target.getFileName());
+            for (auto folder = target.getParentDirectory(); ! folder.exists() && folder != folder.getParentDirectory();
+                 folder = folder.getParentDirectory())
+                created.push_back(folder);
             if (! target.getParentDirectory().createDirectory() || ! item.staged.moveFileTo(target))
                 return undo();
             moved.push_back(target);

@@ -372,6 +372,14 @@ bool testConvertFolder() {
     const auto flatResult = DexedAudioProcessor::convertAVBanks(flat);
     passed &= expect(flatResult.ok && presetsIn(root.getChildFile("Plano")).size() == 62 && ! flatResult.backup.exists(),
                      "the flat layout puts every voice in the folder itself");
+    // More banks into the same folder later: after the sounds already there.
+    AVDexedConversion::Request later = flat;
+    later.sources = { soloFile };
+    const auto laterResult = DexedAudioProcessor::convertAVBanks(later);
+    bool after = laterResult.ok && laterResult.files.size() == 2;
+    for (const auto& file : laterResult.files)
+        after &= session(readXml(file)) != nullptr && session(readXml(file))->getIntAttribute("avLibraryOrder") >= 62;
+    passed &= expect(after, "sounds added to a folder later come after the ones already there");
 
     // Cancelled, or a destination it cannot write: nothing changes, no backup is left.
     const int backupsBefore = backups.getNumberOfChildFiles(juce::File::findDirectories);
