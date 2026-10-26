@@ -106,12 +106,18 @@ int filesNamed(const juce::File& root, const juce::String& name)
     return count;
 }
 
-juce::MemoryBlock makeBank()
+juce::MemoryBlock makeBank(int seed = 0)
 {
+    // 32 different sounds (an Init voice would be an empty slot): the Init
+    // voice with each slot's own algorithm.
     Cartridge bank;
-    auto program = Program::initialProgram();
-    for (int slot = 0; slot < 32; ++slot)
-        bank.packProgram(program.getRawData(), slot, "DROP " + juce::String(slot));
+    for (int slot = 0; slot < 32; ++slot) {
+        uint8_t data[Program::PROGRAM_SIZE + 1];
+        std::memcpy(data, Program::initialProgram().getRawData(), sizeof(data));
+        data[134] = uint8_t(slot);
+        data[144] = uint8_t(12 + seed % 25);   // another seed, other sounds
+        bank.packProgram(data, slot, "DROP " + juce::String(slot));
+    }
     return juce::MemoryBlock(bank.getVoiceSysex(), SYSEX_SIZE);
 }
 }
@@ -325,8 +331,9 @@ bool runAVDexedDropTests()
             passed &= expect(userPresets.getChildFile("Viejo.avdexpreset").existsAsFile() && ! userPresets.getChildFile("Viejo.dexedpreset").exists(),
                              "an old .dexedpreset arrives as .avdexpreset");
 
-            // A bank and a sound together: the bank's name is suggested, both
-            // land there, the bank loads first, 33 sounds are counted.
+            // A bank and a sound together: the bank's name is suggested, the
+            // bank becomes 32 sounds there (its file kept in the backups), the
+            // first of them loads, 33 sounds are counted.
             const auto bankFile = outside.getChildFile("Finetales.syx");
             const auto bankBytes = makeBank();
             passed &= expect(bankFile.replaceWithData(bankBytes.getData(), bankBytes.getSize()), "a bank is written outside");
@@ -337,11 +344,82 @@ bool runAVDexedDropTests()
             passed &= expect(prompt != nullptr && promptText(*prompt) == "Finetales", "a bank with sounds suggests the bank's name");
             if (prompt != nullptr) answerPrompt(*prompt, true);
             const auto bankFolder = root.getChildFile("Finetales");
-            passed &= expect(bankFolder.getChildFile("Finetales.syx").existsAsFile() && bankFolder.getChildFile("Extra.avdexpreset").existsAsFile(),
-                             "the bank and the sound land in that folder");
-            passed &= expect(pumpUntil([&] { return processor.activeFileCartridge == bankFolder.getChildFile("Finetales.syx"); }, 3000),
-                             "the bank loads first");
+            passed &= expect(pumpUntil([&] { return processor.getAVPresetPath() == bankFolder.getChildFile("DROP 0.avdexpreset"); }, 5000),
+                             "the first sound of the bank loads");
+            passed &= expect(presetsIn(bankFolder) == 33 && ! bankFolder.getChildFile("Finetales.syx").exists()
+                                 && bankFolder.getChildFile("Extra.avdexpreset").existsAsFile(),
+                             "the bank becomes 32 sounds in that folder, next to the sound");
             passed &= expect(editor->AVNoticeText.contains("33"), "32 voices and 1 sound are counted");
+            bool backedUp = false;
+            for (const auto& entry : RangedDirectoryIterator(root.getChildFile(AVDexedLibrary::syxBackupsFolderName), true, "Finetales.syx", File::findFiles))
+                backedUp |= entry.getFile().hasIdenticalContentTo(bankFile);
+            passed &= expect(backedUp && bankFile.existsAsFile(), "the bank's file is kept in the backups, and the dropped one stays");
+            pump(200);
+
+            // Several banks at once: one question, a folder per bank inside the
+            // folder chosen, which the browser shows (all of them, one list).
+            const auto several = outside.getChildFile("Varios");
+            several.createDirectory();
+            StringArray severalPaths;
+            for (int i = 0; i < 3; ++i) {
+                const auto file = several.getChildFile("Banco " + String(i + 1) + ".syx");
+                const auto bytes = makeBank(i + 1);
+                file.replaceWithData(bytes.getData(), bytes.getSize());
+                severalPaths.add(path(file));
+            }
+            editor->filesDropped(severalPaths, 10, 10);
+            prompt = openPrompt();
+            passed &= expect(prompt != nullptr, "several banks ask for one folder");
+            if (prompt != nullptr) answerPrompt(*prompt, true, "Mis bancos");
+            const auto mine = root.getChildFile("Mis bancos");
+            passed &= expect(pumpUntil([&] { return presetsIn(mine.getChildFile("Banco 3")) == 32; }, 5000)
+                                 && presetsIn(mine.getChildFile("Banco 1")) == 32 && presetsIn(mine) == 0,
+                             "several banks become a folder each inside the folder chosen");
+            passed &= expect(pumpUntil([&] { return editor->playView.selectedFolderKey == "folder:Mis bancos"; }, 3000),
+                             "and the browser shows that folder");
+            pump(200);
+
+            // A dropped folder with folders in it: the same structure, a folder per bank.
+            const auto collection = outside.getChildFile("Coleccion");
+            for (const auto* name : { "Pianos/P1.syx", "Bajos/B1.syx" }) {
+                const auto file = collection.getChildFile(name);
+                file.getParentDirectory().createDirectory();
+                const auto bytes = makeBank(7);
+                file.replaceWithData(bytes.getData(), bytes.getSize());
+            }
+            editor->filesDropped({ path(collection) }, 10, 10);
+            prompt = openPrompt();
+            passed &= expect(prompt != nullptr && promptText(*prompt) == "Coleccion", "a dropped folder suggests its name");
+            if (prompt != nullptr) answerPrompt(*prompt, true);
+            passed &= expect(pumpUntil([&] { return presetsIn(root.getChildFile("Coleccion/Bajos/B1")) == 32; }, 5000)
+                                 && presetsIn(root.getChildFile("Coleccion/Pianos/P1")) == 32,
+                             "a dropped folder keeps its structure, a folder per bank");
+            pump(200);
+
+            // A long conversion shows its progress, and cancelling it leaves
+            // the library and the backups as they were.
+            const auto big = outside.getChildFile("Grande");
+            big.createDirectory();
+            for (int i = 0; i < 60; ++i) {
+                const auto bytes = makeBank(i);
+                big.getChildFile("G" + String(i + 1) + ".syx").replaceWithData(bytes.getData(), bytes.getSize());
+            }
+            const auto backupsBefore = root.getChildFile(AVDexedLibrary::syxBackupsFolderName).getNumberOfChildFiles(File::findDirectories);
+            editor->filesDropped({ path(big) }, 10, 10);
+            prompt = openPrompt();
+            if (prompt != nullptr) answerPrompt(*prompt, true);
+            AVDexedPromptOverlay* progress = nullptr;
+            passed &= expect(pumpUntil([&] { progress = editor->AVConversionPrompt.getComponent(); return progress != nullptr; }, 4000)
+                                 && processor.isAVConverting(),
+                             "a long conversion shows its progress");
+            if (progress != nullptr) progress->keyPressed(KeyPress(KeyPress::escapeKey));
+            passed &= expect(pumpUntil([&] { return ! processor.isAVConverting() && openPrompt() != nullptr; }, 8000),
+                             "Escape cancels it, and a notice says so");
+            if (auto* notice = openPrompt()) answerPrompt(*notice, true);
+            passed &= expect(! root.getChildFile("Grande").exists()
+                                 && root.getChildFile(AVDexedLibrary::syxBackupsFolderName).getNumberOfChildFiles(File::findDirectories) == backupsBefore,
+                             "a cancelled import leaves the library and the backups as they were");
+            pump(200);
 
             // Escape in the folder question: nothing is copied.
             const auto cancelled = outside.getChildFile("Cancelado.avdexpreset");
@@ -390,9 +468,9 @@ bool runAVDexedDropTests()
             passed &= expect(processor.getAVPresetName() != "Durante" && editor->playView.isModified(), "Cancel keeps the sound being edited");
             passed &= expect(openPrompt() == nullptr, "no dialog is left open");
 
-            // A TX802 performance file (no banks in it) opens in the Layers
-            // page, its voices from the bank next to it; nothing is copied.
-            // The edited sound is asked about first.
+            // A TX802 performance file (no banks in it) becomes a layers
+            // preset per performance, its voices from the bank next to it.
+            // The edited sound is asked about before the first one plays.
             {
                 std::vector<uint8_t> pmem(84, 0);
                 for (int tg = 0; tg < 8; ++tg) {
@@ -430,17 +508,27 @@ bool runAVDexedDropTests()
                 passed &= expect(editor->isInterestedInFileDrag({ path(performanceFile) }), "a performance file is accepted");
                 editor->filesDropped({ path(performanceFile) }, 10, 10);
                 prompt = openPrompt();
-                passed &= expect(prompt != nullptr, "the edited sound is asked about before the performance replaces it");
-                if (prompt != nullptr) answerPrompt(*prompt, false);
+                passed &= expect(prompt != nullptr && promptText(*prompt) == "SetPerf", "a performance file asks for its folder, as a bank does");
+                if (prompt != nullptr) answerPrompt(*prompt, true, "Performances TX");
+                const auto performancePreset = root.getChildFile("Performances TX").getChildFile("Drop Performance.avdexpreset");
+                passed &= expect(pumpUntil([&] { return openPrompt() != nullptr; }, 5000) && performancePreset.existsAsFile(),
+                                 "each performance becomes a layers preset; the edited sound is asked about before it plays");
+                if (auto* question = openPrompt()) answerPrompt(*question, false);
                 passed &= expect(! processor.isAVLayerModeOn(), "Cancel keeps the sound and leaves the layers alone");
+                MemoryBlock performanceBytes;
+                const auto performanceXml = performancePreset.loadFileAsData(performanceBytes)
+                    ? AudioProcessor::getXmlFromBinary(performanceBytes.getData(), int(performanceBytes.getSize())) : nullptr;
+                passed &= expect(performanceXml != nullptr && performanceXml->getChildByName("avLayers") != nullptr,
+                                 "the layers preset carries the performance's layers");
                 processor.captureAVPresetBaseline();   // nothing to save now
                 editor->playView.refreshLabels();
-                editor->filesDropped({ path(performanceFile) }, 10, 10);
+                editor->loadNativePreset(performancePreset);
                 pump(100);
-                passed &= expect(openPrompt() == nullptr && editor->layersView.isVisible() && processor.isAVLayerModeOn()
+                passed &= expect(openPrompt() == nullptr && processor.isAVLayerModeOn()
                                      && processor.getAVLayerProgram(7).getName().trim() == "TXV 8",
-                                 "a dropped performance plays in the Layers page with the voices next to it");
-                passed &= expect(AVDexedLibrary::findSoundFiles(root).size() == libraryFiles, "nothing is copied into the library");
+                                 "it plays its eight layers, the voices from the bank next to the performance file");
+                passed &= expect(AVDexedLibrary::findSoundFiles(root).size() == libraryFiles + 1,
+                                 "only the layers preset is added (the performance file goes to the backups)");
 
                 // An old layers file (.avdexlayers, 0.3.2): the layers in an XML of their own.
                 const auto layersFile = outside.getChildFile("Mis capas.avdexlayers");

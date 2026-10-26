@@ -230,7 +230,6 @@ public:
 private:
     struct PresetEntry;
     friend bool AVRenderUIEvidence(const juce::File&);
-    friend bool runAVDexedDropTests();
     friend bool AVRunLibraryQA(const juce::File&);
     friend bool runAVDexedDropTests();
     int getNumRows() override;

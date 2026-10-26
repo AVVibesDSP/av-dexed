@@ -696,10 +696,12 @@ std::vector<SourceBank> readSourceBanks(const File& file) {
             distinct.push_back(&bank);
     for (const auto* bank : distinct)
         banks.emplace_back(standardBankFile(*bank), 32);
-    if (banks.empty())
+    const bool singleVoices = banks.empty();
+    if (singleVoices)
         banks = voicesToBankFiles(contents.voices);
     for (size_t i = 0; i < banks.size(); ++i) {
         SourceBank source;
+        source.singleVoices = singleVoices;
         const int rc = source.bank.load(static_cast<const uint8_t*>(banks[i].first.getData()), int(banks[i].first.getSize()));
         if (rc != 0 && rc != 1) continue;
         source.name = banks.size() > 1 ? stem + " " + String(int(i + 1)) : stem;

@@ -188,6 +188,7 @@ struct SourceBank {
     BankSettings settings;   // embedded in a standard bank file; none for a bank taken out of a dump
     juce::String name;       // the file's name ("Rhodes"), numbered when the file holds several ("Archivo 2")
     int voices = 32;         // a bank built from single voices: only its first `voices` are real
+    bool singleVoices = false;   // built from single voices (VCED), not a bank of the file
 };
 /** The banks of a file of the DX7 family, the way importBank reads them: a
     standard bank file as it is (with its settings and AMEM), every distinct

@@ -541,11 +541,40 @@ AVDexedConversion::Result DexedAudioProcessor::convertAVBanks(const AVDexedConve
             installed = &bank;
         }
         return converter.makeAVSoundFile(slot, name, bank.name, order);
+    }, [&converter, &installed](const auto& layers, const juce::String& name, const juce::String& sourceName, int number, int order) {
+        installed = nullptr;   // the layers replace the voice played
+        return converter.makeAVLayersFile(layers, name, sourceName, number, order);
     }, progress);
 }
 
 void DexedAudioProcessor::installAVConversionBank(const AVDexedLibrary::SourceBank& bank) {
     installAVActiveBank(bank.bank, juce::File(), makeAVSoundTable(bank.settings));
+}
+
+AVDexedConversion::MadeSound DexedAudioProcessor::makeAVLayersFile(
+    const std::array<AVDexedPerformance::ResolvedLayer, AVLayerCount>& layers, const juce::String& name,
+    const juce::String& sourceName, int number, int order) {
+    applyAVLayerSetup(layers);   // as the Capas page installs a performance
+    AVDexedConversion::MadeSound made;
+    auto tree = createAVNativePresetTree(name, juce::Uuid().toString(), true);
+    setAVLayerMode(false);       // the next voice converts as one sound
+    if (! tree.isValid()) return made;
+    tree.removeChild(tree.getChildWithName(IDs::profile), nullptr);
+    tree.removeChild(tree.getChildWithName("tuning"), nullptr);
+    // The same performance again: the same layers (their voices and settings).
+    const auto layersXml = tree.getChildWithName("avLayers").toXmlString();
+    made.key = AVDexedLibrary::stableHash64(layersXml.toRawUTF8(), layersXml.getNumBytesAsUTF8());
+    auto session = tree.getChildWithName(sessionNode);
+    session.removeProperty(cartridgeProperty, nullptr);
+    session.removeProperty("cartridgeAmem", nullptr);
+    session.setProperty("sourcePath", juce::String(), nullptr);
+    session.setProperty("avSoundFromBankSlot", false, nullptr);
+    session.setProperty("avSourceBank", sourceName, nullptr);
+    session.setProperty("avSourceSlot", number - 1, nullptr);
+    session.setProperty("avLibraryOrder", order, nullptr);
+    session.setProperty("avSoundKey", juce::String::toHexString(static_cast<juce::int64>(made.key)), nullptr);
+    if (auto xml = tree.createXml()) copyXmlToBinary(*xml, made.state);
+    return made;
 }
 
 AVDexedConversion::MadeSound DexedAudioProcessor::makeAVSoundFile(int slot, const juce::String& name,

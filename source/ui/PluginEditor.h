@@ -271,6 +271,14 @@ class DexedAudioProcessorEditor  : public AudioProcessorEditor, public ComboBox:
         first valid bank (or else the first preset), then tells what was refused. */
     void AVOpenImportedSounds(const Array<File>& banks, const Array<File>& presets, const File& folder,
                               StringArray refused, StringArray failed);
+    /** Banks of an import converted into sounds on the processor's thread; a
+        dialog shows the progress when it takes a while (and cancels it). Then
+        the folder opens with its first sound and the footer tells what was added. */
+    void AVStartImportConversion(const AVDexedConversion::Request& request, Array<File> banks, Array<File> presets,
+                                 StringArray refused, StringArray failed, int copied);
+    void AVFinishImportConversion(const AVDexedConversion::Result& result, const File& folder, Array<File> banks,
+                                  Array<File> presets, StringArray refused, StringArray failed, int copied);
+    Component::SafePointer<AVDexedPromptOverlay> AVConversionPrompt;
     void loadNativePreset(const File& file);
 public:
     DexedAudioProcessor *processor;

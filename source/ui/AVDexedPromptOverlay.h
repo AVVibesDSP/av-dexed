@@ -20,7 +20,7 @@
     117 ms out. Return confirms (unless the caller turns that off); Escape, the X
     or a click outside cancel; Tab cycles inside the dialog. A validator can keep
     it open with a message. */
-class AVDexedPromptOverlay final : public juce::Component, private juce::ComponentListener {
+class AVDexedPromptOverlay final : public juce::Component, private juce::ComponentListener, private juce::Timer {
 public:
     struct Options {
         juce::String title, message;
@@ -36,6 +36,12 @@ public:
         bool returnConfirms = true;
         /** Returns an error to show (dialog stays open) or an empty string. */
         std::function<juce::String(const juce::String&)> validate;
+        /** A progress dialog: a bar under the message, read ten times a second
+            (0–1), with the message read again each time when `progressMessage`
+            is given. A click outside does not close it; its pill, Escape and
+            the X do (as a cancel); dismiss() when the work is done. */
+        std::function<float()> progress;
+        std::function<juce::String()> progressMessage;
     };
     using Result = std::function<void(bool confirmed, const juce::String& text)>;
 
@@ -78,4 +84,7 @@ private:
     /** `alternative`: the third pill was chosen (onAlt runs instead of the result). */
     void finish(bool confirmed, bool alternative = false);
     void componentMovedOrResized(juce::Component&, bool, bool) override;
+    juce::Rectangle<float> AVProgressBar;
+    float AVShownProgress = -1.0f;
+    void timerCallback() override;
 };

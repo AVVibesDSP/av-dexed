@@ -219,6 +219,7 @@ bool avAllImportable(const juce::StringArray& files) {
 struct AVImportFiles {
     juce::Array<juce::File> banks, presets;
     juce::String folderName;   // the first dropped folder: the suggested library folder
+    juce::File folder;         // that folder
 };
 
 /** The banks and presets among `items`, looking inside folders. Hidden and
@@ -235,7 +236,10 @@ AVImportFiles avCollectImportFiles(const juce::Array<juce::File>& items) {
     };
     for (const auto& item : items) {
         if (! item.isDirectory()) { add(item); continue; }
-        if (found.folderName.isEmpty()) found.folderName = item.getFileName();
+        if (found.folderName.isEmpty()) {
+            found.folderName = item.getFileName();
+            found.folder = item;
+        }
         int visited = 0;
         for (const auto& entry : RangedDirectoryIterator(item, true, "*", File::findFiles | File::ignoreHiddenFiles,
                                                          File::FollowSymlinks::noCycles)) {
@@ -1053,22 +1057,19 @@ void DexedAudioProcessorEditor::loadCart(File file) {
 
 void DexedAudioProcessorEditor::importBanks(const Array<File>& dropped) {
     if (dropped.isEmpty()) return;
-    // A DX7II or TX802 performance file (no banks in it) opens in the Layers page.
+    // An old layers file (.avdexlayers) opens in the Layers page. DX7II and
+    // TX802 performances are imported with the banks: each one a layers preset.
     Array<File> files;
-    File performances;
     File layers;
     for (const auto& file : dropped) {
         if (file.isDirectory()) files.add(file);
         else if (avIsLayersPath(file.getFileName())) layers = file;
-        else if (AVDexedLayersView::isPerformanceOnlyFile(file)) performances = file;
         else files.add(file);
     }
-    if (performances != File() || layers != File())
+    if (layers != File()) {
         showAVView(AVView::layers);
-    if (performances != File())
-        layersView.loadPerformanceFile(performances);
-    if (layers != File())
         layersView.loadLayersFile(layers);
+    }
     if (files.isEmpty()) return;
     auto& language = AVDexedLanguageService::getInstance();
     const auto root = AVDexedLibrary::rootFor(DexedAudioProcessor::dexedAppDir);
@@ -1158,30 +1159,109 @@ void DexedAudioProcessorEditor::importBanks(const Array<File>& dropped) {
             record(isBank ? AVDexedLibrary::importBank(file, folder, &folderContents)
                           : AVDexedLibrary::importPreset(file, folder, &folderContents), file.getFileName(), isBank);
         };
-        // Single voices (one DX7 voice per file) of one folder become banks of
-        // 32 named after that folder; a lone one becomes a bank of its own.
-        std::map<String, Array<File>> singleVoices;
-        Array<File> bankFiles;
+        // Banks from outside become sounds, one .avdexpreset per voice (their
+        // original files kept in UserSYXsBackups); sounds are copied as they
+        // are; what is in the library already stays where it is.
+        Array<File> toConvert;
         for (const auto& bank : found.banks) {
-            if (! avIsInVisibleLibrary(bank, root) && AVDexedLibrary::isSingleVoiceFile(bank))
-                singleVoices[bank.getParentDirectory().getFullPathName()].add(bank);
-            else
-                bankFiles.add(bank);
+            if (avIsInVisibleLibrary(bank, root)) banks.add(bank);
+            else toConvert.add(bank);
         }
-        for (const auto& [directory, voices] : singleVoices) {
-            if (voices.size() < 2) { bankFiles.add(voices.getFirst()); continue; }
-            record(AVDexedLibrary::importVoices(voices, folder, File(directory).getFileName(), &folderContents),
-                   File(directory).getFileName(), true);
-        }
-        for (const auto& bank : bankFiles) take(bank, true);
         for (const auto& preset : found.presets) take(preset, false);
-        if (added > 0)
-            safeThis->showAVFooterNotice(lang.format(added == 1 ? "importedNoticeOne" : "importedNotice",
-                                                     {{"folder", folder.getFileName()}, {"count", String(added)}}));
-        else if (alreadyThere > 0)
-            safeThis->showAVFooterNotice(lang.format("alreadyInFolder", {{"folder", folder.getFileName()}}));
-        safeThis->AVOpenImportedSounds(banks, presets, added > 0 || alreadyThere > 0 ? folder : File(), refused, failed);
+        if (toConvert.isEmpty()) {
+            if (added > 0)
+                safeThis->showAVFooterNotice(lang.format(added == 1 ? "importedNoticeOne" : "importedNotice",
+                                                         {{"folder", folder.getFileName()}, {"count", String(added)}}));
+            else if (alreadyThere > 0)
+                safeThis->showAVFooterNotice(lang.format("alreadyInFolder", {{"folder", folder.getFileName()}}));
+            safeThis->AVOpenImportedSounds(banks, presets, added > 0 || alreadyThere > 0 ? folder : File(), refused, failed);
+            return;
+        }
+        AVDexedConversion::Request request;
+        request.sources = toConvert;
+        request.root = root;
+        request.destination = folder;
+        request.layout = AVDexedConversion::Layout::automatic;
+        request.sourceBase = found.folder;
+        request.backupLabel = folder.getFileName();
+        safeThis->AVStartImportConversion(request, banks, presets, refused, failed, added);
     });
+}
+
+void DexedAudioProcessorEditor::AVStartImportConversion(const AVDexedConversion::Request& request, Array<File> banks,
+                                                        Array<File> presets, StringArray refused, StringArray failed,
+                                                        int copied) {
+    auto& language = AVDexedLanguageService::getInstance();
+    Component::SafePointer<DexedAudioProcessorEditor> safeThis(this);
+    const auto folder = request.destination;
+    const bool started = processor->startAVConversion(request,
+        [safeThis, folder, banks, presets, refused, failed, copied](const AVDexedConversion::Result& result) {
+            if (safeThis != nullptr)
+                safeThis->AVFinishImportConversion(result, folder, banks, presets, refused, failed, copied);
+        });
+    if (! started) {
+        showAVNotice(language.text("importAction"), language.text("importBusy"));
+        return;
+    }
+    // A bank or two converts in a moment; a longer conversion shows its progress.
+    Timer::callAfterDelay(400, [safeThis, folderName = folder.getFileName()] {
+        if (safeThis == nullptr || ! safeThis->processor->isAVConverting()) return;
+        auto& lang = AVDexedLanguageService::getInstance();
+        AVDexedPromptOverlay::Options options;
+        options.title = lang.text("importAction");
+        options.progress = [safeThis] { return safeThis != nullptr ? safeThis->processor->getAVConversionProgress() : 1.0f; };
+        options.progressMessage = [safeThis, folderName] {
+            const float done = safeThis != nullptr ? safeThis->processor->getAVConversionProgress() : 1.0f;
+            return AVDexedLanguageService::getInstance().format("importConverting",
+                {{"folder", folderName}, {"percent", String(roundToInt(done * 100.0f))}});
+        };
+        options.message = options.progressMessage();
+        options.confirmText = lang.text("cancel");
+        options.returnConfirms = false;
+        safeThis->AVConversionPrompt = safeThis->showAVPrompt(std::move(options), [safeThis](bool, const String&) {
+            // Closed by hand, not by the end of the conversion: it stops.
+            if (safeThis != nullptr && safeThis->processor->isAVConverting()) safeThis->processor->cancelAVConversion();
+        });
+    });
+}
+
+void DexedAudioProcessorEditor::AVFinishImportConversion(const AVDexedConversion::Result& result, const File& folder,
+                                                         Array<File> banks, Array<File> presets, StringArray refused,
+                                                         StringArray failed, int copied) {
+    auto& language = AVDexedLanguageService::getInstance();
+    if (AVConversionPrompt != nullptr) AVConversionPrompt->dismiss();
+    if (! result.ok) {
+        // The sounds copied before it stay; the library has nothing of the conversion.
+        AVOpenImportedSounds(banks, presets, copied > 0 ? folder : File(), refused, failed);
+        showAVNotice(language.text("importAction"), language.text(result.cancelled ? "importCancelled" : "importConvertFailed"));
+        return;
+    }
+    refused.addArray(result.unreadable);
+    // The converted sounds first, in their order: the first of them plays.
+    auto sounds = result.files;
+    sounds.addArray(presets);
+    const int added = result.sounds + copied;
+    String notice;
+    if (added > 0) {
+        notice = language.format(added == 1 ? "importConvertedOne" : "importConverted",
+                                 {{"count", String(added)}, {"folder", folder.getFileName()}});
+        if (result.repeated > 0)
+            notice << String::fromUTF8(" · ") << language.format(result.repeated == 1 ? "importRepeatedOne" : "importRepeated",
+                                                                {{"count", String(result.repeated)}});
+        if (result.backup.isDirectory())
+            notice << String::fromUTF8(" · ") << language.text("importBackupPart");
+    } else if (result.repeated > 0) {
+        notice = language.format("alreadyInFolder", {{"folder", folder.getFileName()}});
+    }
+    if (added > 0 || result.repeated > 0) {
+        // Every sound of the folder is in it already: the folder shows them.
+        if (result.files.isEmpty())
+            for (const auto& entry : RangedDirectoryIterator(folder, true, String("*") + AVDexedLibrary::presetExtension, File::findFiles))
+                if (sounds.isEmpty()) sounds.add(entry.getFile());
+    }
+    AVOpenImportedSounds(banks, sounds, added > 0 || result.repeated > 0 ? folder : File(), refused, failed);
+    // After the sound loads (its own notices): what the import did.
+    if (notice.isNotEmpty()) showAVFooterNotice(notice);
 }
 
 void DexedAudioProcessorEditor::AVOpenImportedSounds(const Array<File>& banks, const Array<File>& presets,

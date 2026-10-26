@@ -287,7 +287,9 @@ bool testConvertFolder() {
                      "a dropped folder's structure is kept");
     passed &= expect(presetsIn(importados.getChildFile("Archive 1")).size() == 32 && presetsIn(importados.getChildFile("Archive 3")).size() == 32,
                      "the banks of an archive get a folder each");
-    passed &= expect(presetsIn(importados.getChildFile("Solo")).size() == 2, "single voices become a sound each");
+    passed &= expect(importados.getChildFile("SOLO 0.avdexpreset").existsAsFile() && importados.getChildFile("SOLO 1.avdexpreset").existsAsFile()
+                         && ! importados.getChildFile("Solo").exists(),
+                     "single voices become a sound each, in their folder (not a folder of their own)");
 
     // What a converted sound file holds.
     {
@@ -492,6 +494,69 @@ bool testExtrasInLayers() {
                       && a.mono.load() == b.mono.load(),
                   "in layer mode a converted DX7II voice brings its unison and random pitch, as from its bank");
 }
+
+/** A TX802 performance becomes a layers preset that plays as the Capas page
+    plays the performance, its voices from the bank next to its file. */
+bool testPerformances() {
+    Scratch scratch;
+    std::vector<uint8_t> pmem(84, 0);
+    for (int tg = 0; tg < 8; ++tg) {
+        pmem[size_t(tg)] = uint8_t((tg << 5) | 16);       // every TG its own instrument, omni
+        pmem[size_t(8 + tg)] = uint8_t(tg * 3);           // internal voices 1, 4, 7…
+        pmem[size_t(24 + tg)] = uint8_t(80 + tg * 2);     // output volume
+        pmem[size_t(32 + tg)] = uint8_t(((7 + (tg % 3) - 1) << 3) | 3);   // detune around the centre, outputs I+II
+        pmem[size_t(48 + tg)] = 127;
+        pmem[size_t(56 + tg)] = uint8_t(24 + (tg % 2) * 12);
+    }
+    const char* name = "Conv Performance    ";
+    for (int i = 0; i < 20; ++i) pmem[size_t(64 + i)] = uint8_t(name[i]);
+    std::vector<uint8_t> body;
+    for (const char* c = "LM  8952PM"; *c; ++c) body.push_back(uint8_t(*c));
+    for (const auto byte : pmem) {
+        body.push_back(uint8_t("0123456789ABCDEF"[byte >> 4]));
+        body.push_back(uint8_t("0123456789ABCDEF"[byte & 15]));
+    }
+    juce::MemoryBlock dump;
+    const uint8_t head[] = { 0xF0, 0x43, 0x00, 0x7E, 0x01, 0x28 };
+    dump.append(head, sizeof(head));
+    dump.append(body.data(), body.size());
+    const uint8_t tail[] = { AVDexedSysex::checksum(body.data(), body.size()), 0xF7 };
+    dump.append(tail, 2);
+    const auto set = scratch.outside.getChildFile("TX Set");
+    set.createDirectory();
+    const auto performanceFile = set.getChildFile("SetPerf.syx");
+    performanceFile.replaceWithData(dump.getData(), dump.getSize());
+    const auto voices = makeBank([](int slot) { return "TXV " + juce::String(slot + 1); }, 60);
+    set.getChildFile("SetVoice32.syx").replaceWithData(bankBytes(voices).getData(), bankBytes(voices).getSize());
+
+    AVDexedConversion::Request request;
+    request.sources = { performanceFile };
+    request.root = scratch.root;
+    request.destination = scratch.root.getChildFile("Performances");
+    request.layout = AVDexedConversion::Layout::automatic;
+    request.backup = false;
+    const auto result = DexedAudioProcessor::convertAVBanks(request);
+    const auto preset = request.destination.getChildFile("Conv Performance.avdexpreset");
+    bool passed = expect(result.ok && result.performances == 1 && result.sounds == 1 && preset.existsAsFile(),
+                         "a performance file becomes a layers preset named after the performance");
+    const auto xml = readXml(preset);
+    passed &= expect(xml != nullptr && xml->getChildByName("avLayers") != nullptr && xml->getChildByName("profile") == nullptr,
+                     "it carries the eight layers, not the MIDI assignments");
+
+    juce::MemoryBlock bytes;
+    performanceFile.loadFileAsData(bytes);
+    const auto contents = AVDexedSysex::scan(bytes);
+    const auto performances = AVDexedPerformance::readPerformances(contents);
+    const AVDexedPerformance::VoicePool pool(performanceFile, contents);
+    auto installed = freshProcessor();
+    if (! performances.empty()) installed->applyAVLayerSetup(AVDexedPerformance::resolve(performances.front(), pool));
+    const auto expected = renderPrint(*installed);
+    passed &= expect(! performances.empty() && soundFilePrint(preset) == expected,
+                     "the layers preset plays bit for bit as the performance installed in the Capas page");
+    const auto again = DexedAudioProcessor::convertAVBanks(request);
+    passed &= expect(again.ok && again.sounds == 0 && again.repeated == 1, "the same performance again adds nothing");
+    return passed;
+}
 }
 
 bool runAVDexedConversionTests() {
@@ -500,6 +565,7 @@ bool runAVDexedConversionTests() {
     passed &= testFactoryBanks();
     passed &= testKeepsTheInstrument();
     passed &= testExtrasInLayers();
+    passed &= testPerformances();
     std::cout << (passed ? "Conversion checks passed.\n" : "Conversion checks FAILED.\n");
     return passed;
 }

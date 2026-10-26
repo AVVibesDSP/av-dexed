@@ -2428,12 +2428,15 @@ void AVDexedPlayView::showFolderActions() {
     menu.addItem(3, avEllipsis(language.text("deleteFolder")), editable);
     menu.addSeparator();
     menu.addItem(4, avRevealText());
+    // The original .syx files of the imported banks, where nothing reads them as sounds.
+    const auto backups = root.getChildFile(AVDexedLibrary::syxBackupsFolderName);
+    if (backups.isDirectory()) menu.addItem(7, language.text("showSyxBackups"));
     menu.addItem(5, language.text("reindexLibrary"));
     menu.addItem(6, language.text("restoreFactory"));
     Component::SafePointer<AVDexedPlayView> safeThis(this);
     menu.setLookAndFeel(&getLookAndFeel());  // menus never inherit it from their target
     menu.showMenuAsync(PopupMenu::Options().withTargetComponent(&folderActionsButton),
-                       [safeThis, folder, root](int result) {
+                       [safeThis, folder, root, backups](int result) {
         if (safeThis == nullptr)
             return;
         if (result == 1) safeThis->promptNewFolder(nullptr);
@@ -2442,6 +2445,7 @@ void AVDexedPlayView::showFolderActions() {
         else if (result == 4) (folder != File() && folder.isDirectory() ? folder : root).revealToUser();
         else if (result == 5) safeThis->refreshLibrary();
         else if (result == 6) safeThis->restoreFactorySounds();
+        else if (result == 7) backups.revealToUser();
     });
 }
 

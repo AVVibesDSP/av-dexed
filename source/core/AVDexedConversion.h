@@ -4,6 +4,7 @@
 #pragma once
 
 #include "AVDexedLibrary.h"
+#include "AVDexedPerformance.h"
 #include <functional>
 
 /** Banks of the DX7 family turned into sound files: one .avdexpreset per
@@ -33,10 +34,22 @@ struct MadeSound {
 using SoundMaker = std::function<MadeSound(const AVDexedLibrary::SourceBank& bank, int slot,
                                            const juce::String& name, int order)>;
 
+/** Makes the sound file of a DX7II or TX802 performance: a layers preset of
+    its eight layers (`layers`, as the Capas page plays them), named `name`,
+    from performance `number` of `sourceName`, at `order` in its folder. */
+using LayersMaker = std::function<MadeSound(const std::array<AVDexedPerformance::ResolvedLayer, AVDexedPerformance::layerCount>& layers,
+                                            const juce::String& name, const juce::String& sourceName, int number, int order)>;
+
+/** Where the voices go. Single voices (files of one voice each) are never a
+    folder of their own: they go straight into their folder, whatever the layout. */
 enum class Layout {
     folderPerBank,   // a folder per bank inside the destination ("Rhodes/…")
-    flat             // every voice directly in the destination
+    flat,            // every voice directly in the destination
+    automatic        // flat for one bank in all, a folder per bank for more
 };
+// The performances of a file are a folder like a bank: "<file>", or
+// "<file> Performances" when the file holds banks too. Their voices come from
+// the file's own banks or from the files next to it (AVDexedPerformance::VoicePool).
 
 struct Request {
     juce::Array<juce::File> sources;   // .syx files of the DX7 family, in the order to convert
@@ -50,7 +63,9 @@ struct Request {
 
 struct Result {
     bool ok = false;
+    bool cancelled = false;            // `progress` asked to stop
     int banks = 0;                     // banks read
+    int performances = 0;              // performances read (with `makeLayers`)
     int sounds = 0;                    // sound files written
     int repeated = 0;                  // voices skipped: the same sound is in the folder already
     int empty = 0;                     // voices skipped: the Init voice
@@ -65,7 +80,8 @@ struct Result {
     into the library, under the library lock. When anything fails, nothing
     reaches the library and no backup is left. `progress` (0–1) returns false
     to cancel. */
-Result convert(const Request& request, const SoundMaker& make, const std::function<bool(float)>& progress = {});
+Result convert(const Request& request, const SoundMaker& make, const LayersMaker& makeLayers = {},
+               const std::function<bool(float)>& progress = {});
 
 /** The key a converted sound file keeps (session "avSoundKey"); 0 for any
     other sound file. */

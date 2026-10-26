@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "AVDexedConversion.h"
+#include "AVDexedSysex.h"
 #include "Program.h"
 #include <map>
 #include <set>
@@ -126,24 +127,44 @@ uint64 readSoundKey(const File& soundFile) {
     return 0;
 }
 
-Result convert(const Request& request, const SoundMaker& make, const std::function<bool(float)>& progress) {
+Result convert(const Request& request, const SoundMaker& make, const LayersMaker& makeLayers,
+               const std::function<bool(float)>& progress) {
     Result result;
     struct Source {
         File file;
         std::vector<AVDexedLibrary::SourceBank> banks;
+        std::vector<AVDexedPerformance::Performance> performances;
+        std::shared_ptr<AVDexedPerformance::VoicePool> pool;
     };
     std::vector<Source> sources;
     int voices = 0;
     for (const auto& file : request.sources) {
-        auto banks = AVDexedLibrary::readSourceBanks(file);
-        if (banks.empty()) {
+        Source source { file, AVDexedLibrary::readSourceBanks(file), {}, {} };
+        MemoryBlock bytes;
+        if (makeLayers && file.getSize() <= AVDexedLibrary::maxImportBytes && file.loadFileAsData(bytes)) {
+            const auto contents = AVDexedSysex::scan(bytes);
+            source.performances = AVDexedPerformance::readPerformances(contents);
+            if (! source.performances.empty())
+                source.pool = std::make_shared<AVDexedPerformance::VoicePool>(file, contents);
+        }
+        if (source.banks.empty() && source.performances.empty()) {
             result.unreadable.add(file.getFileName());
             continue;
         }
-        for (const auto& bank : banks) voices += bank.voices;
-        result.banks += int(banks.size());
-        sources.push_back({ file, std::move(banks) });
+        for (const auto& bank : source.banks) voices += bank.voices;
+        voices += int(source.performances.size());
+        result.banks += int(source.banks.size());
+        result.performances += int(source.performances.size());
+        sources.push_back(std::move(source));
     }
+
+    int realBanks = 0;
+    for (const auto& source : sources) {
+        for (const auto& bank : source.banks) realBanks += bank.singleVoices ? 0 : 1;
+        realBanks += source.performances.empty() ? 0 : 1;
+    }
+    const auto layout = request.layout != Layout::automatic ? request.layout
+                      : realBanks <= 1 ? Layout::flat : Layout::folderPerBank;
 
     // Everything goes into a hidden folder of the library first (the same
     // disk: moving in is a rename), and only then into the library.
@@ -166,7 +187,7 @@ Result convert(const Request& request, const SoundMaker& make, const std::functi
         const auto base = mirrored(request.destination, source.file, request.sourceBase);
         for (const auto& bank : source.banks) {
             const auto folderName = AVDexedLibrary::sanitizeFolderName(bank.name);
-            const auto folder = request.layout == Layout::flat ? base
+            const auto folder = layout == Layout::flat || bank.singleVoices ? base
                               : base.getChildFile(folderName.isNotEmpty() ? folderName : String("Bank"));
             auto found = folders.find(folder.getFullPathName());
             if (found == folders.end())
@@ -174,8 +195,10 @@ Result convert(const Request& request, const SoundMaker& make, const std::functi
             auto& state = found->second;
             const auto names = voiceNames(bank.bank, bank.voices, bank.name);
             for (int slot = 0; slot < bank.voices; ++slot) {
-                if (progress && ! progress(voices > 0 ? float(done) / float(voices) : 1.0f))
+                if (progress && ! progress(voices > 0 ? float(done) / float(voices) : 1.0f)) {
+                    result.cancelled = true;
                     return fail();
+                }
                 ++done;
                 if (isInitVoice(bank.bank, slot)) {
                     ++result.empty;
@@ -199,6 +222,39 @@ Result convert(const Request& request, const SoundMaker& make, const std::functi
                     return fail();
                 planned.push_back({ staged, folder.getChildFile(name + AVDexedLibrary::presetExtension) });
             }
+        }
+        if (source.performances.empty()) continue;
+        const auto stem = source.file.getFileNameWithoutExtension();
+        const auto folderName = AVDexedLibrary::sanitizeFolderName(source.banks.empty() ? stem : stem + " Performances");
+        const auto folder = layout == Layout::flat ? base : base.getChildFile(folderName.isNotEmpty() ? folderName : String("Performances"));
+        auto found = folders.find(folder.getFullPathName());
+        if (found == folders.end())
+            found = folders.emplace(folder.getFullPathName(), readFolder(folder)).first;
+        auto& state = found->second;
+        for (const auto& performance : source.performances) {
+            if (progress && ! progress(voices > 0 ? float(done) / float(voices) : 1.0f)) {
+                result.cancelled = true;
+                return fail();
+            }
+            ++done;
+            auto stemName = fileStem(performance.name.trim());
+            if (stemName.isEmpty()) stemName = fileStem(stem + " " + String(performance.number));
+            if (stemName.isEmpty()) stemName = "Performance " + String(performance.number);
+            const auto name = freeStem(state, stemName);
+            const auto made = makeLayers(AVDexedPerformance::resolve(performance, *source.pool), name, stem,
+                                         performance.number, state.nextOrder);
+            if (made.state.isEmpty())
+                return fail();
+            if (! state.keys.insert(made.key).second) {
+                state.taken.erase(name.toLowerCase());
+                ++result.repeated;
+                continue;
+            }
+            ++state.nextOrder;
+            const auto staged = staging.getChildFile(String(int(planned.size()))).withFileExtension(AVDexedLibrary::presetExtension);
+            if (! staging.createDirectory() || ! staged.replaceWithData(made.state.getData(), made.state.getSize()))
+                return fail();
+            planned.push_back({ staged, folder.getChildFile(name + AVDexedLibrary::presetExtension) });
         }
     }
 

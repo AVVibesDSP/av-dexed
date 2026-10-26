@@ -300,6 +300,15 @@ public :
         Message thread. */
     static AVDexedConversion::Result convertAVBanks(const AVDexedConversion::Request& request,
                                                     const std::function<bool(float)>& progress = {});
+    /** Message thread: convertAVBanks on a thread of its own, one at a time;
+        `done` runs on the message thread afterwards (cancelled or not). The
+        processor's destructor cancels one still running and waits for it.
+        False while another runs. */
+    bool startAVConversion(const AVDexedConversion::Request& request,
+                           std::function<void(const AVDexedConversion::Result&)> done);
+    bool isAVConverting() const noexcept;
+    float getAVConversionProgress() const noexcept;
+    void cancelAVConversion() noexcept;
     /** In a converter instance (SetupMode::isolatedTest): `bank` installed
         with its settings, as a bank file of the library plays. */
     void installAVConversionBank(const AVDexedLibrary::SourceBank& bank);
@@ -311,6 +320,10 @@ public :
         came from (`bankName`, the slot), its place in its folder and, for a
         DX7II voice, its additional data (unison, random pitch, mono). */
     AVDexedConversion::MadeSound makeAVSoundFile(int slot, const juce::String& name, const juce::String& bankName, int order);
+    /** In a converter instance: a performance as the layers preset it becomes
+        (its eight layers as the Capas page plays them), the same way. */
+    AVDexedConversion::MadeSound makeAVLayersFile(const std::array<AVDexedPerformance::ResolvedLayer, AVLayerCount>& layers,
+                                                 const juce::String& name, const juce::String& sourceName, int number, int order);
     /** The sound without its name (every parameter but the instrument's, the
         voice, the tuning): the same for two voices that differ only in name. */
     uint64_t getAVSoundKey() const noexcept;
@@ -528,6 +541,8 @@ public :
 private:
     uint64_t getAVMusicalFingerprint(const juce::String* nativeName = nullptr) const noexcept;
     juce::ValueTree createAVNativePresetTree(const juce::String& name, const juce::String& id, bool withLayers);
+    struct AVConversionThread;
+    std::unique_ptr<AVConversionThread> avConversion;   // startAVConversion()
     juce::String avPresetName;
     juce::String avPresetId;
     juce::File avPresetPath;

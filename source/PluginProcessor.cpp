@@ -157,7 +157,48 @@ DexedAudioProcessor::DexedAudioProcessor(SetupMode setupMode)
     startTimerHz(30);
 }
 
+struct DexedAudioProcessor::AVConversionThread final : public juce::Thread {
+    AVConversionThread(const AVDexedConversion::Request& toConvert, std::function<void(const AVDexedConversion::Result&)> whenDone)
+        : juce::Thread("AV Dexed conversion"), request(toConvert), done(std::move(whenDone)) {}
+    void run() override {
+        auto result = DexedAudioProcessor::convertAVBanks(request, [this](float done) {
+            progress.store(done, std::memory_order_relaxed);
+            return ! threadShouldExit() && ! cancelled.load(std::memory_order_relaxed);
+        });
+        finished.store(true, std::memory_order_release);
+        // The processor going away waits for this, and has nobody left to tell.
+        if (! threadShouldExit())
+            juce::MessageManager::callAsync([whenDone = done, result] { if (whenDone) whenDone(result); });
+    }
+    const AVDexedConversion::Request request;
+    const std::function<void(const AVDexedConversion::Result&)> done;
+    std::atomic<float> progress { 0.0f };
+    std::atomic<bool> cancelled { false }, finished { false };
+};
+
+bool DexedAudioProcessor::startAVConversion(const AVDexedConversion::Request& request,
+                                            std::function<void(const AVDexedConversion::Result&)> done) {
+    if (isAVConverting()) return false;
+    if (avConversion != nullptr) avConversion->stopThread(1000);   // finished: only joined
+    avConversion = std::make_unique<AVConversionThread>(request, std::move(done));
+    return avConversion->startThread(juce::Thread::Priority::low);
+}
+
+bool DexedAudioProcessor::isAVConverting() const noexcept {
+    return avConversion != nullptr && ! avConversion->finished.load(std::memory_order_acquire);
+}
+
+float DexedAudioProcessor::getAVConversionProgress() const noexcept {
+    return avConversion != nullptr ? avConversion->progress.load(std::memory_order_relaxed) : 0.0f;
+}
+
+void DexedAudioProcessor::cancelAVConversion() noexcept {
+    if (avConversion != nullptr) avConversion->cancelled.store(true, std::memory_order_relaxed);
+}
+
 DexedAudioProcessor::~DexedAudioProcessor() {
+    // A conversion still running stops where it is (nothing of it reaches the library).
+    if (avConversion != nullptr) avConversion->stopThread(60000);
     stopTimer();
     releaseResources();
     TRACE("Bye");

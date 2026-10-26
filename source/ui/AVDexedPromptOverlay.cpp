@@ -13,6 +13,7 @@ namespace {
 // GOZO dialog geometry (logical px).
 constexpr int panelW = 460, titleH = 48, padX = 28, lineH = 21, editorH = 30, buttonH = 32, pillW = 118, pillGap = 12;
 constexpr int footerH = 30, closeSide = 15;
+constexpr int progressH = 6;
 const Colour errorColour { 0xffff6b6b };
 
 std::unique_ptr<Drawable> closeIcon(bool hover) {
@@ -117,6 +118,7 @@ AVDexedPromptOverlay::AVDexedPromptOverlay(Component& frame, const Image& editor
 }
 
 AVDexedPromptOverlay::~AVDexedPromptOverlay() {
+    stopTimer();
     // A fade-in still running forgets this; a fade-out runs on from its
     // picture (gone with the frame when the editor closes).
     if (! AVFinished) AVDexedComponentFade::forget(*this);
@@ -133,6 +135,7 @@ void AVDexedPromptOverlay::present() {
     toFront(false);
     AVDexedComponentFade::fadeIn(*this, 83);
     enterModalState(true);
+    if (AVOptions.progress) startTimerHz(10);
     Component::SafePointer<AVDexedPromptOverlay> safeThis(this);
     MessageManager::callAsync([safeThis] {
         if (safeThis == nullptr || safeThis->AVFinished) return;
@@ -162,10 +165,13 @@ void AVDexedPromptOverlay::layoutPanel() {
     if (AVEditor != nullptr) height += (AVMessageLines.isEmpty() ? 0 : 12) + editorH + 18;
     if (! AVErrorLines.isEmpty()) height += 4 + AVErrorLines.size() * errorLineH;
     if (AVEditor == nullptr && AVMessageLines.isEmpty()) height += lineH;
+    if (AVOptions.progress) height += 12 + progressH + 8;
     height += 4 + buttonH + 24;
     AVPanel = Rectangle<int>(panelW, height).withCentre(getLocalBounds().withTrimmedBottom(footerH).getCentre());
 
     int y = AVPanel.getY() + titleH + 24 + AVMessageLines.size() * lineH;
+    AVProgressBar = AVOptions.progress ? Rectangle<float>(float(AVPanel.getX() + padX), float(y + 12), float(panelW - 2 * padX), float(progressH))
+                                       : Rectangle<float>();
     if (AVEditor != nullptr) {
         if (! AVMessageLines.isEmpty()) y += 12;
         AVEditor->setBounds(AVPanel.getX() + padX, y, panelW - 2 * padX, editorH);
@@ -218,6 +224,15 @@ void AVDexedPromptOverlay::paint(Graphics& g) {
                                    Justification::centredLeft, 0.92f);
         y += lineH;
     }
+    if (! AVProgressBar.isEmpty()) {
+        // The 12% box as its track, the ocean gradient as what is done.
+        AVDexedTheme::fillBox(g, AVProgressBar, 3.0f, false);
+        const auto done = AVProgressBar.withWidth(AVProgressBar.getWidth() * jlimit(0.0f, 1.0f, AVShownProgress));
+        if (done.getWidth() > 0.5f) {
+            g.setGradientFill(ColourGradient(AVDexedTheme::oceanTop, 0.0f, done.getY(), AVDexedTheme::oceanBottom, 0.0f, done.getBottom(), false));
+            g.fillRoundedRectangle(done, 3.0f);
+        }
+    }
     if (AVEditor != nullptr) {
         const auto box = AVEditor->getBounds().toFloat();
         AVDexedTheme::fillBox(g, box, 6.0f, AVEditor->hasKeyboardFocus(true));
@@ -235,7 +250,9 @@ void AVDexedPromptOverlay::paint(Graphics& g) {
 bool AVDexedPromptOverlay::hitTest(int, int y) { return y < getHeight() - footerH; }
 
 void AVDexedPromptOverlay::mouseDown(const MouseEvent& event) {
-    if (closeBounds().expanded(8).contains(event.getPosition()) || ! AVPanel.contains(event.getPosition()))
+    // A progress dialog only closes on purpose: a stray click must not cancel the work.
+    if (closeBounds().expanded(8).contains(event.getPosition())
+        || (! AVPanel.contains(event.getPosition()) && ! AVOptions.progress))
         finish(false);
 }
 
@@ -269,7 +286,24 @@ bool AVDexedPromptOverlay::keyPressed(const KeyPress& key) {
     return false;
 }
 
-void AVDexedPromptOverlay::inputAttemptWhenModal() { finish(false); }
+void AVDexedPromptOverlay::inputAttemptWhenModal() {
+    if (! AVOptions.progress) finish(false);
+}
+
+void AVDexedPromptOverlay::timerCallback() {
+    if (AVFinished) { stopTimer(); return; }
+    if (AVOptions.progressMessage)
+        if (const auto message = AVOptions.progressMessage(); message != AVOptions.message) {
+            AVOptions.message = message;
+            layoutPanel();
+            repaint();
+        }
+    const float progress = AVOptions.progress();
+    if (std::abs(progress - AVShownProgress) > 0.001f) {
+        AVShownProgress = progress;
+        repaint(AVProgressBar.getSmallestIntegerContainer().expanded(2));
+    }
+}
 
 void AVDexedPromptOverlay::dismiss() { finish(false); }
 
