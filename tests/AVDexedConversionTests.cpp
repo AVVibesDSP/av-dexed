@@ -592,7 +592,7 @@ bool testPerformances() {
 std::map<juce::String, juce::MemoryBlock> snapshot(const juce::File& folder) {
     std::map<juce::String, juce::MemoryBlock> files;
     for (const auto& entry : juce::RangedDirectoryIterator(folder, true, "*", juce::File::findFiles)) {
-        const auto path = entry.getFile().getRelativePathFrom(folder);
+        const auto path = entry.getFile().getRelativePathFrom(folder).replaceCharacter('\\', '/');
         if (path.startsWith(".cache") || path.startsWith(AVDexedLibrary::syxBackupsFolderName)) continue;
         juce::MemoryBlock bytes;
         entry.getFile().loadFileAsData(bytes);
@@ -650,7 +650,7 @@ bool testLibraryConversion() {
     bool backedUp = result.backup.getChildFile(".conversion").existsAsFile();
     for (const auto* path : { "Basses/B1.syx", "Basses/B2.syx", "Mis cosas/Rhodes/R.syx", "Dexed Factory/Dexed_01.syx", "Suelto.syx" }) {
         juce::MemoryBlock bytes;
-        backedUp &= result.backup.getChildFile(path).loadFileAsData(bytes) && bytes == before.at(juce::String(path).replaceCharacter('/', juce::File::getSeparatorChar()));
+        backedUp &= result.backup.getChildFile(path).loadFileAsData(bytes) && bytes == before.at(path);
     }
     passed &= expect(backedUp, "the original files are in the backup as they were, with their folders and a record");
 
