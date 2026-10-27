@@ -501,7 +501,8 @@ public :
     int getCurrentProgram() override;
     /** A host's program change: ignored. */
     void setCurrentProgram(int index) override;
-    /** The name of the sound playing, as the top bar shows it. */
+    /** The name of the sound playing, as the top bar shows it; in VST3, whose
+        hosts read it once, the plugin's name. */
     const String getProgramName (int index) override;
     /** Voice `index` of the bank, with its settings: the editor's bank list,
         the browser and a MIDI Program Change to a bank voice. */

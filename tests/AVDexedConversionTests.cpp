@@ -887,6 +887,15 @@ bool testProgramChanges() {
                              && std::memcmp(restored->activeProgram.getRawData(), voiceOf(byOrder[40]).getRawData(), Program::PROGRAM_SIZE + 1) == 0,
                          "nor right after a restore: the bank's voice used to load over the restored sound");
     }
+    {
+        // A VST3 host reads the program's name once (FL Studio kept showing the
+        // first sound's): it gets the plugin's.
+        juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_VST3);
+        auto vst3 = freshProcessor();
+        juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_Undefined);
+        passed &= expect(vst3->getProgramName(0) == vst3->getName() && vst3->getName() != vst3->getAVPresetName(),
+                         "a VST3 host sees one program by the plugin's name");
+    }
 
     // A bank voice walks its bank, as before.
     auto bankPlayer = freshProcessor();

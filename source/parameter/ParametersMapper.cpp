@@ -442,6 +442,11 @@ void DexedAudioProcessor::setAVBankProgram(int index) {
 }
 
 const String DexedAudioProcessor::getProgramName(int) {
+    // A VST3 host reads its program list once: FL Studio showed the first
+    // sound's name long after another played. An AU host is told the present
+    // preset on each change (Logic names the track after it).
+    if (wrapperType == wrapperType_VST3)
+        return getName();
     return getAVPresetName();
 }
 
