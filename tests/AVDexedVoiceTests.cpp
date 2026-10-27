@@ -408,8 +408,42 @@ bool testTransposeBeyondRangeStaysInTune() {
     return expect(std::isfinite(peak) && peak > 0.0f && peak < 8.0f, "a voice transposed past the top of the keyboard still plays sanely");
 }
 
+bool testVoiceLoadIsNotAGesture() {
+    // Loading a voice is a sound change, not the user's hand: a host in Touch
+    // or Latch recorded every voice parameter while each came as a gesture.
+    // Only what differs reaches the host, and the parameters show the voice.
+    struct Host final : juce::AudioProcessorListener {
+        int gestures = 0, values = 0;
+        void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override { ++values; }
+        void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails&) override {}
+        void audioProcessorParameterChangeGestureBegin(juce::AudioProcessor*, int) override { ++gestures; }
+    } host;
+    DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
+    const Program first = Program::initialProgram();
+    uint8_t bytes[Program::PROGRAM_SIZE];
+    std::memcpy(bytes, first.getRawData(), sizeof(bytes));
+    bytes[IDs::algorithm.pos] = 7;
+    bytes[IDs::feedback.pos] = 5;
+    const Program second(bytes);
+    processor.applyProgram(first);
+    processor.addListener(&host);
+    processor.applyProgram(first);
+    const int sameVoice = host.values;
+    processor.applyProgram(second);
+    processor.removeListener(&host);
+    bool shown = true;
+    for (const auto& meta : dxParameters)
+        if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*>(processor.parameters.getParameter(meta.name)))
+            shown &= juce::roundToInt(parameter->convertFrom0to1(parameter->getValue())) + meta.displayOffset
+                  == processor.activeProgram.getRawData()[meta.pos];
+    return expect(host.gestures == 0, "loading a voice sends no change gestures to the host")
+        && expect(sameVoice == 0 && host.values == 2, "only the parameters that differ reach the host")
+        && expect(shown, "and the parameters show the voice loaded");
+}
+
 bool runAVDexedVoiceTests() {
     bool passed = testBankVoiceMatchesDexed110();
+    passed &= testVoiceLoadIsNotAGesture();
     passed &= testWheelIsPlayedNotSaved();
     passed &= testTransposeBeyondRangeStaysInTune();
     passed &= testOutOfRangeVoiceSounds();

@@ -29,14 +29,20 @@ void Program::pushToParameters(const DexedApvts &apvts) const {
     uint8_t check[PROGRAM_SIZE];
     memcpy(check, data, PROGRAM_SIZE);
 
+    // A sound change, not an edit: without change gestures (a host in Touch or
+    // Latch recorded each of these parameters, and played the old voice back),
+    // and only what differs (each value is a message to the host).
+    const auto push = [](juce::RangedAudioParameter& parameter, float value) {
+        const float normalised = parameter.convertTo0to1(value);
+        if (std::abs(parameter.getValue() - normalised) > 1.0e-6f)
+            parameter.setValueNotifyingHost(normalised);
+    };
+
     for (const auto &param : dxParameters) {
         juce::RangedAudioParameter *parameter = apvts.getParameter(param.name);
         if ( parameter != nullptr ) {
             uint8_t value = data[param.pos];
-            float displayValue = static_cast<float>(value - param.displayOffset);
-            parameter->beginChangeGesture();
-            parameter->setValueNotifyingHost(parameter->convertTo0to1(displayValue));
-            parameter->endChangeGesture();
+            push(*parameter, static_cast<float>(value - param.displayOffset));
         }
     }
 
@@ -44,9 +50,7 @@ void Program::pushToParameters(const DexedApvts &apvts) const {
         juce::RangedAudioParameter *parameter = apvts.avOperatorSwitchParameters[static_cast<size_t>(i)];
         if ( parameter != nullptr ) {
             bool opOn =  data[155] & (1 << (5-i));
-            parameter->beginChangeGesture();
-            parameter->setValueNotifyingHost(parameter->convertTo0to1(opOn));
-            parameter->endChangeGesture();
+            push(*parameter, opOn ? 1.0f : 0.0f);
         }
     }
 
