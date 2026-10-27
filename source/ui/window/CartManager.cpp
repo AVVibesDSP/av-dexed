@@ -284,7 +284,7 @@ void CartManager::programSelected(ProgramListBox* source, int pos) {
         }
         safe->browserCart->setActive(-1);
         editor->processor->setAVBankProgram(pos);
-        editor->processor->updateHostDisplay();
+        editor->processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
         editor->updateUI();
         safe->updateCartFilename();
         safe->repaint();
@@ -490,7 +490,7 @@ void CartManager::programDragged(ProgramListBox* destListBox, int dest, char* pa
         // "Guardar" later sees the difference and offers "Guardar como".
         const auto bankFile = processor->activeFileCartridge;
         processor->setActiveBank(updated, bankFile);
-        processor->updateHostDisplay();
+        processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
         mainWindow->updateUI();
     } else {
         // The file the preview shows (the tree's selection may be a folder now).
@@ -530,7 +530,7 @@ void CartManager::programDragged(ProgramListBox* destListBox, int dest, char* pa
         if (file == processor->activeFileCartridge
             && AVDexedLibrary::bankFingerprint(processor->currentCart) == AVDexedLibrary::bankFingerprint(previous)) {
             processor->setActiveBank(cart, file);
-            processor->updateHostDisplay();
+            processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
             mainWindow->updateUI();
         }
         mainWindow->playView.refreshLibrary();

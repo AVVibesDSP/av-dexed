@@ -1739,7 +1739,7 @@ void AVDexedPlayView::commitProgramSelection(int token, bool) {
     processor.setActiveBank(bank, entry.bank->file);
     processor.setAVBankProgram(entry.program);
     processor.captureAVPresetBaseline();
-    processor.updateHostDisplay();
+    processor.updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
     updateBank();
 }
 

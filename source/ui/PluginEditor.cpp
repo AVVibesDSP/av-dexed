@@ -1324,7 +1324,7 @@ void DexedAudioProcessorEditor::AVAdoptConverted(const AVDexedConversion::Result
     for (const auto& origin : result.origins) favorites[origin.bankKey] = origin.key;
     playView.replaceFavoriteKeys(favorites);
     processor->adoptAVConvertedVoice();
-    processor->updateHostDisplay();
+    processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
     playView.refreshLibrary();
     updateUI();
 }
@@ -1513,7 +1513,7 @@ void DexedAudioProcessorEditor::commitCart(Cartridge cart, const File& file) {
     rebuildProgramCombobox();
     processor->setAVBankProgram(0);
     global.programs->setSelectedId(processor->getAVBankProgram()+1, dontSendNotification);
-    processor->updateHostDisplay();
+    processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
 
     playView.setActiveUserPreset({});
     playView.updateBank();
@@ -1931,7 +1931,7 @@ void DexedAudioProcessorEditor::initProgram() {
         processor->resetToInitVoice();
         playView.setActiveUserPreset({});
         playView.captureCurrentAsBaseline();
-        processor->updateHostDisplay();
+        processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
         refreshPresetHeader();
     });
 }
@@ -1942,7 +1942,7 @@ void DexedAudioProcessorEditor::comboBoxChanged (ComboBox* comboBoxThatHasChange
     const int selectedProgram = global.programs->getSelectedId() - 1;
     requestSoundReplacement([this, selectedProgram] {
         processor->setAVBankProgram(selectedProgram);
-        processor->updateHostDisplay();
+        processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
         playView.setActiveUserPreset({});
         playView.captureCurrentAsBaseline();
         updateUI();
@@ -2111,7 +2111,7 @@ void DexedAudioProcessorEditor::AVSaveSound(std::function<void(bool)> completion
         if (outcome == DexedAudioProcessor::AVBankSaveResult::saved) {
             // Favourites and folder entries follow the voice into the new bank content.
             playView.carryAVBankMetadata(previousBank, processor->currentCart);
-            processor->updateHostDisplay();
+            processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
             playView.refreshLibrary();
             // The bank manager's preview may show this file as it was before.
             cartManager.reloadPreview();
@@ -2171,7 +2171,7 @@ DexedAudioProcessorEditor::AVOverwrite DexedAudioProcessorEditor::AVOverwritePre
     if (layers)
         processor->setAVLayerSetContext(file, presetId);
     playView.setActiveUserPreset(file);
-    processor->updateHostDisplay();
+    processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
     showAVFooterNotice(language.format("savedSound", {{"name", file.getFileNameWithoutExtension()}}));
     return AVOverwrite::saved;
 }
@@ -2273,7 +2273,7 @@ void DexedAudioProcessorEditor::AVSavePresetAs(bool layers, const String& sugges
         if (layers)
             editor->processor->setAVLayerSetContext(destination, presetId);
         editor->playView.setActiveUserPreset(destination);
-        editor->processor->updateHostDisplay();
+        editor->processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
         editor->playView.revealWhenIndexed(destination);
         editor->playView.refreshLibrary();
         editor->updateUI();
@@ -2394,7 +2394,7 @@ void DexedAudioProcessorEditor::loadNativePreset(const File& file) {
             safeThis->layersView.showLayerSet();
         }
         safeThis->playView.setActiveUserPreset(file);
-        safeThis->processor->updateHostDisplay();
+        safeThis->processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
         safeThis->updateUI();
     };
     // Only a sound saved with its layers opens with layers.
@@ -2510,7 +2510,7 @@ void DexedAudioProcessorEditor::storeProgramResponse(AlertWindow *dialog, int re
             if (settingsKept)
                 processor->captureAVPresetBaseline();
             processor->setCurrentProgramSelection(programNum);
-            processor->updateHostDisplay();
+            processor->updateHostDisplay(DexedAudioProcessor::ChangeDetails().withProgramChanged(true));
             rebuildProgramCombobox();
             cartManager.resetActiveSysex();
             cartManager.reloadPreview();

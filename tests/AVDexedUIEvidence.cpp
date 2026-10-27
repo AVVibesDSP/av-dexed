@@ -466,6 +466,28 @@ bool AVRenderUIEvidence(const juce::File& directory) {
                 passed = false;
             }
         }
+        // A sound change from the editor (Init here) tells the host the program
+        // changed, never the latency: a CLAP host restarts the plugin for that
+        // (silence; wheels, pedal and effect tails reset).
+        {
+            struct Host final : AudioProcessorListener {
+                int programs = 0, latencies = 0;
+                void audioProcessorParameterChanged(AudioProcessor*, int, float) override {}
+                void audioProcessorChanged(AudioProcessor*, const ChangeDetails& details) override {
+                    programs += details.programChanged ? 1 : 0;
+                    latencies += details.latencyChanged ? 1 : 0;
+                }
+            } host;
+            processor.captureAVPresetBaseline();   // nothing to ask before replacing it
+            processor.addListener(&host);
+            editor->initProgram();
+            processor.removeListener(&host);
+            if (host.programs == 0 || host.latencies != 0) {
+                std::cerr << "A sound change from the editor told the host " << host.programs << " program and "
+                          << host.latencies << " latency changes\n";
+                passed = false;
+            }
+        }
         editor.reset();
         // Validate all bundled SVGs in JUCE, not merely with a browser renderer.
         for (int i = 0; i < BinaryData::namedResourceListSize; ++i) {
