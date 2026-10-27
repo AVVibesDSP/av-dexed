@@ -127,6 +127,7 @@ void DexedAudioProcessor::syncAVFolderSounds() {
     if (playing == juce::File() || ! root.isDirectory() || ! playing.isAChildOf(root) || ! AVDexedLibrary::isPresetFile(playing)) {
         // A bank voice, or nothing of the library: program changes go the bank's way.
         avFolderPosition.store(-1, std::memory_order_release);
+        avRestoredHostProgram.store(-1, std::memory_order_release);
         avFolderPlaying = juce::File();
         return;
     }
@@ -145,6 +146,7 @@ void DexedAudioProcessor::syncAVFolderSounds() {
     }
     if (current) {
         avFolderPlaying = playing;
+        avRestoredHostProgram.store(-1, std::memory_order_release);   // its place is known
         return;
     }
     // Read once per folder and time; meanwhile program changes go the bank's way.
@@ -161,6 +163,7 @@ void DexedAudioProcessor::syncAVFolderSounds() {
         const juce::ScopedLock lock(getCallbackLock());
         avFolderSounds = std::move(sounds);
         avFolderPosition.store(position, std::memory_order_release);
+        avRestoredHostProgram.store(-1, std::memory_order_release);
     });
 }
 
@@ -168,12 +171,16 @@ bool DexedAudioProcessor::playAVFolderSound(int index) {
     // Render (the callback lock held): the sound playing is one of a folder's.
     if (avFolderSounds == nullptr || avFolderPosition.load(std::memory_order_acquire) < 0) return false;
     if (! juce::isPositiveAndBelow(index, int(avFolderSounds->sounds.size()))) return true;   // beyond the folder: nothing changes
+    // Another sound: a restore's guard is consumed.
+    avRestoreGuardProgram.store(-1, std::memory_order_release);
+    avRestoreGuardHostProgram.store(-1, std::memory_order_release);
+    avRestoredHostProgram.store(-1, std::memory_order_release);
     const auto& sound = avFolderSounds->sounds[size_t(index)];
     if (! sound.direct) {
         avFolderPendingLoad.store(index, std::memory_order_release);
         return true;
     }
-    // As setCurrentProgram plays a bank voice: the voice, then its settings.
+    // As setAVBankProgram plays a bank voice: the voice, then its settings.
     applyProgram(sound.voice);
     if (isAVLayerModeOn() && sound.hasAmem)
         setAVLayerVoiceExtras(avSelectedLayer.load(std::memory_order_acquire), sound.amem.data());

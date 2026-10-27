@@ -85,6 +85,16 @@ std::unique_ptr<DexedAudioProcessor> freshProcessor() {
     return processor;
 }
 
+/** What a host is told, as a JUCE wrapper hears it. */
+struct HostSpy final : juce::AudioProcessorListener {
+    int programChanges = 0, latencyChanges = 0;
+    void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override {}
+    void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details) override {
+        programChanges += details.programChanged ? 1 : 0;
+        latencyChanges += details.latencyChanged ? 1 : 0;
+    }
+};
+
 /** The bank voice as the browser plays it (its file gives its settings). */
 uint64_t bankVoicePrint(const Cartridge& bank, const juce::File& file, int slot) {
     auto processor = freshProcessor();
@@ -852,13 +862,62 @@ bool testProgramChanges() {
     player->runAVTimerTickForTesting();
     passed &= expect(player->getAVPresetPath() == folder.getChildFile("Zeta.avdexpreset"), "a sound of one's own is read whole");
 
+    // The host's program change (VST3's program parameter, an AU preset, FL
+    // Studio's "Presets" arrows) walks the folder as a MIDI one does, among
+    // the 32 sounds around the one playing; the host gets their names, and
+    // the sound playing's own for its program (Logic names the track after it).
+    const auto nameOf = [](const juce::File& file) {
+        const auto name = session(readXml(file))->getStringAttribute("avPresetName").trim();
+        return name.isNotEmpty() ? name : file.getFileNameWithoutExtension();
+    };
+    open(*player, byOrder[0]);
+    player->runAVTimerTickForTesting();
+    settle(*player);
+    passed &= expect(player->getCurrentProgram() == 0 && player->getProgramName(0) == player->getAVPresetName()
+                         && player->getProgramName(0) == nameOf(byOrder[0]) && player->getProgramName(1) == nameOf(byOrder[1]),
+                     "the host's programs are the folder's sounds, by their names");
+    player->setCurrentProgram(1);
+    passed &= expect(player->getAVPresetPath() == byOrder[1] && player->getCurrentProgram() == 1
+                         && std::memcmp(player->activeProgram.getRawData(), voiceOf(byOrder[1]).getRawData(), Program::PROGRAM_SIZE + 1) == 0,
+                     "the host's next program plays the folder's second sound, not the bank's (FL Studio)");
+    open(*player, byOrder[40]);
+    player->runAVTimerTickForTesting();
+    settle(*player);
+    player->setCurrentProgram(9);
+    passed &= expect(player->getAVPresetPath() == byOrder[41] && player->getCurrentProgram() == 9
+                         && player->getProgramName(10) == nameOf(byOrder[42]),
+                     "past the 32nd sound, the host's programs are the 32 around the one playing");
+
+    // A host restoring the session and re-selecting the program it was told
+    // keeps the sound: the bank's voice of that number used to load over it.
+    {
+        juce::MemoryBlock state;
+        player->getStateInformation(state);
+        auto restored = freshProcessor();
+        restored->setStateInformation(state.getData(), int(state.getSize()));
+        const int told = restored->getCurrentProgram();
+        restored->setCurrentProgram(told);
+        passed &= expect(told == 9 && restored->getAVPresetPath() == byOrder[41] && ! restored->isAVPresetModified()
+                             && std::memcmp(restored->activeProgram.getRawData(), voiceOf(byOrder[41]).getRawData(), Program::PROGRAM_SIZE + 1) == 0,
+                         "a host re-selecting the restored program keeps the restored sound");
+        settle(*restored);
+        restored->setCurrentProgram(10);
+        passed &= expect(restored->getAVPresetPath() == byOrder[42], "and the host's next program is the folder's next sound");
+    }
+
     // A bank voice walks its bank, as before.
     auto bankPlayer = freshProcessor();
     bankPlayer->setActiveBank(makeBank([](int slot) { return "BNK " + juce::String(slot); }, 98), juce::File());
-    bankPlayer->setCurrentProgram(0);
+    bankPlayer->setAVBankProgram(0);
     for (int i = 0; i < 5; ++i) bankPlayer->runAVTimerTickForTesting();
+    HostSpy host;
+    bankPlayer->addListener(&host);
     send(*bankPlayer, { juce::MidiMessage::programChange(1, 7) });
+    bankPlayer->runAVTimerTickForTesting();
+    bankPlayer->removeListener(&host);
     passed &= expect(bankPlayer->getCurrentProgram() == 7, "a bank voice's program change walks its bank");
+    passed &= expect(host.programChanges > 0 && host.latencyChanges == 0 && bankPlayer->getProgramName(7) == bankPlayer->getAVPresetName(),
+                     "and the host is told the new program and its name, without a latency change");
     DexedAudioProcessor::dexedAppDir = oldApp;
     return passed;
 }

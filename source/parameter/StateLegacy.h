@@ -66,7 +66,7 @@ bool setStateInformation10(DexedAudioProcessor* proc, XmlElement* root) {
         if (root->hasAttribute(name) && !std::isfinite(root->getDoubleAttribute(name)))
             return false;
     }
-    const int legacyProgram = root->getIntAttribute("currentProgram", proc->getCurrentProgram());
+    const int legacyProgram = root->getIntAttribute("currentProgram", proc->getAVBankProgram());
     if (legacyProgram < 0 || legacyProgram >= proc->getNumPrograms())
         return false;
 

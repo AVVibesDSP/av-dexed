@@ -273,7 +273,7 @@ void CartManager::programSelected(ProgramListBox* source, int pos) {
         if (safe == nullptr) return;
         auto* editor = safe->mainWindow;
         if (!currentBank) {
-            // Before setCurrentProgram: it applies the sound settings of this file.
+            // Before setAVBankProgram: it applies the sound settings of this file.
             // The preview was read when its file was selected; a "Guardar" into
             // that bank since then (even the one the save-changes prompt just
             // made) is on disk, and installing the older copy would undo it here.
@@ -283,7 +283,7 @@ void CartManager::programSelected(ProgramListBox* source, int pos) {
                 safe->browserCart->setCartridge(editor->processor->currentCart);
         }
         safe->browserCart->setActive(-1);
-        editor->processor->setCurrentProgram(pos);
+        editor->processor->setAVBankProgram(pos);
         editor->processor->updateHostDisplay();
         editor->updateUI();
         safe->updateCartFilename();

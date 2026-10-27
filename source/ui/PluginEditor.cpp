@@ -1506,13 +1506,13 @@ void DexedAudioProcessorEditor::applyCart(Cartridge cart, File file) {
 }
 
 void DexedAudioProcessorEditor::commitCart(Cartridge cart, const File& file) {
-    // The bank and its file first: setCurrentProgram applies the per-sound
+    // The bank and its file first: setAVBankProgram applies the per-sound
     // settings embedded in that file. `cart` was read before the save-changes
     // prompt: when "Guardar" there wrote into this very file, the file is newer.
     processor->setActiveBank(AVDexedLibrary::currentBankOf(file, cart), file);
     rebuildProgramCombobox();
-    processor->setCurrentProgram(0);
-    global.programs->setSelectedId(processor->getCurrentProgram()+1, dontSendNotification);
+    processor->setAVBankProgram(0);
+    global.programs->setSelectedId(processor->getAVBankProgram()+1, dontSendNotification);
     processor->updateHostDisplay();
 
     playView.setActiveUserPreset({});
@@ -1533,7 +1533,7 @@ void DexedAudioProcessorEditor::saveCart() {
                                  if (AVRefuseReadOnlyDestination(fc.getResult()))
                                      return;
                                  Cartridge snapshot(processor->currentCart);
-                                 snapshot.packProgram(processor->activeProgram.getRawData(), processor->getCurrentProgram(),
+                                 snapshot.packProgram(processor->activeProgram.getRawData(), processor->getAVBankProgram(),
                                                       processor->activeProgram.getName());
                                  if (! AVWriteBankFile(snapshot, fc.getResult())) {
                                      showAVNotice(AVDexedLanguageService::getInstance().text("saveError"), avBankWriteError(fc.getResult()));
@@ -1941,7 +1941,7 @@ void DexedAudioProcessorEditor::comboBoxChanged (ComboBox* comboBoxThatHasChange
         return;
     const int selectedProgram = global.programs->getSelectedId() - 1;
     requestSoundReplacement([this, selectedProgram] {
-        processor->setCurrentProgram(selectedProgram);
+        processor->setAVBankProgram(selectedProgram);
         processor->updateHostDisplay();
         playView.setActiveUserPreset({});
         playView.captureCurrentAsBaseline();
@@ -2055,17 +2055,18 @@ void DexedAudioProcessorEditor::rebuildProgramCombobox() {
 
     processor->currentCart.getProgramNames(processor->programNames);
 
+    // The bank's voices (the host's programs may be a folder's sounds).
     for(int i=0;i<processor->getNumPrograms();i++) {
         String id;
-        id << (i+1) << ". " << processor->getProgramName(i);
+        id << (i+1) << ". " << processor->programNames[i];
         global.programs->addItem(id, i+1);
     }
 
-    global.programs->setSelectedId(processor->getCurrentProgram()+1, dontSendNotification);
+    global.programs->setSelectedId(processor->getAVBankProgram()+1, dontSendNotification);
 
     String name = processor->activeProgram.getName();
-    cartManager.setActiveProgram(processor->getCurrentProgram(), name);
-    if ( name != processor->getProgramName(processor->getCurrentProgram()) )
+    cartManager.setActiveProgram(processor->getAVBankProgram(), name);
+    if ( name != processor->programNames[processor->getAVBankProgram()] )
         global.programs->setText("**. " + name, dontSendNotification);
 
     cartManager.resetActiveSysex();

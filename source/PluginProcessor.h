@@ -492,11 +492,26 @@ public :
     double getTailLengthSeconds() const override;
 
     //==============================================================================
+    // The host's programs (VST3's program parameter, an AU's presets, FL
+    // Studio's "Presets" arrows), never a MIDI Program Change: a host sends
+    // those through here. They are the sound playing's folder, as a MIDI
+    // Program Change walks it: the 32 sounds around it (its DX7 bank, for a
+    // converted one). For a bank voice, or in layer mode, the bank's voices.
     int getNumPrograms() override;
+    /** The host's program: the sound playing's place among the 32 of its
+        folder; else its bank slot (getAVBankProgram()). */
     int getCurrentProgram() override;
+    /** A host's program change: what a MIDI Program Change does. */
     void setCurrentProgram(int index) override;
-    void setCurrentProgramSelection(int index);
+    /** The host's names: the sound playing goes by its own (a host names the
+        track after it), the others by theirs. */
     const String getProgramName (int index) override;
+    /** Voice `index` of the bank, with its settings: the editor's bank list,
+        the browser and a MIDI Program Change to a bank voice. */
+    void setAVBankProgram(int index);
+    /** The bank slot of the voice (the editor's bank list, "Guardar"). */
+    int getAVBankProgram() const noexcept { return currentProgram; }
+    void setCurrentProgramSelection(int index);
     void changeProgramName(int index, const String& newName) override;
     void resetToInitVoice() ;
     
@@ -672,8 +687,24 @@ private:
     std::atomic<int> avRestoreGuardProgram { -1 };
     std::atomic<juce::uint64> avRestoreGuardBank { 0 };
     std::atomic<int> avRestoreGuardTicksLeft { 0 };
+    // The host's own program for the restored sound: a host re-selecting it
+    // keeps the session as it is (a folder's sound, layers, an edited voice).
+    std::atomic<int> avRestoreGuardHostProgram { -1 };
     void armAVRestoreGuard() noexcept;
     void tickAVRestoreGuard() noexcept;
+    // The host's program for a restored sound (the session keeps it) until its
+    // folder is read: what the host was told when the session was saved.
+    int avSessionHostProgram = -1;                          // the last state read: its session's, or -1
+    std::atomic<int> avRestoredHostProgram { -1 };
+    // What the host was last told (message thread): it shows the program and
+    // name of the sound playing, and steps from that program.
+    int avHostToldProgram = -1;
+    juce::String avHostToldName;
+    std::atomic<bool> avHostRestored { false };             // a host restore: what it holds is what the host has
+    /** Message thread (the timer): tells the host when the program or name of
+        the sound playing changed (a MIDI Program Change, its folder read, a
+        sound loaded or renamed). */
+    void syncAVHostDisplay();
 
     int32_t nextKeydownSeq;;
 

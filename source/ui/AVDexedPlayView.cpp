@@ -1599,7 +1599,7 @@ String AVDexedPlayView::activePresetKey() const {
         return "user-path:" + activeFile.getFullPathName();
     }
     if (!processor.currentCart.containsData()) return {};
-    return "bank:" + AVDexedLibrary::bankFingerprint(processor.currentCart) + avProgramSuffix(processor.getCurrentProgram());
+    return "bank:" + AVDexedLibrary::bankFingerprint(processor.currentCart) + avProgramSuffix(processor.getAVBankProgram());
 }
 
 bool AVDexedPlayView::isActiveEntry(const PresetEntry& entry) const {
@@ -1609,7 +1609,7 @@ bool AVDexedPlayView::isActiveEntry(const PresetEntry& entry) const {
     if (presetPath.getFullPathName().isNotEmpty() || presetId.isNotEmpty())
         return entry.isUser && (presetPath.getFullPathName().isNotEmpty() ? entry.file == presetPath
                                                                           : entry.key == "user:" + presetId);
-    if (entry.isUser || entry.bank == nullptr || entry.program != processor.getCurrentProgram()) return false;
+    if (entry.isUser || entry.bank == nullptr || entry.program != processor.getAVBankProgram()) return false;
     const auto& activeFile = processor.activeFileCartridge;
     if (activeFile.getFullPathName().isNotEmpty()) return entry.bank->file == activeFile;
     // A bank without file: its transient row, or the library copy standing in for it.
@@ -1621,7 +1621,7 @@ String AVDexedPlayView::activeIdentity() const {
     const auto presetPath = processor.getAVPresetPath();
     if (presetPath.getFullPathName().isNotEmpty() || processor.getAVPresetId().isNotEmpty())
         return "preset|" + presetPath.getFullPathName() + "|" + processor.getAVPresetId();
-    return "bank|" + processor.activeFileCartridge.getFullPathName() + "|" + String(processor.getCurrentProgram());
+    return "bank|" + processor.activeFileCartridge.getFullPathName() + "|" + String(processor.getAVBankProgram());
 }
 
 void AVDexedPlayView::selectActivePreset() {
@@ -1734,10 +1734,10 @@ void AVDexedPlayView::commitProgramSelection(int token, bool) {
     // the session, which its file does not have.
     const auto bank = entry.transient ? entry.bank->cartridge
                                       : AVDexedLibrary::currentBankOf(entry.bank->file, entry.bank->cartridge);
-    // The bank and its file first, then the program: setCurrentProgram applies
+    // The bank and its file first, then the program: setAVBankProgram applies
     // the sound's embedded settings and takes the "unmodified" baseline.
     processor.setActiveBank(bank, entry.bank->file);
-    processor.setCurrentProgram(entry.program);
+    processor.setAVBankProgram(entry.program);
     processor.captureAVPresetBaseline();
     processor.updateHostDisplay();
     updateBank();
@@ -2147,7 +2147,7 @@ void AVDexedPlayView::refreshLabels() {
         collection = entry != nullptr && entry->source.isNotEmpty() ? entry->source
                    : processor.hasExternalCartridgeContext() ? processor.activeFileCartridge.getFileNameWithoutExtension()
                    : language.text("unsavedBank");
-        detail = language.format("programOfBank", {{"number", String(processor.getCurrentProgram() + 1)}});
+        detail = language.format("programOfBank", {{"number", String(processor.getAVBankProgram() + 1)}});
     }
     // A file removed from the library (hidden in .deleted, or in the trash) is
     // unavailable too, even while its hidden copy still exists.

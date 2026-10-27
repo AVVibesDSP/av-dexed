@@ -808,9 +808,11 @@ bool testRestoreKeepsSessionValues()
         && near(parameterValue(restored, IDs::masterVolume.name), 0.77f)
         && restored.activeFileCartridge == file;
 
-    // The host re-selects the restored program right away: the session wins, once.
+    // The host re-selects the restored program right away: the session wins,
+    // once, as it was saved ("Modified" too: the volume is not the bank's).
     restored.setCurrentProgram(3);
-    const bool skippedOnce = near(parameterValue(restored, IDs::masterVolume.name), 0.77f) && !restored.isAVPresetModified();
+    const bool skippedOnce = near(parameterValue(restored, IDs::masterVolume.name), 0.77f)
+        && source.isAVPresetModified() && restored.isAVPresetModified();
     restored.setCurrentProgram(3);
     const bool appliedAfterwards = near(parameterValue(restored, IDs::masterVolume.name), 0.5f);
 
@@ -861,24 +863,24 @@ bool testRestoreGuardOnlyForRestoredBank()
     juce::MemoryBlock session;
     source.getStateInformation(session);
 
-    // Within the guard's second the user plays slot 3 of another bank.
+    // Within the guard's second the user plays slot 3 of another bank (the browser).
     DexedAudioProcessor restored(DexedAudioProcessor::TestMode{});
     restored.setStateInformation(session.getData(), static_cast<int>(session.getSize()));
     restored.setActiveBank(other, otherFile);
-    restored.setCurrentProgram(3);
+    restored.setAVBankProgram(3);
     const bool otherBankOwnSettings = near(parameterValue(restored, IDs::reverbAmount.name), 0.4f)
         && near(parameterValue(restored, IDs::masterVolume.name), 1.0f, 0.0001f) && !restored.isAVPresetModified();
 
     // A 32-voice SysEx bank arrives: its slot gets the defaults.
     restored.setStateInformation(session.getData(), static_cast<int>(session.getSize()));
     restored.setActiveBank(other, juce::File());
-    restored.setCurrentProgram(3);
+    restored.setAVBankProgram(3);
     const bool sysexDefaults = hasDefaultSoundSettings(restored);
 
     // The restored voices only re-pointed to another file: the session still wins.
     restored.setStateInformation(session.getData(), static_cast<int>(session.getSize()));
     restored.setActiveBank(bank, copyFile);
-    restored.setCurrentProgram(3);
+    restored.setAVBankProgram(3);
     const bool repointedKept = near(parameterValue(restored, IDs::masterVolume.name), 0.77f);
 
     return expect(written && otherBankOwnSettings, "after a restore, the same slot of another bank gets that bank's settings")
@@ -1170,8 +1172,9 @@ bool testLegacyRestoreInstallsItsBank()
 
     DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
     processor.setStateInformation(legacy.getData(), static_cast<int>(legacy.getSize()));
+    // The bank's voice 2; the host names program 2 after the voice that plays (the state's own).
     const bool installed = processor.activeFileCartridge == file && processor.getCurrentProgram() == 2
-        && processor.getProgramName(2).trimEnd() == "B8 S02"
+        && processor.programNames[2].trimEnd() == "B8 S02" && processor.getProgramName(2) == processor.getAVPresetName()
         && near(parameterValue(processor, IDs::reverbAmount.name), 0.0f, 0.0001f);
     processor.setCurrentProgram(2);
     const bool guarded = near(parameterValue(processor, IDs::reverbAmount.name), 0.0f, 0.0001f);

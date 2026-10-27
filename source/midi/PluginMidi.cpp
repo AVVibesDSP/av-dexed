@@ -88,7 +88,7 @@ void DexedAudioProcessor::processMidiMessage(const MidiMessage *msg) {
                 if (const int steps = consumeAVPresetSteps(); steps != 0) {
                     // Through the folder of the sound playing; through the bank for a bank voice.
                     if (! stepAVFolderSound(steps))
-                        setCurrentProgram(((currentProgram + steps) % 32 + 32) % 32);
+                        setAVBankProgram(((currentProgram + steps) % 32 + 32) % 32);
                     avHostProgramDirty.store(true, std::memory_order_release);
                 }
                 switch(ctrl) {
@@ -148,7 +148,7 @@ void DexedAudioProcessor::processMidiMessage(const MidiMessage *msg) {
             // Sound N of the folder of the sound playing (with Bank Select,
             // N + 128 per bank); for a bank voice, voice N of its bank.
             if (! playAVFolderSound((avBankSelectMsb * 128 + avBankSelectLsb) * 128 + buf[1]))
-                setCurrentProgram(buf[1]);
+                setAVBankProgram(buf[1]);
             return;
 
         case 0xd0 :
@@ -208,6 +208,24 @@ void DexedAudioProcessor::timerCallback() {
     stepAVPresetsWithoutEditor();
     if (avHostProgramDirty.exchange(false, std::memory_order_acq_rel))
         updateHostDisplay(ChangeDetails().withProgramChanged(true));
+    syncAVHostDisplay();
+}
+
+void DexedAudioProcessor::syncAVHostDisplay() {
+    // The host shows the program and name of the sound playing (Logic names
+    // the track after it) and steps from that program: told again whenever
+    // either changes, however (a MIDI Program Change in render, its folder
+    // read a moment later, a sound loaded or renamed).
+    const int program = getCurrentProgram();
+    const auto name = getAVPresetName();
+    const bool restored = avHostRestored.exchange(false, std::memory_order_acq_rel);
+    if (program == avHostToldProgram && name == avHostToldName)
+        return;
+    avHostToldProgram = program;
+    avHostToldName = name;
+    // A host restore: the host has these from the session it restored.
+    if (! restored)
+        updateHostDisplay(ChangeDetails().withProgramChanged(true));
 }
 
 void DexedAudioProcessor::stepAVPresetsWithoutEditor() {
@@ -226,7 +244,7 @@ void DexedAudioProcessor::stepAVPresetsWithoutEditor() {
         // the audio lock: render reads the voice it replaces.
         const juce::ScopedLock avStepLock(getCallbackLock());
         if (! stepAVFolderSound(steps))
-            setCurrentProgram(((currentProgram + steps) % 32 + 32) % 32);
+            setAVBankProgram(((currentProgram + steps) % 32 + 32) % 32);
     }
     updateHostDisplay(ChangeDetails().withProgramChanged(true));
 }
@@ -317,7 +335,7 @@ void DexedAudioProcessor::handleAVSysExNow(const uint8_t* buf, int sz) {
                 Cartridge received;
                 if ( received.load(buf, sz) == 0 ) {
                     setActiveBank(received, juce::File());
-                    setCurrentProgram(0);
+                    setAVBankProgram(0);
                     keepAVReceivedBank(buf, sz);
                 }
             }

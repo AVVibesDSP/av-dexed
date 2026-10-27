@@ -185,7 +185,7 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
             midiCCMapper->processControlChange(ctrl, value);
             if (! avEditorOpen.load(std::memory_order_acquire))
                 if (const int steps = consumeAVPresetSteps(); steps != 0) {
-                    setCurrentProgram(((currentProgram + steps) % 32 + 32) % 32);
+                    setAVBankProgram(((currentProgram + steps) % 32 + 32) % 32);
                     avHostProgramDirty.store(true, std::memory_order_release);
                     applySoundChangeNow();
                 }
@@ -209,7 +209,7 @@ void DexedAudioProcessor::processAVLayerMidi(const MidiMessage& message) {
         }
 
         case 0xC0:
-            setCurrentProgram(buf[1] & 0x7F);   // into the selected layer
+            setAVBankProgram(buf[1] & 0x7F);   // into the selected layer
             applySoundChangeNow();
             return;
 

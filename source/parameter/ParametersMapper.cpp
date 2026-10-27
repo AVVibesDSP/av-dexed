@@ -264,7 +264,13 @@ int DexedAudioProcessor::getNumPrograms() {
 }
 
 int DexedAudioProcessor::getCurrentProgram() {
-    return currentProgram;
+    if (isAVLayerModeOn())
+        return currentProgram;
+    // A restored sound, until its folder is read: what the host was told.
+    if (const int restored = avRestoredHostProgram.load(std::memory_order_acquire); restored >= 0)
+        return restored;
+    const int position = avFolderPosition.load(std::memory_order_acquire);
+    return position >= 0 ? position % 32 : currentProgram;
 }
 
 // The modern settings that belong to each sound. Not avDelayTempo (the local
@@ -376,12 +382,19 @@ void DexedAudioProcessor::armAVRestoreGuard() noexcept {
     avRestoreGuardTicksLeft.store(AVRestoreGuardTicks, std::memory_order_relaxed);
     avRestoreGuardBank.store(avBankVoicesHash(currentCart), std::memory_order_relaxed);
     avRestoreGuardProgram.store(currentProgram, std::memory_order_release);
+    // A session saved before the host's program was kept: the bank slot, which
+    // is what the host was told then.
+    avRestoredHostProgram.store(avSessionHostProgram >= 0 ? avSessionHostProgram : currentProgram, std::memory_order_release);
+    avRestoreGuardHostProgram.store(getCurrentProgram(), std::memory_order_release);
+    avHostRestored.store(true, std::memory_order_release);
 }
 
 void DexedAudioProcessor::tickAVRestoreGuard() noexcept {
     if (avRestoreGuardTicksLeft.load(std::memory_order_relaxed) > 0
-        && avRestoreGuardTicksLeft.fetch_sub(1, std::memory_order_relaxed) == 1)
+        && avRestoreGuardTicksLeft.fetch_sub(1, std::memory_order_relaxed) == 1) {
         avRestoreGuardProgram.store(-1, std::memory_order_release);
+        avRestoreGuardHostProgram.store(-1, std::memory_order_release);
+    }
 }
 
 void DexedAudioProcessor::setCurrentProgramSelection(int index) {
@@ -392,6 +405,38 @@ void DexedAudioProcessor::setCurrentProgramSelection(int index) {
 
 void DexedAudioProcessor::setCurrentProgram(int index) {
     index = juce::jlimit(0, 31, index);
+    // Right after a restore, the program the host was told: the session
+    // already is that sound (a folder's, layers, an edited voice).
+    if (avRestoreGuardHostProgram.exchange(-1, std::memory_order_acq_rel) == index) {
+        avRestoreGuardProgram.store(-1, std::memory_order_release);
+        return;
+    }
+    avRestoreGuardProgram.store(-1, std::memory_order_release);   // a program change of the host's own
+    if (! isAVLayerModeOn()) {
+        // As a MIDI Program Change (render plays it in the same way): sound N
+        // of the 32 of the folder around the sound playing. Beyond the folder's
+        // last sound nothing changes.
+        bool played = false;
+        {
+            const juce::ScopedLock lock(getCallbackLock());
+            const int position = avFolderPosition.load(std::memory_order_acquire);
+            played = position >= 0 && playAVFolderSound(position / 32 * 32 + index);
+        }
+        if (played) {
+            // Its name and file now, when the host waits for them here.
+            if (auto* messages = juce::MessageManager::getInstanceWithoutCreating(); messages != nullptr && messages->isThisTheMessageThread())
+                syncAVFolderSounds();
+            return;
+        }
+    }
+    // In layer mode, as a MIDI one too: into the selected layer.
+    setAVBankProgram(index);
+}
+
+void DexedAudioProcessor::setAVBankProgram(int index) {
+    index = juce::jlimit(0, 31, index);
+    avRestoreGuardHostProgram.store(-1, std::memory_order_release);
+    avRestoredHostProgram.store(-1, std::memory_order_release);
     // The first program change after a host restore consumes the guard; when
     // it re-selects the restored program of the restored bank, the session's
     // values win. The same slot of a bank installed since (another bank chosen
@@ -437,6 +482,16 @@ void DexedAudioProcessor::setCurrentProgram(int index) {
 
 const String DexedAudioProcessor::getProgramName(int index) {
     index = juce::jlimit(0, 31, index);
+    if (index == getCurrentProgram())
+        return getAVPresetName();   // as the top bar names it
+    const int position = avFolderPosition.load(std::memory_order_acquire);
+    if (position >= 0 && ! isAVLayerModeOn()) {
+        const juce::ScopedLock lock(getCallbackLock());
+        if (avFolderSounds != nullptr) {
+            const auto place = size_t(position / 32 * 32 + index);
+            return place < avFolderSounds->sounds.size() ? avFolderSounds->sounds[place].name : String();
+        }
+    }
     return programNames[index];
 }
 

@@ -93,7 +93,7 @@ DexedAudioProcessor::DexedAudioProcessor(SetupMode setupMode)
     DXLOG("VERSION " DEXED_VERSION);
 
     mapParameters();
-    // Before the startup bank and program: setCurrentProgram applies their settings.
+    // Before the startup bank and program: setAVBankProgram applies their settings.
     resolveAVSoundParameters();
 
     Exp2::init();
@@ -146,7 +146,7 @@ DexedAudioProcessor::DexedAudioProcessor(SetupMode setupMode)
 
     if (setupMode == SetupMode::userData) {
         setupStartupCart();
-        setCurrentProgram(0);   // the factory bank converted: its first sound file (adoptAVConvertedVoice)
+        setAVBankProgram(0);   // the factory bank converted: its first sound file (adoptAVConvertedVoice)
     } else {
         currentProgram = 0;
         activeProgram = Program::initialProgram();
@@ -155,6 +155,9 @@ DexedAudioProcessor::DexedAudioProcessor(SetupMode setupMode)
 
     mtsClient = setupMode == SetupMode::userData ? MTS_RegisterClient() : nullptr;
     captureAVPresetBaseline();
+    // What a host asks a new instance: nothing to tell it until it changes.
+    avHostToldProgram = getCurrentProgram();
+    avHostToldName = getAVPresetName();
     startTimerHz(30);
 }
 
@@ -833,12 +836,12 @@ void DexedAudioProcessor::setZoomFactor(float factor) {
 }
 
 void DexedAudioProcessor::applyProgram(const Program &program) {
-    // Init, a received voice...: setCurrentProgram marks a bank slot's sound again.
+    // Init, a received voice...: setAVBankProgram marks a bank slot's sound again.
     avSoundFromBankSlot.store(false, std::memory_order_relaxed);
     if (midiCCMapper != nullptr) midiCCMapper->forgetAVCCWrites();   // a new sound: the wheel moved nothing of it
     panicForSoundChange();
     // A new sound in a layer starts without the DX7II voice functions of the
-    // one it replaces (setCurrentProgram gives a bank voice its own).
+    // one it replaces (setAVBankProgram gives a bank voice its own).
     if (isAVLayerModeOn())
         setAVLayerVoiceExtras(avSelectedLayer.load(std::memory_order_acquire), nullptr);
     activeProgram = program;
