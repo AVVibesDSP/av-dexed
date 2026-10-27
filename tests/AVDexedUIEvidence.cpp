@@ -220,6 +220,32 @@ bool AVRenderUIEvidence(const juce::File& directory) {
                 passed &= output != nullptr && PNGImageFormat().writeImageToStream(img, *output);
             }
         }
+        // A pitch bend step other than 0 (a session in FL Studio had one): Settings
+        // opens, and the bend ranges it overrides are disabled. Its value used to
+        // reach the Instrument page before the range sliders existed.
+        if (auto* step = processor.parameters.getParameter(IDs::pitchStep.name)) {
+            const float before = step->getValue();
+            step->setValueNotifyingHost(step->convertTo0to1(2.0f));
+            {
+                AVDexedSettingsPanel settings(processor, {});
+                settings.AVShowPage(AVDexedSettingsPanel::AVPage::instrument);
+                std::function<Component*(Component&, const String&)> named = [&](Component& parent, const String& name) -> Component* {
+                    for (auto* child : parent.getChildren()) {
+                        if (child->getName() == name) return child;
+                        if (auto* found = named(*child, name)) return found;
+                    }
+                    return nullptr;
+                };
+                for (const auto& range : { IDs::pitchRangeUp.name, IDs::pitchRangeDown.name }) {
+                    const auto* slider = named(settings, range);
+                    if (slider == nullptr || slider->isEnabled()) {
+                        std::cerr << "Settings with a pitch bend step: " << range << " is not disabled\n";
+                        passed = false;
+                    }
+                }
+            }
+            step->setValueNotifyingHost(before);
+        }
         // The progress dialog of an import that takes a while.
         for (const auto* locale : { "es", "en" }) {
             auto& language = AVDexedLanguageService::getInstance();

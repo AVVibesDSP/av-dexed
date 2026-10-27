@@ -593,8 +593,11 @@ void ParamDialog::sliderValueChanged (juce::Slider* sliderThatWasMoved) {
 
     if (sliderThatWasMoved == pitchStep.get()) {
         //[UserSliderCode_pitchStep] -- add your slider handling code here..
-        pitchRangeUp->setEnabled(pitchStep->getValue() == 0);
-        pitchRangeDn->setEnabled(pitchStep->getValue() == 0);
+        // Also while the constructor attaches pitchStep: a step other than 0
+        // reports its value before pitchRangeUp exists (the constructor sets
+        // both ranges once they are made).
+        for (auto* range : { pitchRangeUp.get(), pitchRangeDn.get() })
+            if (range != nullptr) range->setEnabled(pitchStep->getValue() == 0);
         //[/UserSliderCode_pitchStep]
     }
 
