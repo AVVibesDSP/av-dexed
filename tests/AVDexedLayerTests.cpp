@@ -778,10 +778,48 @@ bool testUnisonAndRandomPitch() {
                      "random pitch retunes each note, the same way on every run");
     return passed;
 }
+
+/** A change of the layers changes the session beside the parameters: the
+    host is told it has something to save (a project closed without asking
+    lost it), but not by a host restore. */
+bool testLayerChangesTellTheHost() {
+    struct Host final : juce::AudioProcessorListener {
+        int saves = 0;
+        void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override {}
+        void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details) override {
+            saves += details.nonParameterStateChanged ? 1 : 0;
+        }
+    };
+    DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
+    processor.setAVLayerMode(true);
+    processor.stackAVLayers(3, 12.0f);
+    processor.runAVTimerTickForTesting();
+    Host host;
+    processor.addListener(&host);
+    processor.runAVTimerTickForTesting();
+    const bool quiet = host.saves == 0;
+    processor.getAVLayerSettings(1).volume.store(0.25f);   // as the Capas page's fader does
+    processor.runAVTimerTickForTesting();
+    const bool told = host.saves == 1;
+    processor.removeListener(&host);
+
+    juce::MemoryBlock session;
+    processor.getStateInformation(session);
+    DexedAudioProcessor restored(DexedAudioProcessor::TestMode{});
+    Host restoredHost;
+    restored.addListener(&restoredHost);
+    restored.setStateInformation(session.getData(), int(session.getSize()));
+    for (int tick = 0; tick < 3; ++tick) restored.runAVTimerTickForTesting();
+    restored.removeListener(&restoredHost);
+    return expect(quiet && told, "a change of the layers tells the host there is something to save")
+        && expect(restoredHost.saves == 0 && restored.getAVLayerSettings(1).volume.load() == 0.25f,
+                  "a host restore brings them back without telling it so");
+}
 }
 
 bool runAVDexedLayerTests() {
     bool passed = testOneLayerIsTheSinglePath();
+    passed &= testLayerChangesTellTheHost();
     passed &= testRoutingAndMix();
     passed &= testTransposeAndDetune();
     passed &= testEditsStayWithTheirLayer();

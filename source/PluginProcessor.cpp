@@ -158,6 +158,7 @@ DexedAudioProcessor::DexedAudioProcessor(SetupMode setupMode)
     // What a host asks a new instance: nothing to tell it until it changes.
     avHostToldProgram = getCurrentProgram();
     avHostToldName = getAVPresetName();
+    avHostToldSession = getAVSessionFingerprint();
     startTimerHz(30);
 }
 

@@ -215,17 +215,76 @@ void DexedAudioProcessor::syncAVHostDisplay() {
     // The host shows the program and name of the sound playing (Logic names
     // the track after it) and steps from that program: told again whenever
     // either changes, however (a MIDI Program Change in render, its folder
-    // read a moment later, a sound loaded or renamed).
+    // read a moment later, a sound loaded or renamed). And a project holds
+    // more than the parameters: without being told, a host closed it without
+    // asking after a change of the layers, the tuning or a MIDI assignment.
     const int program = getCurrentProgram();
     const auto name = getAVPresetName();
+    const auto session = getAVSessionFingerprint();
     const bool restored = avHostRestored.exchange(false, std::memory_order_acq_rel);
-    if (program == avHostToldProgram && name == avHostToldName)
+    const bool programChanged = program != avHostToldProgram || name != avHostToldName;
+    const bool sessionChanged = session != avHostToldSession;
+    if (! programChanged && ! sessionChanged)
         return;
     avHostToldProgram = program;
     avHostToldName = name;
+    avHostToldSession = session;
     // A host restore: the host has these from the session it restored.
     if (! restored)
-        updateHostDisplay(ChangeDetails().withProgramChanged(true));
+        updateHostDisplay(ChangeDetails().withProgramChanged(programChanged).withNonParameterStateChanged(sessionChanged));
+}
+
+uint64_t DexedAudioProcessor::getAVSessionFingerprint() const {
+    // FNV-1a, as getAVMusicalFingerprint(). Not the voice being edited (the
+    // selected layer's: its parameters), nor where the mod wheel left one.
+    uint64_t hash = 14695981039346656037ULL;
+    const auto append = [&hash](const void* bytes, size_t count) {
+        const auto* data = static_cast<const uint8_t*>(bytes);
+        for (size_t i = 0; i < count; ++i)
+            hash = (hash ^ data[i]) * 1099511628211ULL;
+    };
+    const auto value = [&append](auto item) { append(&item, sizeof(item)); };
+    const auto text = [&append](const juce::String& item) { append(item.toRawUTF8(), item.getNumBytesAsUTF8() + 1); };
+    const int selected = avSelectedLayer.load(std::memory_order_acquire);
+    value(avLayerMode.load(std::memory_order_acquire));
+    value(selected);
+    for (int layer = 0; layer < AVLayerCount; ++layer) {
+        const auto& settings = avLayerSettings[size_t(layer)];
+        value(settings.enabled.load(std::memory_order_relaxed));
+        value(settings.channel.load(std::memory_order_relaxed));
+        value(settings.lowNote.load(std::memory_order_relaxed));
+        value(settings.highNote.load(std::memory_order_relaxed));
+        value(settings.transpose.load(std::memory_order_relaxed));
+        value(settings.detune.load(std::memory_order_relaxed));
+        value(settings.volume.load(std::memory_order_relaxed));
+        value(settings.pan.load(std::memory_order_relaxed));
+        value(settings.alternateGroup.load(std::memory_order_relaxed));
+        value(settings.unison.load(std::memory_order_relaxed));
+        value(settings.randomPitch.load(std::memory_order_relaxed));
+        value(settings.mono.load(std::memory_order_relaxed));
+        value(settings.microTable.load(std::memory_order_relaxed));
+        value(settings.microKey.load(std::memory_order_relaxed));
+        value(settings.phase.load(std::memory_order_relaxed));
+        if (layer != selected)   // render only ever writes the selected one
+            append(avLayers[size_t(layer)].getProgram().getRawData(), size_t(Program::PROGRAM_SIZE + 1));
+    }
+    text(getAVLayerSetFile().getFullPathName());
+    text(getAVLayerSetId());
+    if (currentCart.containsData()) append(currentCart.getVoiceSysex(), SYSEX_SIZE);
+    if (const auto* amem = currentCart.getAmem()) append(amem, 1120);
+    value(currentProgram);
+    text(activeFileCartridge.getFullPathName());
+    append(currentSCLData.data(), currentSCLData.size());
+    append(currentKBMData.data(), currentKBMData.size());
+    if (midiCCMapper != nullptr) {
+        value(midiCCMapper->getAVMappingsFingerprint());
+        value(getAVPresetStepCC(AVPresetStep::previous));
+        value(getAVPresetStepCC(AVPresetStep::next));
+    }
+    text(getAVPresetPath().getFullPathName());
+    text(getAVPresetId());
+    value(avSoundFromBankSlot.load(std::memory_order_relaxed));
+    return hash;
 }
 
 void DexedAudioProcessor::stepAVPresetsWithoutEditor() {

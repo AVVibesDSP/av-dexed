@@ -697,14 +697,21 @@ private:
     int avSessionHostProgram = -1;                          // the last state read: its session's, or -1
     std::atomic<int> avRestoredHostProgram { -1 };
     // What the host was last told (message thread): it shows the program and
-    // name of the sound playing, and steps from that program.
+    // name of the sound playing, and steps from that program; it saves the
+    // session when told it changed.
     int avHostToldProgram = -1;
     juce::String avHostToldName;
+    uint64_t avHostToldSession = 0;
     std::atomic<bool> avHostRestored { false };             // a host restore: what it holds is what the host has
     /** Message thread (the timer): tells the host when the program or name of
         the sound playing changed (a MIDI Program Change, its folder read, a
-        sound loaded or renamed). */
+        sound loaded or renamed), and when the session changed beside the
+        parameters (getAVSessionFingerprint). */
     void syncAVHostDisplay();
+    /** What a session keeps beside the parameters, whose changes a host sees
+        on its own: the layers, the bank, the tuning, the MIDI assignments,
+        the sound's file. Message thread. */
+    uint64_t getAVSessionFingerprint() const;
 
     int32_t nextKeydownSeq;;
 
