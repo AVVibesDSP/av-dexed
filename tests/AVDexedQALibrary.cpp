@@ -105,7 +105,7 @@ bool AVRunLibraryQA(const juce::File& outputDirectory) {
             processor.setStateInformation(session.getData(), static_cast<int>(session.getSize()));
             std::cout << "Restored session: " << processor.getAVPresetName() << " · bank "
                       << processor.activeFileCartridge.getFullPathName() << " · program "
-                      << processor.getCurrentProgram() + 1 << '\n';
+                      << processor.getAVBankProgram() + 1 << '\n';
         } else {
             std::cout << "No standalone session to restore.\n";
         }

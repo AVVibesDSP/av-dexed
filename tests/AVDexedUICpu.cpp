@@ -156,7 +156,7 @@ bool loadSound(DexedAudioProcessor& processor, const juce::File& bankFile, int s
     Cartridge bank;
     if (bank.load(bankFile) < 0) return false;
     processor.setActiveBank(bank, bankFile);
-    processor.setCurrentProgram(juce::jlimit(0, 31, slot - 1));
+    processor.setAVBankProgram(juce::jlimit(0, 31, slot - 1));
     return true;
 }
 

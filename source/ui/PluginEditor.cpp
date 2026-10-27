@@ -2055,8 +2055,8 @@ void DexedAudioProcessorEditor::rebuildProgramCombobox() {
 
     processor->currentCart.getProgramNames(processor->programNames);
 
-    // The bank's voices (the host's programs may be a folder's sounds).
-    for(int i=0;i<processor->getNumPrograms();i++) {
+    // The bank's 32 voices (the host sees one program: the sound playing).
+    for(int i=0;i<32;i++) {
         String id;
         id << (i+1) << ". " << processor->programNames[i];
         global.programs->addItem(id, i+1);
@@ -2357,7 +2357,7 @@ void DexedAudioProcessorEditor::loadNativePreset(const File& file) {
             const int program = static_cast<int>(session.getProperty("currentProgram", -1));
             structurallyValid = voice.fromBase64Encoding(encodedVoice)
                 && voice.getSize() == Program::PROGRAM_SIZE + 1
-                && program >= 0 && program < processor->getNumPrograms();
+                && program >= 0 && program < 32;
             const auto encodedCart = session.getProperty("cartridge").toString();
             if (structurallyValid && encodedCart.isNotEmpty()) {
                 MemoryBlock cartData;

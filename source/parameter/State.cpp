@@ -96,9 +96,6 @@ void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
 
     juce::ValueTree session(sessionNode);
     session.setProperty("currentProgram", currentProgram, nullptr);
-    // The program the host was told (the sound's place in its folder): a host
-    // re-selecting it after the restore keeps the sound.
-    session.setProperty("avHostProgram", getCurrentProgram(), nullptr);
     session.setProperty("sourcePath", activeFileCartridge.getFullPathName(), nullptr);
     session.setProperty("avPresetName", avPresetContextCurrent.load(std::memory_order_relaxed) ? avPresetName : juce::String(), nullptr);
     session.setProperty("avPresetId", getAVPresetId(), nullptr);
@@ -200,7 +197,6 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
         const juce::ScopedLock avStateLock(getCallbackLock());
         if (!setStateInformation10(this, xmlState.get()))
             return false;
-        avSessionHostProgram = -1;   // the host was told the bank slot
         if (legacySourcePath.isNotEmpty())
             installAVActiveBank(legacyBankRead ? legacyBank : currentCart, legacyBankFile, legacySoundTable);
         // A 1.0 state does not say whether its voice still is the slot's own:
@@ -418,7 +414,6 @@ bool DexedAudioProcessor::loadAVStateInformation(const void* source, int sizeInB
 
     refreshVoice.set(true);
 
-    avSessionHostProgram = session.isValid() ? juce::jlimit(-1, 31, static_cast<int>(session.getProperty("avHostProgram", -1))) : -1;
     avPresetName = session.getProperty("avPresetName").toString();
     avPresetId = session.getProperty("avPresetId").toString();
     const auto presetPath = session.getProperty("avPresetPath").toString();
@@ -537,7 +532,6 @@ juce::ValueTree DexedAudioProcessor::createAVNativePresetTree(const juce::String
     }
     auto session = tree.getChildWithName(sessionNode);
     session.removeChild(session.getChildWithName("avCCWrites"), nullptr);   // the values above are the sound's
-    session.removeProperty("avHostProgram", nullptr);   // a host's, for a session
     session.setProperty("avPresetName", name, nullptr);
     session.setProperty("avPresetId", id, nullptr);
     session.setProperty("avKnownPresetOrigin", true, nullptr);

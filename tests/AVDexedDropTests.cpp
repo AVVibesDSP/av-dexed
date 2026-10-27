@@ -149,7 +149,7 @@ bool runAVDexedDropTests()
         Cartridge bank;
         if (AVDexedLibrary::readBank(factoryBank, bank)) {
             processor.setActiveBank(bank, factoryBank);
-            processor.setCurrentProgram(0);
+            processor.setAVBankProgram(0);
         } else {
             passed = expect(false, "the factory bank is in the isolated library");
         }
@@ -745,7 +745,7 @@ bool runAVDexedDropTests()
             const auto favoriteKey = "bank:" + AVDexedLibrary::bankFingerprint(factoryBank) + ":03";
             editor->playView.updateFavorites(StringArray(favoriteKey), {});
             processor.setActiveBank(factoryBank, factoryFile);
-            processor.setCurrentProgram(1);
+            processor.setAVBankProgram(1);
             editor->playView.refreshLabels();
             const auto syxIn = [&root] {
                 int count = 0;

@@ -101,7 +101,7 @@ std::unique_ptr<DexedAudioProcessor> makeProcessor(const Cartridge& bank, int sl
     processor->setRateAndBufferSizeDetails(goldenRate, 1024);
     processor->prepareToPlay(goldenRate, 1024);
     processor->setActiveBank(bank, juce::File());
-    processor->setCurrentProgram(slot);
+    processor->setAVBankProgram(slot);
     setParameter(*processor, IDs::engineType.name, float(engine));
     return processor;
 }

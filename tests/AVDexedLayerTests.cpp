@@ -67,7 +67,7 @@ std::unique_ptr<DexedAudioProcessor> makeProcessor(const Cartridge& bank, int sl
     processor->setRateAndBufferSizeDetails(rate, 1024);
     processor->prepareToPlay(rate, 1024);
     processor->setActiveBank(bank, juce::File());
-    processor->setCurrentProgram(slot);
+    processor->setAVBankProgram(slot);
     return processor;
 }
 
@@ -247,7 +247,7 @@ bool testEditsStayWithTheirLayer() {
     p.selectAVLayer(0);
     passed &= expect(p.activeProgram.getRawData()[134] == edited, "and comes back when layer 1 is selected again");
     p.selectAVLayer(1);
-    p.setCurrentProgram(12);                               // the browser loads into the selected layer
+    p.setAVBankProgram(12);                               // the browser loads into the selected layer
     passed &= expect(p.getAVLayerProgram(1).getName() == bank.unpackProgram(12).getName()
                          && p.getAVLayerProgram(0).getRawData()[134] == edited,
                      "a sound chosen in the browser goes into the selected layer only");
@@ -515,12 +515,12 @@ bool testBankVoiceExtras() {
                          "a bank keeps the AMEM sent with it");
     auto processor = makeProcessor(withExtras, 0);
     auto& settings = processor->getAVLayerSettings(0);
-    processor->setCurrentProgram(3);
+    processor->setAVBankProgram(3);
     passed &= expect(settings.unison.load() == 0.0f, "with one layer a voice's extras are not used");
     processor->setAVLayerMode(true);
-    processor->setCurrentProgram(3);
+    processor->setAVBankProgram(3);
     passed &= expect(settings.unison.load() > 0.0f && settings.randomPitch.load() > 0.0f, "in layer mode the voice brings them");
-    processor->setCurrentProgram(4);
+    processor->setAVBankProgram(4);
     passed &= expect(settings.unison.load() == 0.0f && settings.randomPitch.load() == 0.0f, "and the next voice without them clears them");
     return passed;
 }
@@ -580,15 +580,15 @@ bool testSecondReviewCases() {
         auto withAmem = bankWithAmem(bank);
         auto processor = makeProcessor(withAmem, 0);
         processor->setAVLayerMode(true);
-        processor->setCurrentProgram(3);
+        processor->setAVBankProgram(3);
         juce::MemoryBlock state;
         processor->getStateInformation(state);
         auto restored = makeProcessor(bank, 0);
         restored->setStateInformation(state.getData(), int(state.getSize()));
-        restored->setCurrentProgram(3);   // as hosts do right after a restore
+        restored->setAVBankProgram(3);   // as hosts do right after a restore
         passed &= expect(restored->getAVLayerSettings(0).unison.load() > 0.0f && restored->currentCart.getAmemVoice(3) != nullptr,
                          "a session keeps the AMEM and the restored layer's unison");
-        restored->setCurrentProgram(5);
+        restored->setAVBankProgram(5);
         passed &= expect(restored->getAVLayerSettings(0).mono.load() == 1, "and later program changes still find it");
     }
     // 4. Unison at full polyphony: a new key takes two voices.

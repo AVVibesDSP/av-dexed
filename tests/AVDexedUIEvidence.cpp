@@ -42,7 +42,7 @@ bool AVRenderUIEvidence(const juce::File& directory) {
         Cartridge bank;
         if (AVDexedLibrary::readBank(factoryBank, bank)) {
             processor.setActiveBank(bank, factoryBank);
-            processor.setCurrentProgram(4);
+            processor.setAVBankProgram(4);
         } else {
             std::cerr << "The factory bank is missing from the isolated library.\n";
             passed = false;
@@ -68,7 +68,7 @@ bool AVRenderUIEvidence(const juce::File& directory) {
         std::cout << "Indexed presets: " << editor->playView.libraryEntries.size() << '\n';
         // What plays now, to tell whether a key or a pedal changed the sound.
         const auto currentSound = [&processor] {
-            return processor.getAVPresetName() + "|" + String(processor.getCurrentProgram()) + "|"
+            return processor.getAVPresetName() + "|" + String(processor.getAVBankProgram()) + "|"
                    + processor.activeFileCartridge.getFullPathName();
         };
         // One MIDI CC through the processor, as a controller sends it.

@@ -168,7 +168,7 @@ bool testOutOfRangeVoiceSounds() {
     DexedAudioProcessor loaded(DexedAudioProcessor::TestMode{});
     prepare(loaded);
     loaded.setActiveBank(bank, juce::File());
-    loaded.setCurrentProgram(3);
+    loaded.setAVBankProgram(3);
     const float peak = renderPeak(loaded);
     DexedAudioProcessor original(DexedAudioProcessor::TestMode{});
     prepare(original);
@@ -213,7 +213,7 @@ bool testSessionKeepsBankValues() {
     {
         DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
         processor.setActiveBank(bank, juce::File());
-        processor.setCurrentProgram(3);
+        processor.setAVBankProgram(3);
         processor.getStateInformation(state);
     }
     DexedAudioProcessor restored(DexedAudioProcessor::TestMode{});
@@ -250,7 +250,7 @@ bool scanVoices(const juce::File& folder) {
         const auto* data = reinterpret_cast<const uint8_t*>(bank.getRawVoice());
         for (int slot = 0; slot < 32; ++slot) {
             ++voices;
-            here.setCurrentProgram(slot);
+            here.setAVBankProgram(slot);
             const auto ours = bank.unpackProgram(slot);
             const auto reference = playableReference(data + slot * 128);
             const bool same = memcmp(ours.getRawData(), reference.getRawData(), Program::PROGRAM_SIZE) == 0;
@@ -301,9 +301,9 @@ bool AVRenderBankVoice(const juce::File& bankFile, int slot) {
     DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
     prepare(processor);
     processor.setActiveBank(bank, juce::File());
-    processor.setCurrentProgram(slot - 1);
+    processor.setAVBankProgram(slot - 1);
     auto program = bank.unpackProgram(slot - 1);
-    std::cout << "Voice " << slot << " \"" << processor.getProgramName(slot - 1) << "\" algorithm "
+    std::cout << "Voice " << slot << " \"" << processor.programNames[slot - 1] << "\" algorithm "
               << int(program.getRawData()[134]) + 1 << '\n';
     const float peak = renderPeak(processor);
     std::cout << "Peak " << juce::Decibels::gainToDecibels(peak, -120.0f) << " dBFS (C4, velocity 100)\n";
@@ -347,7 +347,7 @@ bool AVAuditVoices(const juce::File& folder, const juce::File& output) {
         processor.setActiveBank(bank, juce::File());
         const auto* raw = reinterpret_cast<const uint8_t*>(bank.getRawVoice());
         for (int slot = 0; slot < 32; ++slot) {
-            processor.setCurrentProgram(slot);
+            processor.setAVBankProgram(slot);
             const auto voice = bank.unpackProgram(slot);
             float loudest = 0.0f;
             int loudestNote = 60;
@@ -378,7 +378,7 @@ bool testWheelIsPlayedNotSaved() {
     DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
     prepare(processor);
     processor.setActiveBank(bank, juce::File());
-    processor.setCurrentProgram(0);
+    processor.setAVBankProgram(0);
     auto* cutoff = processor.parameters.getParameter(IDs::cutoff.name);
     const float soundCutoff = cutoff->getValue();
     juce::AudioBuffer<float> audio(2, 512);
@@ -403,7 +403,7 @@ bool testTransposeBeyondRangeStaysInTune() {
     DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
     prepare(processor);
     processor.setActiveBank(bank, juce::File());
-    processor.setCurrentProgram(3);
+    processor.setAVBankProgram(3);
     const float peak = renderPeak(processor, 0.3, 120, 127);
     return expect(std::isfinite(peak) && peak > 0.0f && peak < 8.0f, "a voice transposed past the top of the keyboard still plays sanely");
 }

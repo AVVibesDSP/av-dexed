@@ -156,7 +156,6 @@ DexedAudioProcessor::DexedAudioProcessor(SetupMode setupMode)
     mtsClient = setupMode == SetupMode::userData ? MTS_RegisterClient() : nullptr;
     captureAVPresetBaseline();
     // What a host asks a new instance: nothing to tell it until it changes.
-    avHostToldProgram = getCurrentProgram();
     avHostToldName = getAVPresetName();
     avHostToldSession = getAVSessionFingerprint();
     startTimerHz(30);

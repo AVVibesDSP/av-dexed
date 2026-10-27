@@ -67,7 +67,7 @@ bool setStateInformation10(DexedAudioProcessor* proc, XmlElement* root) {
             return false;
     }
     const int legacyProgram = root->getIntAttribute("currentProgram", proc->getAVBankProgram());
-    if (legacyProgram < 0 || legacyProgram >= proc->getNumPrograms())
+    if (legacyProgram < 0 || legacyProgram >= 32)   // a slot of the bank
         return false;
 
     // A sound file is one sound: in layer mode only the selected layer stops.
@@ -101,7 +101,7 @@ bool setStateInformation10(DexedAudioProcessor* proc, XmlElement* root) {
 
     // Restore the visible context without loading a slot over the voice that
     // was embedded in the legacy state.
-    if (legacyProgram >= 0 && legacyProgram < proc->getNumPrograms())
+    if (legacyProgram >= 0 && legacyProgram < 32)
         proc->setCurrentProgramSelection(legacyProgram);
 
     // The bank of "activeFileCartridge" is read by the caller before the audio

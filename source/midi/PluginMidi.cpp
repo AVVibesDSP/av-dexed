@@ -212,21 +212,19 @@ void DexedAudioProcessor::timerCallback() {
 }
 
 void DexedAudioProcessor::syncAVHostDisplay() {
-    // The host shows the program and name of the sound playing (Logic names
-    // the track after it) and steps from that program: told again whenever
-    // either changes, however (a MIDI Program Change in render, its folder
-    // read a moment later, a sound loaded or renamed). And a project holds
-    // more than the parameters: without being told, a host closed it without
-    // asking after a change of the layers, the tuning or a MIDI assignment.
-    const int program = getCurrentProgram();
+    // The host shows the name of the sound playing as its program's (Logic
+    // names the track after it): told again whenever it changes, however (a
+    // MIDI Program Change in render, a sound loaded or renamed). And a project
+    // holds more than the parameters: without being told, a host closed it
+    // without asking after a change of the layers, the tuning or a MIDI
+    // assignment.
     const auto name = getAVPresetName();
     const auto session = getAVSessionFingerprint();
     const bool restored = avHostRestored.exchange(false, std::memory_order_acq_rel);
-    const bool programChanged = program != avHostToldProgram || name != avHostToldName;
+    const bool programChanged = name != avHostToldName;
     const bool sessionChanged = session != avHostToldSession;
     if (! programChanged && ! sessionChanged)
         return;
-    avHostToldProgram = program;
     avHostToldName = name;
     avHostToldSession = session;
     // A host restore: the host has these from the session it restored.

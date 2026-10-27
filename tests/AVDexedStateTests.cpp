@@ -108,7 +108,7 @@ bool testStateRoundTripAndInvalidState()
     restored.setStateInformation(snapshot.getData(), static_cast<int>(snapshot.getSize()));
 
     const bool roundTrip = sourceParametersSet
-        && restored.getCurrentProgram() == 7
+        && restored.getAVBankProgram() == 7
         && restored.activeProgram.getName() == "STATE TEST"
         && std::abs(parameterValue(restored, IDs::masterVolume.name) - 0.37f) < 0.002f
         && std::abs(parameterValue(restored, IDs::pan.name) - 0.72f) < 0.002f
@@ -127,7 +127,7 @@ bool testStateRoundTripAndInvalidState()
 
     const bool invalidLeavesActiveState = std::abs(parameterValue(restored, IDs::masterVolume.name) - beforeInvalidValue) < 0.002f
         && restored.activeProgram.getName() == beforeInvalidName
-        && restored.getCurrentProgram() == 7;
+        && restored.getAVBankProgram() == 7;
 
     return expect(roundTrip, "state restores the edited voice name, selection, output controls, and FX values")
         && expect(invalidLeavesActiveState, "malformed voice payload does not change the active sound or selection");
@@ -180,12 +180,12 @@ bool testIndependentProcessorInstances()
     const bool firstRestored = std::abs(parameterValue(first, IDs::masterVolume.name) - 0.23f) < 0.002f
         && std::abs(parameterValue(first, IDs::pan.name) - 0.18f) < 0.002f
         && first.activeProgram.getName() == "INSTANCE A"
-        && first.getCurrentProgram() == 2;
+        && first.getAVBankProgram() == 2;
     const bool secondUnaffected = std::abs(parameterValue(second, IDs::masterVolume.name) - 0.81f) < 0.002f
         && std::abs(parameterValue(second, IDs::pan.name) - 0.76f) < 0.002f
         && std::abs(parameterValue(second, IDs::reverbAmount.name) - 0.09f) < 0.002f
         && second.activeProgram.getName() == "INSTANCE B"
-        && second.getCurrentProgram() == 9;
+        && second.getAVBankProgram() == 9;
 
     return expect(setFirst && setSecond, "two isolated processors accept independent musical settings")
         && expect(firstRestored, "restoring one processor restores its own saved context")
@@ -382,7 +382,7 @@ bool testLegacyBlobMigrationAndInvalidBlob()
     juce::AudioProcessor::copyXmlToBinary(root, legacy);
     setParameterValue(processor, IDs::reverbAmount.name, 0.7f);
     const bool loaded = processor.loadAVStateInformation(legacy.getData(), static_cast<int>(legacy.getSize()));
-    const bool preservedVoice = loaded && processor.getCurrentProgram() == 12
+    const bool preservedVoice = loaded && processor.getAVBankProgram() == 12
         && processor.activeProgram.getName() == voice.getName()
         && std::abs(parameterValue(processor, IDs::output.name) - 0.43f) < 0.002f
         && parameterValue(processor, IDs::reverbAmount.name) == 0.0f;
@@ -395,7 +395,7 @@ bool testLegacyBlobMigrationAndInvalidBlob()
     const bool rejected = !processor.loadAVStateInformation(malformed.getData(), static_cast<int>(malformed.getSize()));
     return expect(preservedVoice, "legacy 1.0 binary voice migrates with a missing bank and neutral new effects")
         && expect(rejected && std::abs(parameterValue(processor, IDs::output.name) - 0.43f) < 0.002f
-                  && processor.getCurrentProgram() == 12,
+                  && processor.getAVBankProgram() == 12,
                   "short legacy voice data is rejected before any live parameter changes");
 }
 
@@ -724,17 +724,17 @@ bool testSoundSettingsFollowTheirVoice()
 
     DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
     processor.setActiveBank(bank, file);
-    const bool bankOnly = processor.activeFileCartridge == file && processor.getCurrentProgram() == 0
+    const bool bankOnly = processor.activeFileCartridge == file && processor.getAVBankProgram() == 0
         && hasDefaultSoundSettings(processor);
 
-    processor.setCurrentProgram(3);
+    processor.setAVBankProgram(3);
     const bool applied = near(parameterValue(processor, IDs::masterVolume.name), 0.5f)
         && near(parameterValue(processor, IDs::reverbAmount.name), 0.4f)
         && parameterValue(processor, IDs::chorusMode.name) == 2.0f
         && parameterValue(processor, IDs::avReverbBypass.name) == 1.0f
         && !processor.isAVPresetModified();
 
-    processor.setCurrentProgram(4);
+    processor.setAVBankProgram(4);
     const bool defaults = hasDefaultSoundSettings(processor) && !processor.isAVPresetModified();
 
     // The bank manager moved slot 3's voice to slot 10 and put another voice in slot 3.
@@ -744,10 +744,10 @@ bool testSoundSettingsFollowTheirVoice()
     const auto movedFile = file.getSiblingFile("Moved.syx");
     const bool movedWritten = writeBankFile(movedFile, moved, settings);
     processor.setActiveBank(moved, movedFile);
-    processor.setCurrentProgram(10);
+    processor.setAVBankProgram(10);
     const bool followedVoice = near(parameterValue(processor, IDs::masterVolume.name), 0.5f)
         && near(parameterValue(processor, IDs::reverbAmount.name), 0.4f);
-    processor.setCurrentProgram(3);
+    processor.setAVBankProgram(3);
     const bool staleSlotIgnored = hasDefaultSoundSettings(processor);
 
     // A MIDI program change takes the same path, inside render.
@@ -757,18 +757,18 @@ bool testSoundSettingsFollowTheirVoice()
     juce::MidiBuffer events;
     events.addEvent(juce::MidiMessage::programChange(1, 10), 0);
     processor.processBlock(audio, events);
-    const bool midiProgramChange = processor.getCurrentProgram() == 10
+    const bool midiProgramChange = processor.getAVBankProgram() == 10
         && near(parameterValue(processor, IDs::masterVolume.name), 0.5f) && !processor.isAVPresetModified();
     processor.releaseResources();
 
     // Selecting without loading (session restore, visible slot) applies nothing.
     processor.setCurrentProgramSelection(4);
-    const bool selectionOnly = processor.getCurrentProgram() == 4
+    const bool selectionOnly = processor.getAVBankProgram() == 4
         && near(parameterValue(processor, IDs::masterVolume.name), 0.5f);
 
     // A bank without file has no settings.
     processor.setActiveBank(bank, juce::File());
-    processor.setCurrentProgram(3);
+    processor.setAVBankProgram(3);
     const bool noFileNoSettings = hasDefaultSoundSettings(processor) && !processor.hasExternalCartridgeContext();
 
     return expect(written && movedWritten && bankOnly, "setActiveBank installs the bank and its file without touching the program or parameters")
@@ -792,7 +792,7 @@ bool testRestoreKeepsSessionValues()
 
     DexedAudioProcessor source(DexedAudioProcessor::TestMode{});
     source.setActiveBank(bank, file);
-    source.setCurrentProgram(3);
+    source.setAVBankProgram(3);
     setParameterValue(source, IDs::masterVolume.name, 0.77f);
     juce::MemoryBlock state;
     source.getStateInformation(state);
@@ -804,38 +804,44 @@ bool testRestoreKeepsSessionValues()
 
     DexedAudioProcessor restored(DexedAudioProcessor::TestMode{});
     restored.setStateInformation(oldSession.getData(), static_cast<int>(oldSession.getSize()));
-    const bool restoredValues = restored.getCurrentProgram() == 3
+    const bool restoredValues = restored.getAVBankProgram() == 3
         && near(parameterValue(restored, IDs::masterVolume.name), 0.77f)
         && restored.activeFileCartridge == file;
 
-    // The host re-selects the restored program right away: the session wins,
-    // once, as it was saved ("Modified" too: the volume is not the bank's).
+    // A host's own program choice never changes the sound, restored or not.
     restored.setCurrentProgram(3);
-    const bool skippedOnce = near(parameterValue(restored, IDs::masterVolume.name), 0.77f)
+    restored.setCurrentProgram(5);
+    const bool hostIgnored = restored.getAVBankProgram() == 3 && near(parameterValue(restored, IDs::masterVolume.name), 0.77f)
         && source.isAVPresetModified() && restored.isAVPresetModified();
-    restored.setCurrentProgram(3);
+
+    // A Program Change re-selects the restored program right away (a track's
+    // program when the project opens): the session wins, once.
+    restored.setAVBankProgram(3);
+    const bool skippedOnce = near(parameterValue(restored, IDs::masterVolume.name), 0.77f) && !restored.isAVPresetModified();
+    restored.setAVBankProgram(3);
     const bool appliedAfterwards = near(parameterValue(restored, IDs::masterVolume.name), 0.5f);
 
     // The guard expires after about a second of the 30 Hz timer...
     restored.setStateInformation(oldSession.getData(), static_cast<int>(oldSession.getSize()));
     for (int tick = 0; tick < 30; ++tick)
         restored.runAVTimerTickForTesting();
-    restored.setCurrentProgram(3);
+    restored.setAVBankProgram(3);
     const bool expired = near(parameterValue(restored, IDs::masterVolume.name), 0.5f);
 
     // ...and any other program change consumes it.
     restored.setStateInformation(oldSession.getData(), static_cast<int>(oldSession.getSize()));
-    restored.setCurrentProgram(4);
-    restored.setCurrentProgram(3);
+    restored.setAVBankProgram(4);
+    restored.setAVBankProgram(3);
     const bool consumed = near(parameterValue(restored, IDs::masterVolume.name), 0.5f);
 
     // A preset loaded from the UI is not a host restore: nothing is skipped.
     restored.loadAVStateInformation(oldSession.getData(), static_cast<int>(oldSession.getSize()));
     const bool presetValues = near(parameterValue(restored, IDs::masterVolume.name), 0.77f);
-    restored.setCurrentProgram(3);
+    restored.setAVBankProgram(3);
     const bool presetNotGuarded = near(parameterValue(restored, IDs::masterVolume.name), 0.5f);
 
     return expect(written && restoredValues, "a restore keeps the session's values and maps a 0.1.0 Cartridges/ path into the library")
+        && expect(hostIgnored, "a host's program choice leaves the restored sound as it was saved, \"Modified\" too")
         && expect(skippedOnce && appliedAfterwards, "the first re-selection of the restored program keeps the session values, the next applies the settings")
         && expect(expired && consumed, "the restore guard expires with the timer and is consumed by any program change")
         && expect(presetValues && presetNotGuarded, "loading a preset from the UI does not arm the restore guard");
@@ -858,7 +864,7 @@ bool testRestoreGuardOnlyForRestoredBank()
 
     DexedAudioProcessor source(DexedAudioProcessor::TestMode{});
     source.setActiveBank(bank, file);
-    source.setCurrentProgram(3);
+    source.setAVBankProgram(3);
     setParameterValue(source, IDs::masterVolume.name, 0.77f);
     juce::MemoryBlock session;
     source.getStateInformation(session);
@@ -900,7 +906,7 @@ bool testRestoreKeepsSaveTarget()
     // A new sound designed from Init over slot 5: "Guardar" goes to Save As...
     DexedAudioProcessor source(DexedAudioProcessor::TestMode{});
     source.setActiveBank(bank, file);
-    source.setCurrentProgram(5);
+    source.setAVBankProgram(5);
     source.resetToInitVoice();
     setParameterValue(source, IDs::pitchEgLevel.idx(0).name, 61.0f);
     const bool initGoesToSaveAs = !source.canSaveAVSoundToBank();
@@ -910,13 +916,13 @@ bool testRestoreKeepsSaveTarget()
     // ...also once the host reopens the project or duplicates the track.
     DexedAudioProcessor restored(DexedAudioProcessor::TestMode{});
     restored.setStateInformation(initSession.getData(), static_cast<int>(initSession.getSize()));
-    const bool restoredInit = restored.activeFileCartridge == file && restored.getCurrentProgram() == 5
+    const bool restoredInit = restored.activeFileCartridge == file && restored.getAVBankProgram() == 5
         && !restored.canSaveAVSoundToBank()
         && restored.saveAVSoundToBank("X") == DexedAudioProcessor::AVBankSaveResult::needsSaveAs
         && readBytes(file) == original;
 
     // A bank voice that was only edited still saves into its slot.
-    source.setCurrentProgram(5);
+    source.setAVBankProgram(5);
     setParameterValue(source, IDs::pitchEgLevel.idx(0).name, 62.0f);
     juce::MemoryBlock editedSession;
     source.getStateInformation(editedSession);
@@ -963,7 +969,7 @@ bool testSaveSoundToBank()
 
     DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
     processor.setActiveBank(bank, file);
-    processor.setCurrentProgram(3);
+    processor.setAVBankProgram(3);
     const bool canSave = processor.canSaveAVSoundToBank();
     setParameterValue(processor, IDs::masterVolume.name, 0.3f);
     setParameterValue(processor, IDs::pan.name, 0.2f);
@@ -975,9 +981,9 @@ bool testSaveSoundToBank()
 
     const auto result = processor.saveAVSoundToBank("SAVED");
     const bool saved = result == DexedAudioProcessor::AVBankSaveResult::saved
-        && !processor.isAVPresetModified() && processor.getCurrentProgram() == 3
+        && !processor.isAVPresetModified() && processor.getAVBankProgram() == 3
         && processor.activeProgram.getName().trimEnd() == "SAVED"
-        && processor.getProgramName(3).trimEnd() == "SAVED"
+        && processor.programNames[3].trimEnd() == "SAVED"
         && processor.activeFileCartridge == file;
 
     Cartridge onDisk;
@@ -1000,8 +1006,8 @@ bool testSaveSoundToBank()
         && stored.at(3).values.size() == 2
         && near(stored.at(3).values.at("masterVolume"), 0.3f) && near(stored.at(3).values.at("pan"), 0.2f);
 
-    processor.setCurrentProgram(4);
-    processor.setCurrentProgram(3);
+    processor.setAVBankProgram(4);
+    processor.setAVBankProgram(3);
     const bool roundTrip = near(parameterValue(processor, IDs::masterVolume.name), 0.3f)
         && near(parameterValue(processor, IDs::pan.name), 0.2f)
         && parameterValue(processor, IDs::pitchEgLevel.idx(0).name) == 61.0f
@@ -1045,7 +1051,7 @@ bool testSaveNeedsSaveAs()
     bool written = writeBankFile(file, bank, {});
     DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
     processor.setActiveBank(bank, file);
-    processor.setCurrentProgram(2);
+    processor.setAVBankProgram(2);
     written &= writeBankFile(file, makeDistinctBank(5), {});
     const auto changedBytes = readBytes(file);
     setParameterValue(processor, IDs::masterVolume.name, 0.4f);
@@ -1105,13 +1111,13 @@ bool testSaveKeepsOtherSlotsAsTheyWere()
 
     // The copy plays with its twin's settings; saved back at the defaults it
     // keeps them (an empty entry of its own), and the twin keeps its reverb.
-    processor.setCurrentProgram(21);
+    processor.setAVBankProgram(21);
     const bool inherited = near(parameterValue(processor, IDs::reverbAmount.name), 0.3f);
     setParameterValue(processor, IDs::reverbAmount.name, 0.0f);
     const bool savedCopy = processor.saveAVSoundToBank({}) == DexedAudioProcessor::AVBankSaveResult::saved;
-    processor.setCurrentProgram(20);
+    processor.setAVBankProgram(20);
     const bool twinKept = near(parameterValue(processor, IDs::reverbAmount.name), 0.3f);
-    processor.setCurrentProgram(21);
+    processor.setAVBankProgram(21);
     const bool copyDry = hasDefaultSoundSettings(processor);
     const auto afterCopy = AVDexedLibrary::readEmbeddedSettings(file);
     const bool explicitEntry = afterCopy.count(21) == 1 && afterCopy.at(21).values.empty()
@@ -1119,14 +1125,14 @@ bool testSaveKeepsOtherSlotsAsTheyWere()
 
     // Saving slot 3 replaces its stale entry: the moved voice in slot 10
     // still finds its settings afterwards.
-    processor.setCurrentProgram(3);
+    processor.setAVBankProgram(3);
     const bool staleNotApplied = hasDefaultSoundSettings(processor);
     setParameterValue(processor, IDs::pan.name, 0.3f);
     const bool savedSlot3 = processor.saveAVSoundToBank(processor.activeProgram.getName()) == DexedAudioProcessor::AVBankSaveResult::saved;
-    processor.setCurrentProgram(10);
+    processor.setAVBankProgram(10);
     const bool movedKept = near(parameterValue(processor, IDs::masterVolume.name), 0.6f)
         && near(parameterValue(processor, IDs::pan.name), 0.5f);
-    processor.setCurrentProgram(3);
+    processor.setAVBankProgram(3);
     const bool slot3Own = near(parameterValue(processor, IDs::pan.name), 0.3f)
         && near(parameterValue(processor, IDs::masterVolume.name), 1.0f);
 
@@ -1134,10 +1140,10 @@ bool testSaveKeepsOtherSlotsAsTheyWere()
     const bool voicesKept = AVDexedLibrary::readBank(file, onDisk) && AVDexedLibrary::bankFingerprint(onDisk) == fingerprint;
 
     // A typed name keeps accented letters readable in the 10 DX7 characters.
-    processor.setCurrentProgram(5);
+    processor.setAVBankProgram(5);
     const bool renamed = processor.saveAVSoundToBank(juce::String(juce::CharPointer_UTF8("Canci\xc3\xb3n \xc3\x91u")))
                              == DexedAudioProcessor::AVBankSaveResult::saved
-        && processor.getProgramName(5).trimEnd() == "Cancion Nu"
+        && processor.programNames[5].trimEnd() == "Cancion Nu"
         && processor.activeProgram.getName().trimEnd() == "Cancion Nu"
         && !processor.isAVPresetModified();
 
@@ -1172,13 +1178,13 @@ bool testLegacyRestoreInstallsItsBank()
 
     DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
     processor.setStateInformation(legacy.getData(), static_cast<int>(legacy.getSize()));
-    // The bank's voice 2; the host names program 2 after the voice that plays (the state's own).
-    const bool installed = processor.activeFileCartridge == file && processor.getCurrentProgram() == 2
-        && processor.programNames[2].trimEnd() == "B8 S02" && processor.getProgramName(2) == processor.getAVPresetName()
+    // The bank's voice 2; the host's one program is the voice that plays (the state's own).
+    const bool installed = processor.activeFileCartridge == file && processor.getAVBankProgram() == 2
+        && processor.programNames[2].trimEnd() == "B8 S02" && processor.getProgramName(0) == processor.getAVPresetName()
         && near(parameterValue(processor, IDs::reverbAmount.name), 0.0f, 0.0001f);
-    processor.setCurrentProgram(2);
+    processor.setAVBankProgram(2);
     const bool guarded = near(parameterValue(processor, IDs::reverbAmount.name), 0.0f, 0.0001f);
-    processor.setCurrentProgram(2);
+    processor.setAVBankProgram(2);
     const bool appliedLater = near(parameterValue(processor, IDs::reverbAmount.name), 0.5f);
 
     return expect(written && installed, "a legacy state remaps its bank into the library and installs it without applying settings")
@@ -1196,9 +1202,9 @@ bool testSysexBankClearsFileContext()
 
     DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
     processor.setActiveBank(bank, file);
-    processor.setCurrentProgram(0);
+    processor.setAVBankProgram(0);
     const bool before = near(parameterValue(processor, IDs::masterVolume.name), 0.5f);
-    processor.setCurrentProgram(1);
+    processor.setAVBankProgram(1);
 
     // The same voices arrive as a 32-voice dump: they have no file now, so the
     // old file's settings must not come back with them.
@@ -1213,7 +1219,7 @@ bool testSysexBankClearsFileContext()
     processor.flushAVPendingSysExForTesting();
     processor.releaseResources();
     const bool cleared = processor.activeFileCartridge == juce::File() && !processor.hasExternalCartridgeContext()
-        && processor.getCurrentProgram() == 0 && processor.getProgramName(0).trimEnd() == "B6 S00";
+        && processor.getAVBankProgram() == 0 && processor.programNames[0].trimEnd() == "B6 S00";
     const bool defaults = hasDefaultSoundSettings(processor) && !processor.canSaveAVSoundToBank();
 
     return expect(written && before && deferred, "the file's settings apply before the dump, which is handled outside render")
@@ -1471,7 +1477,7 @@ bool testPresetStepPersistenceAndBankStepping()
     // With no editor open, the processor's timer moves through the current bank.
     DexedAudioProcessor processor(DexedAudioProcessor::TestMode{});
     processor.setActiveBank(makeDistinctBank(7), juce::File());
-    processor.setCurrentProgram(0);
+    processor.setAVBankProgram(0);
     for (const auto& [step, cc] : { std::pair { Step::previous, 116 }, std::pair { Step::next, 117 } }) {
         processor.startAVPresetStepLearn(step);
         processor.midiCCMapper->processControlChange(cc, 127);
@@ -1487,16 +1493,16 @@ bool testPresetStepPersistenceAndBankStepping()
     processor.processBlock(audio, events);
     // With no editor the press steps right in render, at its place in the
     // timeline (as a Program Change does), so an offline bounce matches.
-    const bool deferredToTimer = processor.getCurrentProgram() == 2;
+    const bool deferredToTimer = processor.getAVBankProgram() == 2;
     processor.runAVTimerTickForTesting();
-    const bool steppedForward = processor.getCurrentProgram() == 2
-        && processor.getProgramName(2).trimEnd() == "B7 S02" && !processor.isAVPresetModified();
+    const bool steppedForward = processor.getAVBankProgram() == 2
+        && processor.programNames[2].trimEnd() == "B7 S02" && !processor.isAVPresetModified();
     events.clear(); audio.clear(); position = 0;
     for (const int value : { 0, 127, 0, 127, 0, 127 })
         events.addEvent(juce::MidiMessage::controllerEvent(1, 116, value), position++);
     processor.processBlock(audio, events);
     processor.runAVTimerTickForTesting();
-    const bool wrapped = processor.getCurrentProgram() == 31 && processor.consumeAVPresetSteps() == 0;
+    const bool wrapped = processor.getAVBankProgram() == 31 && processor.consumeAVPresetSteps() == 0;
     processor.releaseResources();
 
     return expect(roundTrip && stored, "both arrow CCs are saved with the MIDI assignments, even before the UI commit")
