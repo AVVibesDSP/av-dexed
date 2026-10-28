@@ -80,16 +80,16 @@ struct ScopedLibraryLock {
 /** Moves a file into the backup folder under a free name. */
 bool archive(const File& file, const File& backupFolder) {
     if (! backupFolder.createDirectory().wasOk()) return false;
-    return file.moveFileTo(uniqueDestination(backupFolder, file.getFileName()));
+    return moveFile(file, uniqueDestination(backupFolder, file.getFileName()));
 }
 
 /** Moves `source` to `destination` without ever replacing anything: identical
     content already there → the source is archived; different → " 2". */
 bool mergeFile(const File& source, const File& destination, const File& backupFolder) {
     if (! destination.getParentDirectory().createDirectory().wasOk()) return false;
-    if (! destination.exists()) return source.moveFileTo(destination);
+    if (! destination.exists()) return moveFile(source, destination);
     if (sameContent(source, destination)) return archive(source, backupFolder);
-    return source.moveFileTo(uniqueDestination(destination.getParentDirectory(), destination.getFileName()));
+    return moveFile(source, uniqueDestination(destination.getParentDirectory(), destination.getFileName()));
 }
 
 /** Where the migration puts a file of the 0.1.0 layout. A read-only pack only
@@ -138,7 +138,7 @@ bool mergeFolder(const File& source, const File& destination, const File& backup
     });
     for (const auto& folder : folders) folder.deleteFile();
     if (! source.deleteFile() && source.isDirectory())
-        ok &= source.moveFileTo(uniqueDestination(backupFolder.getParentDirectory(), backupFolder.getFileName() + " leftovers"));
+        ok &= moveFile(source, uniqueDestination(backupFolder.getParentDirectory(), backupFolder.getFileName() + " leftovers"));
     return ok;
 }
 
@@ -368,7 +368,7 @@ bool renameLegacyPresets(const File& root) {
     for (const auto& file : legacy) {
         if (! file.existsAsFile()) continue;
         const auto target = uniqueDestination(file.getParentDirectory(), file.getFileNameWithoutExtension() + presetExtension);
-        ok &= ! target.exists() && file.moveFileTo(target);
+        ok &= ! target.exists() && moveFile(file, target);
     }
     if (ok) ok = marker.replaceWithText("completed");
     return ok;
@@ -422,6 +422,64 @@ PropertiesFile::Options preferencesOptions() {
     return options;
 }
 
+#if JUCE_WINDOWS
+namespace {
+/** What Windows answers while another program holds a file for a moment. */
+bool isHeldForAMoment(DWORD error) {
+    return error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION || error == ERROR_ACCESS_DENIED
+        || error == ERROR_UNABLE_TO_REMOVE_REPLACED || error == ERROR_UNABLE_TO_MOVE_REPLACEMENT
+        || error == ERROR_UNABLE_TO_MOVE_REPLACEMENT_2;
+}
+
+/** Runs `attempt` until it succeeds, again while it fails on a file held for a
+    moment: about two seconds in all, the waits growing from 10 to 400 ms. Any
+    other failure (a missing file, a name taken) ends it at once. */
+template <typename Attempt>
+bool retryWhileHeld(Attempt&& attempt) {
+    for (int wait = 10, waited = 0;; wait = jmin(wait * 2, 400)) {
+        if (attempt()) return true;
+        if (! isHeldForAMoment(GetLastError()) || waited >= 2000) return false;
+        Thread::sleep(wait);
+        waited += wait;
+    }
+}
+
+/** Puts the finished `replacement` in place of `target`. The old file goes to
+    a hidden name until the swap is done: without one, ReplaceFileW can fail
+    half-way with the old file gone and the new one still under its temporary
+    name, which TemporaryFile then deletes; both would be lost. */
+bool swapInto(const File& replacement, const File& target) {
+    const auto from = replacement.getFullPathName(), to = target.getFullPathName();
+    if (! target.exists())
+        return retryWhileHeld([&] { return MoveFileExW(from.toWideCharPointer(), to.toWideCharPointer(), 0) != 0; });
+    const auto kept = uniqueDestination(target.getParentDirectory(), "." + target.getFileName() + ".old");
+    const auto keptPath = kept.getFullPathName();
+    const bool swapped = retryWhileHeld([&] {
+        if (ReplaceFileW(to.toWideCharPointer(), from.toWideCharPointer(), keptPath.toWideCharPointer(),
+                         REPLACEFILE_IGNORE_MERGE_ERRORS | 4 /* REPLACEFILE_IGNORE_ACL_ERRORS */, nullptr, nullptr))
+            return true;
+        const auto error = GetLastError();
+        // Stopped half-way (ERROR_UNABLE_TO_MOVE_REPLACEMENT_2): the old file
+        // is under the hidden name; it goes back before anything else.
+        if (! target.exists() && kept.existsAsFile())
+            retryWhileHeld([&] { return MoveFileExW(keptPath.toWideCharPointer(), to.toWideCharPointer(), 0) != 0; });
+        SetLastError(error);
+        return false;
+    });
+    if (swapped) kept.deleteFile();
+    return swapped;
+}
+}
+#endif
+
+bool moveFile(const File& from, const File& to) {
+   #if JUCE_WINDOWS
+    return retryWhileHeld([&] { return from.moveFileTo(to); });
+   #else
+    return from.moveFileTo(to);
+   #endif
+}
+
 bool writeAtomically(const File& file, const MemoryBlock& data) {
     // Nothing AV Dexed writes is ever empty: an empty block is a failed
     // composition and must not replace the user's file with nothing.
@@ -439,8 +497,12 @@ bool writeAtomically(const File& file, const MemoryBlock& data) {
             return false;
     }
     // The size on disk catches a short write that reported no error.
-    return temporary.getFile().getSize() == static_cast<int64>(data.getSize())
-        && temporary.overwriteTargetFileWithTemporary();
+    if (temporary.getFile().getSize() != static_cast<int64>(data.getSize())) return false;
+   #if JUCE_WINDOWS
+    return swapInto(temporary.getFile(), file);
+   #else
+    return temporary.overwriteTargetFileWithTemporary();
+   #endif
 }
 
 //==============================================================================
@@ -866,7 +928,7 @@ bool migratePreferences(const File& appDirectory, const String& newName) {
     const auto backup = appDirectory.getChildFile(backupFolderName);
     if (! backup.createDirectory().wasOk()) return false;
     const auto stamp = Time::getCurrentTime().formatted("%Y-%m-%d %H%M%S");
-    return oldFile.moveFileTo(uniqueDestination(backup, "Dexed " + stamp + ".xml"));
+    return moveFile(oldFile, uniqueDestination(backup, "Dexed " + stamp + ".xml"));
 }
 
 bool migrateLayout(const File& appDirectory, const void* factoryZip, size_t factoryZipSize) {
@@ -899,7 +961,7 @@ bool migrateLayout(const File& appDirectory, const void* factoryZip, size_t fact
                 // those go to its writable twin.
                 const auto writable = isReadOnly(destination, appDirectory) ? writableTwin(folderName) : File();
                 ok &= destination.exists() ? mergeFolder(entry, destination, cartridgeBackup.getChildFile(name), writable, appDirectory)
-                                           : entry.moveFileTo(destination);
+                                           : moveFile(entry, destination);
             } else if (isBankFile(entry)) {
                 // Dexed's own startup bank goes with the factory sounds (unless it
                 // differs from the pack's copy: then it is the user's, and goes to
@@ -916,13 +978,13 @@ bool migrateLayout(const File& appDirectory, const void* factoryZip, size_t fact
             }
         }
         if (! cartridges.deleteFile() && cartridges.isDirectory())
-            ok &= cartridges.moveFileTo(uniqueDestination(backup, "Cartridges"));
+            ok &= moveFile(cartridges, uniqueDestination(backup, "Cartridges"));
     }
 
     const auto profiles = appDirectory.getChildFile("Profiles");
     if (profiles.isDirectory()) {
         const auto hidden = appDirectory.getChildFile(profilesFolderName);
-        ok &= hidden.exists() ? mergeFolder(profiles, hidden, backup.getChildFile("Profiles")) : profiles.moveFileTo(hidden);
+        ok &= hidden.exists() ? mergeFolder(profiles, hidden, backup.getChildFile("Profiles")) : moveFile(profiles, hidden);
     }
 
     if (! marker.existsAsFile()) {
@@ -1181,7 +1243,7 @@ RenameResult renameFolder(const File& folder, const String& requestedName, const
         // moveFileTo deletes an existing target first (and a rename replaces
         // one), so it is never called onto another item.
         if (isAnotherItem(target, folder)) return RenameResult::alreadyExists;
-        if (! folder.moveFileTo(target) || ! target.isDirectory()) return RenameResult::failed;
+        if (! moveFile(folder, target) || ! target.isDirectory()) return RenameResult::failed;
     }
     if (renamedTo != nullptr) *renamedTo = target;
     return RenameResult::renamed;
@@ -1199,7 +1261,7 @@ RenameResult renameSoundFile(const File& file, const String& requestedStem, cons
         if (isAnotherItem(target, file))
             target = uniqueDestination(file.getParentDirectory(), target.getFileName());
         if (isAnotherItem(target, file)) return RenameResult::failed;
-        if (! file.moveFileTo(target) || ! target.existsAsFile()) return RenameResult::failed;
+        if (! moveFile(file, target) || ! target.existsAsFile()) return RenameResult::failed;
     }
     if (renamedTo != nullptr) *renamedTo = target;
     return RenameResult::renamed;
@@ -1315,7 +1377,7 @@ RemoveResult removeToTrash(const File& item, const File& root, bool useSystemTra
         const auto name = item.isDirectory() ? item.getFileName() + " " + stamp
                                              : item.getFileNameWithoutExtension() + " " + stamp + item.getFileExtension();
         const auto destination = uniqueDestination(hidden, name);
-        if (destination.exists() || ! item.moveFileTo(destination) || ! destination.exists()) return result;
+        if (destination.exists() || ! moveFile(item, destination) || ! destination.exists()) return result;
         result.hiddenCopy = destination;
     }
     // The rename above already took it out of the library; the trash is the

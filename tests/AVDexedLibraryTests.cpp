@@ -9,6 +9,18 @@
 
 #include <iostream>
 
+#if JUCE_WINDOWS
+ #include <chrono>
+ #include <thread>
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
+#endif
+
 namespace {
 bool expect(bool condition, const char* message)
 {
@@ -403,6 +415,53 @@ bool testSafeWrites()
     return passed;
 }
 
+/** Windows: another program (an antivirus, the search indexer) holds a file
+    for a moment, longer than JUCE's own tries of a swap (about 0.4 s). A save
+    over it and a move of it wait; held for good, the save fails and leaves
+    the file as it was. */
+bool testFilesHeldForAMoment()
+{
+   #if JUCE_WINDOWS
+    ScratchFolder scratch;
+    const auto file = scratch.root.getChildFile("Bank.syx");
+    const auto bankA = makeBank(0), bankB = makeBank(30);
+    file.replaceWithData(bankA.getData(), bankA.getSize());
+    // Held as a scanner holds it: others may read, never rename or delete.
+    const auto hold = [](const juce::File& held) {
+        return CreateFileW(held.getFullPathName().toWideCharPointer(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    };
+    const auto releaseLater = [](HANDLE handle) {
+        return std::thread([handle] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(800));
+            CloseHandle(handle);
+        });
+    };
+    auto handle = hold(file);
+    bool passed = expect(handle != INVALID_HANDLE_VALUE, "a test file can be held open");
+    auto release = releaseLater(handle);
+    passed &= expect(AVDexedLibrary::writeAtomically(file, bankB) && fileBytes(file) == bankB
+                         && strayFiles(scratch.root, file) == 0,
+                     "a save over a file held for a moment waits for it and leaves nothing behind");
+    release.join();
+
+    const auto moved = scratch.root.getChildFile("Moved.syx");
+    release = releaseLater(hold(file));
+    passed &= expect(AVDexedLibrary::moveFile(file, moved) && moved.existsAsFile() && ! file.exists(),
+                     "a move of a file held for a moment waits for it");
+    release.join();
+
+    handle = hold(moved);
+    passed &= expect(! AVDexedLibrary::writeAtomically(moved, bankA) && fileBytes(moved) == bankB
+                         && strayFiles(scratch.root, moved) == 0,
+                     "a save over a file held for good fails and leaves the file as it was");
+    CloseHandle(handle);
+    return passed;
+   #else
+    return true;
+   #endif
+}
+
 bool testMigrationNeverFillsPacks()
 {
     ScratchFolder scratch;
@@ -524,6 +583,7 @@ bool runAVDexedLibraryTests()
         && testLegacyFolders()
         && testAdoptionKeepsPacksAndPreferences()
         && testSafeWrites()
+        && testFilesHeldForAMoment()
         && testMigrationNeverFillsPacks()
         && testPresetExtension();
 }

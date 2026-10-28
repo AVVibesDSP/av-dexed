@@ -361,7 +361,7 @@ Result convert(const Request& request, const SoundMaker& make, const LayersMaker
         std::vector<std::pair<File, File>> movedSources;   // from, to
         const auto undo = [&]() {
             for (const auto& file : moved) file.deleteFile();
-            for (const auto& [from, to] : movedSources) to.moveFileTo(from);
+            for (const auto& [from, to] : movedSources) AVDexedLibrary::moveFile(to, from);
             // The folders made for them, deepest first, while they are empty.
             std::sort(created.begin(), created.end(), [](const File& a, const File& b) {
                 return a.getFullPathName().length() > b.getFullPathName().length();
@@ -381,7 +381,7 @@ Result convert(const Request& request, const SoundMaker& make, const LayersMaker
         for (auto& item : planned) {
             // Taken meanwhile (another AV Dexed, Finder): never overwritten.
             if (item.target.exists()) item.target = AVDexedLibrary::uniqueDestination(item.target.getParentDirectory(), item.target.getFileName());
-            if (! makeFolderFor(item.target) || ! item.staged.moveFileTo(item.target))
+            if (! makeFolderFor(item.target) || ! AVDexedLibrary::moveFile(item.staged, item.target))
                 return undo();
             moved.push_back(item.target);
             result.files.add(item.target);
@@ -391,7 +391,7 @@ Result convert(const Request& request, const SoundMaker& make, const LayersMaker
             for (const auto& source : sources) {
                 auto target = result.backup.getChildFile(backupPathOf(source.file));
                 target = AVDexedLibrary::uniqueDestination(target.getParentDirectory(), target.getFileName());
-                if (! target.getParentDirectory().createDirectory() || ! source.file.moveFileTo(target))
+                if (! target.getParentDirectory().createDirectory() || ! AVDexedLibrary::moveFile(source.file, target))
                     return undo();
                 movedSources.emplace_back(source.file, target);
             }
@@ -491,7 +491,7 @@ UndoResult undoConversion(const File& root, const File& backup) {
         if (fields.size() == 3 && fields[0] == "source") {
             const auto from = backup.getChildFile(fields[2]), to = root.getChildFile(fields[1]);
             if (! from.existsAsFile() || to.exists()) continue;
-            if (to.getParentDirectory().createDirectory() && from.moveFileTo(to)) ++result.restored;
+            if (to.getParentDirectory().createDirectory() && AVDexedLibrary::moveFile(from, to)) ++result.restored;
         }
     }
     // The bank voices that are banks again: their favourites go back to them.

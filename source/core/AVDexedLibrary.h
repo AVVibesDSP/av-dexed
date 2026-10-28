@@ -120,8 +120,17 @@ juce::PropertiesFile::Options preferencesOptions();
 
 /** Writes through a hidden temporary sibling, then swaps it in, only once the
     whole block is on disk (write, flush and size checked): a full disk leaves
-    the original untouched. Empty data is refused (false). */
+    the original untouched. Empty data is refused (false). On Windows the old
+    file is kept under a hidden name until the swap is done, and a file held
+    for a moment by another program is tried again (see moveFile()). */
 bool writeAtomically(const juce::File& file, const juce::MemoryBlock& data);
+
+/** File::moveFileTo(), tried again for about two seconds on Windows while
+    another program holds the file for a moment: an antivirus or the search
+    indexer reading a file just written, a backup tool. Windows then refuses
+    the rename (macOS renames regardless), and a conversion or an import
+    would fail and be undone for nothing. */
+bool moveFile(const juce::File& from, const juce::File& to);
 
 //==============================================================================
 /** Modern settings of one voice, in real parameter units (as in session state).
