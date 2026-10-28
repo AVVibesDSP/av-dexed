@@ -70,7 +70,17 @@ bool isIgnoredName(const juce::String& name);
     Windows device name, not a name the library hides, at most 48 characters. */
 juce::String sanitizeFolderName(const juce::String& requested);
 
-/** Folders of the library, sorted case-insensitively. With `nested`, subfolders
+/** The order of folders and sounds in the browser, and so of a folder's sounds
+    for MIDI program changes: natural ("Bass 2" before "Bass 10"), ignoring
+    case, an accented letter beside its plain one ("Ácido" before "Bajo", as
+    Finder and Explorer show them), whether the name holds it as one character
+    or as a letter and its accent (as macOS may store it). The C library is
+    never asked: past ASCII its answers differ between macOS and Windows, and
+    a program change would play another sound on each. Names this finds equal
+    ("Pena" and "Peña") still get one order: accents, then case, decide. */
+int compareSoundNames(const juce::String& a, const juce::String& b);
+
+/** Folders of the library, in compareSoundNames() order. With `nested`, subfolders
     follow their parent ("Pianos", "Pianos/Rhodes"). */
 juce::Array<juce::File> listFolders(const juce::File& root, bool nested = false);
 

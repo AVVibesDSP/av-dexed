@@ -4,6 +4,7 @@
 #include "AVDexedLibrary.h"
 #include "AVDexedSysex.h"
 #include "Program.h"
+#include <array>
 #include <set>
 
 #if JUCE_WINDOWS
@@ -183,7 +184,7 @@ void listEntries(const File& folder, StringArray* files, StringArray* folders) {
    #endif
 }
 
-/** Visible subfolders of `folder`, sorted naturally ignoring case. Reserved
+/** Visible subfolders of `folder`, in compareSoundNames() order. Reserved
     names ("Profiles", "Cartridges") only matter in the root: deeper down they
     are ordinary user folders. */
 Array<File> visibleSubfolders(const File& folder, bool isLibraryRoot) {
@@ -195,7 +196,7 @@ Array<File> visibleSubfolders(const File& folder, bool isLibraryRoot) {
         found.add(folder.getChildFile(name));
     }
     std::sort(found.begin(), found.end(), [](const File& a, const File& b) {
-        return a.getFileName().compareNatural(b.getFileName(), false) < 0;
+        return compareSoundNames(a.getFileName(), b.getFileName()) < 0;
     });
     return found;
 }
@@ -280,6 +281,166 @@ uint64 voiceHash(const Cartridge& bank, int slot) {
 bool isIgnoredName(const String& name) {
     return name.isEmpty() || name.startsWithChar('.') || name.equalsIgnoreCase("__MACOSX")
         || name.endsWithIgnoreCase(".installing") || name.endsWithIgnoreCase(".tmp");
+}
+
+namespace {
+/** Latin letters with one accent (U+00C0 to U+017F) and the same letters
+    without it, per accent, from Unicode's canonical decompositions. */
+struct AccentedLetters { char16_t accent; const char16_t* letters; const char* plain; };
+constexpr AccentedLetters accentedLetters[] {
+    { 0x0300, u"ÀÈÌÒÙàèìòù", "AEIOUaeiou" },                                   // grave
+    { 0x0301, u"ÁÉÍÓÚÝáéíóúýĆćĹĺŃńŔŕŚśŹź", "AEIOUYaeiouyCcLlNnRrSsZz" },       // acute
+    { 0x0302, u"ÂÊÎÔÛâêîôûĈĉĜĝĤĥĴĵŜŝŴŵŶŷ", "AEIOUaeiouCcGgHhJjSsWwYy" },       // circumflex
+    { 0x0303, u"ÃÑÕãñõĨĩŨũ", "ANOanoIiUu" },                                   // tilde
+    { 0x0304, u"ĀāĒēĪīŌōŪū", "AaEeIiOoUu" },                                   // macron
+    { 0x0306, u"ĂăĔĕĞğĬĭŎŏŬŭ", "AaEeGgIiOoUu" },                               // breve
+    { 0x0307, u"ĊċĖėĠġİŻż", "CcEeGgIZz" },                                     // dot above
+    { 0x0308, u"ÄËÏÖÜäëïöüÿŸ", "AEIOUaeiouyY" },                               // diaeresis
+    { 0x030a, u"ÅåŮů", "AaUu" },                                               // ring
+    { 0x030b, u"ŐőŰű", "OoUu" },                                               // double acute
+    { 0x030c, u"ČčĎďĚěĽľŇňŘřŠšŤťŽž", "CcDdEeLlNnRrSsTtZz" },                   // caron
+    { 0x0327, u"ÇçĢģĶķĻļŅņŖŗŞşŢţ", "CcGgKkLlNnRrSsTt" },                       // cedilla
+    { 0x0328, u"ĄąĘęĮįŲų", "AaEeIiUu" },                                       // ogonek
+};
+
+struct PlainLetter { juce_wchar letter = 0, accent = 0; };
+
+/** The plain letter and accent of each character from U+00C0 to U+017F (0: none). */
+const std::array<PlainLetter, 0xc0>& plainLetters() {
+    static const auto table = [] {
+        std::array<PlainLetter, 0xc0> made {};
+        for (const auto& group : accentedLetters)
+            for (int i = 0; group.letters[i] != 0; ++i)
+                made[size_t(group.letters[i] - 0xc0)] = { juce_wchar(group.plain[i]), juce_wchar(group.accent) };
+        return made;
+    }();
+    return table;
+}
+
+bool isAccentMark(juce_wchar c) { return c >= 0x300 && c <= 0x36f; }
+
+/** Upper case without the C library: ASCII, the Latin letters with no accent
+    to take off (æ ø œ ł…), Greek and Cyrillic. */
+juce_wchar foldCase(juce_wchar c) {
+    if (c >= 'a' && c <= 'z') return juce_wchar(c - 0x20);
+    if (c == 0xe6 || c == 0xf0 || c == 0xf8 || c == 0xfe) return juce_wchar(c - 0x20);           // æ ð ø þ
+    if ((c >= 0x100 && c <= 0x137) || (c >= 0x14a && c <= 0x177)) return juce_wchar(c & ~1);       // capitals even
+    if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17e)) return (c & 1) != 0 ? c : juce_wchar(c - 1);   // capitals odd
+    if (c == 0x3c2) return 0x3a3;                                                                    // final sigma
+    if ((c >= 0x3b1 && c <= 0x3c9) || (c >= 0x430 && c <= 0x44f)) return juce_wchar(c - 0x20);
+    if (c >= 0x450 && c <= 0x45f) return juce_wchar(c - 0x50);
+    return c;
+}
+
+/** Letters and digits, which natural order puts after everything else: past
+    ASCII, all but signs, punctuation, arrows, maths, shapes, CJK punctuation
+    and emoji. */
+bool isLetterOrDigit(juce_wchar c) {
+    if (c < 0x80) return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    return ! (c < 0xc0 || c == 0xd7 || c == 0xf7 || isAccentMark(c) || (c >= 0x2000 && c < 0x2c00)
+              || (c >= 0x3000 && c < 0x3040) || (c >= 0xfe00 && c < 0xfe10) || c >= 0x1f000);
+}
+
+/** A name walked letter by letter for sorting. An accented Latin letter is
+    its plain letter with the accent apart, whether it is one character or a
+    letter followed by its accent. */
+struct SortCursor {
+    String::CharPointerType text;
+
+    bool atEnd() const { return text.isEmpty(); }
+    bool isSpace() const { const auto c = *text; return c == ' ' || (c >= 9 && c <= 13); }
+    bool isDigit() const { const auto c = *text; return c >= '0' && c <= '9'; }
+    juce_wchar letter() const {
+        const auto c = *text;
+        const auto plain = c >= 0xc0 && c < 0x180 ? plainLetters()[size_t(c - 0xc0)].letter : juce_wchar(0);
+        return plain != 0 ? plain : c;
+    }
+    juce_wchar accent() const {
+        const auto c = *text;
+        if (c >= 0xc0 && c < 0x180)
+            if (const auto accent = plainLetters()[size_t(c - 0xc0)].accent) return accent;
+        if (c == 0) return 0;
+        auto next = text;
+        ++next;
+        return isAccentMark(*next) ? *next : juce_wchar(0);
+    }
+    void advance() {
+        if (atEnd()) return;
+        ++text;
+        while (isAccentMark(*text)) ++text;
+    }
+    void skipSpaces() { while (isSpace()) advance(); }
+};
+
+/** A run of digits without a leading zero: the longer one is the larger
+    number, else the first different digit decides. */
+int compareDigitsRight(SortCursor a, SortCursor b) {
+    for (int bias = 0;; a.advance(), b.advance()) {
+        const bool digitA = a.isDigit(), digitB = b.isDigit();
+        if (! digitA && ! digitB) return bias;
+        if (! digitA) return -1;
+        if (! digitB) return 1;
+        if (bias == 0 && *a.text != *b.text) bias = *a.text < *b.text ? -1 : 1;
+    }
+}
+
+/** A run of digits with a leading zero: digit by digit from the left. */
+int compareDigitsLeft(SortCursor a, SortCursor b) {
+    for (;; a.advance(), b.advance()) {
+        const bool digitA = a.isDigit(), digitB = b.isDigit();
+        if (! digitA && ! digitB) return 0;
+        if (! digitA) return -1;
+        if (! digitB) return 1;
+        if (*a.text != *b.text) return *a.text < *b.text ? -1 : 1;
+    }
+}
+
+/** JUCE's String::compareNatural(…, false), step for step, on the plain
+    letters: an ASCII name keeps exactly the place it had. */
+int compareNaturally(SortCursor a, SortCursor b) {
+    for (bool first = true;; first = false) {
+        const bool spaceA = a.isSpace(), spaceB = b.isSpace();
+        if (! first && spaceA != spaceB) {
+            if (a.atEnd()) return -1;
+            if (b.atEnd()) return 1;
+            return spaceB ? 1 : -1;
+        }
+        a.skipSpaces();
+        b.skipSpaces();
+        if (a.isDigit() && b.isDigit())
+            if (const auto order = *a.text == '0' || *b.text == '0' ? compareDigitsLeft(a, b) : compareDigitsRight(a, b))
+                return order;
+        const auto keyA = foldCase(a.letter()), keyB = foldCase(b.letter());
+        if (keyA != keyB) {
+            const bool wordA = isLetterOrDigit(keyA), wordB = isLetterOrDigit(keyB);
+            if (wordA != wordB) return wordB ? -1 : 1;
+            return keyA < keyB ? -1 : 1;
+        }
+        if (keyA == 0) return 0;
+        a.advance();
+        b.advance();
+    }
+}
+
+/** Names natural order finds equal: the accents decide, then the case. */
+int compareTies(SortCursor a, SortCursor b) {
+    for (const bool byAccent : { true, false })
+        for (auto x = a, y = b;; x.advance(), y.advance()) {
+            x.skipSpaces();
+            y.skipSpaces();
+            if (x.atEnd() || y.atEnd()) break;
+            const auto left = byAccent ? x.accent() : x.letter(), right = byAccent ? y.accent() : y.letter();
+            if (left != right) return left < right ? -1 : 1;
+        }
+    return 0;
+}
+}
+
+int compareSoundNames(const String& a, const String& b) {
+    const SortCursor first { a.getCharPointer() }, second { b.getCharPointer() };
+    if (const auto order = compareNaturally(first, second)) return order;
+    if (const auto order = compareTies(first, second)) return order;
+    return a.compare(b);   // the same name with its accents held another way
 }
 
 String sanitizeFolderName(const String& requested) {
@@ -1116,7 +1277,7 @@ Array<File> findSoundFiles(const File& root) {
         for (const auto& name : names)
             if (const auto file = folder.getChildFile(name); isSoundFile(file)) level.add(file);
         std::sort(level.begin(), level.end(), [](const File& a, const File& b) {
-            return a.getFileName().compareNatural(b.getFileName(), false) < 0;
+            return compareSoundNames(a.getFileName(), b.getFileName()) < 0;
         });
         files.addArray(level);
     };

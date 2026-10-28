@@ -164,6 +164,57 @@ bool testBrowserScan()
     return passed;
 }
 
+/** One order of names on every system (the browser's rows, and the sound a
+    program change plays): ASCII names as natural order always had them,
+    accented letters beside their plain ones however the accent is stored. */
+bool testNameOrder()
+{
+    const auto sorted = [](juce::StringArray names) {
+        std::sort(names.begin(), names.end(), [](const juce::String& a, const juce::String& b) {
+            return AVDexedLibrary::compareSoundNames(a, b) < 0;
+        });
+        return names.joinIntoString("|");
+    };
+    // None of these differ only in case or spaces, where natural order has no say.
+    const juce::StringArray ascii { "Bass 10", "bass 2", "Bass 1", "_Intro", "a-b", "A b", "Zeta", "alpha", "Pad 007",
+                                    "Pad 07", "Pad 7", "Pad", "pad 2b", "Pad 2a", "~x", "10cc", "9 to 5", "(Live)" };
+    auto natural = ascii;
+    std::sort(natural.begin(), natural.end(), [](const juce::String& a, const juce::String& b) {
+        return a.compareNatural(b, false) < 0;
+    });
+    bool passed = expect(sorted(ascii) == natural.joinIntoString("|"), "ASCII names keep the natural order they always had");
+
+    const auto text = [](const char* utf8) { return juce::String::fromUTF8(utf8); };
+    const auto list = [&text](std::initializer_list<const char*> utf8) {
+        juce::StringArray names;
+        for (const auto* name : utf8) names.add(text(name));
+        return names;
+    };
+    passed &= expect(sorted(list({ "Órgano", "Bajo", "Ácido", "Zampoña", "Acordeón" })) == text("Ácido|Acordeón|Bajo|Órgano|Zampoña"),
+                     "an accented letter sorts beside its plain letter, as Finder and Explorer show it");
+    // As macOS may store names: the letter, then its accent (U+0301).
+    const auto apart = list({ "Acordeón", "O\xcc\x81" "rgano", "Bajo", "A\xcc\x81" "cido" });
+    passed &= expect(sorted(apart) == apart[3] + "|" + apart[0] + "|" + apart[2] + "|" + apart[1],
+                     "an accent stored apart from its letter sorts the same");
+    passed &= expect(sorted(list({ "Peña", "ola", "Pena", "Ola" })) == text("Ola|ola|Pena|Peña"),
+                     "names equal but for accents or case still get one order");
+    passed &= expect(sorted(list({ "Alpha", "🎹 Keys", "·Intro" })) == text("·Intro|🎹 Keys|Alpha"),
+                     "signs and emoji go before letters, as other punctuation does");
+
+    ScratchFolder scratch;
+    const auto root = AVDexedLibrary::rootFor(scratch.root);
+    const auto bank = makeBank(0);
+    for (const auto& name : list({ "Pads/Órgano.syx", "Pads/Bajo.syx", "Pads/Ácido.syx", "Ébano/Uno.syx", "Bosque/Dos.syx" })) {
+        const auto file = root.getChildFile(name);
+        file.getParentDirectory().createDirectory();
+        file.replaceWithData(bank.getData(), bank.getSize());
+    }
+    passed &= expect(relativeList(AVDexedLibrary::findSoundFiles(root), root)
+                         == text("Bosque/Dos.syx|Ébano/Uno.syx|Pads/Ácido.syx|Pads/Bajo.syx|Pads/Órgano.syx"),
+                     "the browser lists accented folders and sounds in that order");
+    return passed;
+}
+
 bool testLibrarySignature()
 {
     ScratchFolder scratch;
@@ -578,6 +629,7 @@ bool runAVDexedLibraryTests()
         && testImportCopiesWithoutOverwriting()
         && testRealFolders()
         && testBrowserScan()
+        && testNameOrder()
         && testLibrarySignature()
         && testFolderOperations()
         && testLegacyFolders()

@@ -75,7 +75,7 @@ std::shared_ptr<const DexedAudioProcessor::AVFolderSounds> DexedAudioProcessor::
     std::stable_sort(found.begin(), found.end(), [](const auto& a, const auto& b) {
         if ((a.first >= 0) != (b.first >= 0)) return a.first >= 0;
         if (a.first >= 0) return a.first < b.first;
-        return a.second.file.getFileName().compareNatural(b.second.file.getFileName(), false) < 0;
+        return AVDexedLibrary::compareSoundNames(a.second.file.getFileName(), b.second.file.getFileName()) < 0;
     });
     for (auto& [order, sound] : found) read->sounds.push_back(std::move(sound));
     const juce::ScopedLock lock(folderCacheLock());
