@@ -13,6 +13,16 @@
 #include <juce_audio_plugin_client/juce_audio_plugin_client.h>
 #include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
 
+#if JUCE_WINDOWS
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
+#endif
+
 namespace {
 
 juce::File migrateStandaloneSettings(const juce::PropertiesFile::Options& options) {
@@ -82,16 +92,43 @@ public:
         options.osxLibrarySubFolder = "Application Support";
         migrateStandaloneSettings(options);
         appProperties.setStorageParameters(options);
+       #if JUCE_WINDOWS
+        // A second launch, the foreground app the user just started, lets the
+        // app it hands its files to bring its window forward; Windows refuses
+        // that to a background app otherwise.
+        AllowSetForegroundWindow(ASFW_ANY);
+       #endif
     }
 
     const juce::String getApplicationName() override { return juce::CharPointer_UTF8(JucePlugin_Name); }
     const juce::String getApplicationVersion() override { return JucePlugin_VersionString; }
-    bool moreThanOneInstanceAllowed() override { return true; }
+    /** Windows: one app, as on macOS. A second launch (a double-click on a
+        sound, "Open with") hands its command line to the app already open and
+        quits, instead of opening a window of its own that would fight the
+        first one for the audio device (an ASIO driver serves one app). Linux
+        keeps a window per launch: JUCE cannot pass a command line there. */
+    bool moreThanOneInstanceAllowed() override {
+       #if JUCE_WINDOWS
+        return false;
+       #else
+        return true;
+       #endif
+    }
     /** macOS: files the system hands the running app (a double-click in the
-        Finder, a drop on the Dock icon, "Open with"). On Windows and Linux files
-        only come on the command line of a launch (initialise): another launch
-        opens its own window, since more than one instance is allowed. */
-    void anotherInstanceStarted(const juce::String& commandLine) override { openFilesFromSystem(commandLine); }
+        Finder, a drop on the Dock icon, "Open with"). Windows: the command line
+        of a second launch; Explorer gives full paths (a relative one, typed in
+        a terminal, would be looked for in this app's working folder). On Linux
+        files only come on the command line of a launch (initialise). */
+    void anotherInstanceStarted(const juce::String& commandLine) override {
+       #if JUCE_WINDOWS
+        // The launch was the user's: the window they asked for comes forward.
+        if (mainWindow != nullptr) {
+            if (mainWindow->isMinimised()) mainWindow->setMinimised(false);
+            mainWindow->toFront(true);
+        }
+       #endif
+        openFilesFromSystem(commandLine);
+    }
 
     void initialise(const juce::String& commandLine) override {
         mainWindow.reset(createWindow());
