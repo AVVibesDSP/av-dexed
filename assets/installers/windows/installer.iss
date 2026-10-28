@@ -43,6 +43,10 @@ SetupIconFile={#Icon}
 SetupLogging=yes
 SolidCompression=yes
 Compression=zip
+#ifdef SA
+; Explorer learns the file types of [Registry] at once.
+ChangesAssociations=yes
+#endif
 UninstallDisplayIcon={uninstallexe}
 UninstallFilesDir={autoappdata}\{#Name}\uninstall
 WizardStyle=modern
@@ -104,6 +108,25 @@ Source: "{#StagedAssets}\{#Name}.exe"; DestDir: "{app}"; Components: SA; Flags: 
 
 [Icons]
 Name: "{group}\{#Name}"; Filename: "{app}\{#Name}.exe"; Components: SA; Flags: createonlyiffileexists
+
+#ifdef SA
+[Registry]
+; The file types of the Mac app (CFBundleDocumentTypes in source/CMakeLists.txt):
+; a double-click on a sound opens it in the app, which imports it like a drop.
+; A .syx is anybody's SysEx: the app is only offered under "Open with".
+Root: HKA; Subkey: "Software\Classes\AVVibes.AVDexed.Sound"; ValueType: string; ValueData: "AV Dexed sound"; Components: SA; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\AVVibes.AVDexed.Sound\DefaultIcon"; ValueType: string; ValueData: "{app}\{#Name}.exe,0"; Components: SA
+Root: HKA; Subkey: "Software\Classes\AVVibes.AVDexed.Sound\shell\open\command"; ValueType: string; ValueData: """{app}\{#Name}.exe"" ""%1"""; Components: SA
+Root: HKA; Subkey: "Software\Classes\AVVibes.AVDexed.SysExBank"; ValueType: string; ValueData: "DX7 SysEx bank"; Components: SA; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\AVVibes.AVDexed.SysExBank\DefaultIcon"; ValueType: string; ValueData: "{app}\{#Name}.exe,0"; Components: SA
+Root: HKA; Subkey: "Software\Classes\AVVibes.AVDexed.SysExBank\shell\open\command"; ValueType: string; ValueData: """{app}\{#Name}.exe"" ""%1"""; Components: SA
+Root: HKA; Subkey: "Software\Classes\.avdexpreset"; ValueType: string; ValueData: "AVVibes.AVDexed.Sound"; Components: SA; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKA; Subkey: "Software\Classes\.avdexpreset\OpenWithProgids"; ValueType: string; ValueName: "AVVibes.AVDexed.Sound"; ValueData: ""; Components: SA; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKA; Subkey: "Software\Classes\.dexedpreset"; ValueType: string; ValueData: "AVVibes.AVDexed.Sound"; Components: SA; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKA; Subkey: "Software\Classes\.dexedpreset\OpenWithProgids"; ValueType: string; ValueName: "AVVibes.AVDexed.Sound"; ValueData: ""; Components: SA; Flags: uninsdeletevalue uninsdeletekeyifempty
+Root: HKA; Subkey: "Software\Classes\.syx"; Components: SA; Flags: uninsdeletekeyifempty
+Root: HKA; Subkey: "Software\Classes\.syx\OpenWithProgids"; ValueType: string; ValueName: "AVVibes.AVDexed.SysExBank"; ValueData: ""; Components: SA; Flags: uninsdeletevalue uninsdeletekeyifempty
+#endif
 
 #ifdef VST3
 [InstallDelete]
